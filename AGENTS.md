@@ -117,11 +117,13 @@ From `chrome/browser/resources/lens/overlay/text_layer.ts`:
   box height — the font's bounding box, not the ink extents of these glyphs.
 - **The background patch is larger than the line box.** Chromium writes this as
   `hPad * box.h / aspect * W` and `vPad * box.h * H`, and since `W / aspect ===
-  H`, both reduce to a fraction of the line's height **in pixels**. What that
-  really means is *a fraction of the line's thickness* — which only equals the
-  height for a horizontal line. On a vertical column the thickness is the
-  width, and using the height there inflates the patch over sevenfold and
-  paints black bars across the page. Use `min(boxW, boxH)`.
+  H`, both are a fraction of the line's height in pixels. It looks wrong for a
+  vertical column, where the height is the long axis rather than the thickness —
+  but measured against a live response the server already adapts: a vertical
+  line comes back with paddings near 0.05 where a horizontal one gets 0.41.
+  **Leave the formula alone.** Deriving the padding from `min(boxW, boxH)`
+  instead under-covers the text roughly sevenfold; that was tried, and the black
+  bars it was supposed to explain came from somewhere else entirely.
 - **Word offsets are UTF-16 code units** (`icu::UnicodeString` on the server).
   JavaScript indexes strings the same way, so `slice` is already correct here —
   but the Python port has to encode to UTF-16 explicitly.
@@ -167,6 +169,14 @@ stroke available, uses eight directions rather than four.
 
 `strokeText` straddles the glyph outline, so the visible thickness is half the
 line width.
+
+### The readable-size floor must not size a box by ratio
+
+When `minReadablePx` raises the font past what its box can hold, the background
+behind it has to grow too. Growing it by `size / fitted` is what actually
+painted the bars: a vertical column fitted at 3px and floored at 24px grows
+eightfold, turning a 27x264 box into a 216x2112 rectangle on a 760x560 image.
+Measure the text and size the fill to that; a ratio has nothing bounding it.
 
 ### Wrapping is a property of the language, not the string
 

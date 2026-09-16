@@ -275,15 +275,17 @@ async function drawLine(
   ctx.rotate(geometry.angle * DEG);
 
   if (patch) {
-    // Chromium writes these as `hPad * box.h / aspect * W` and `vPad * box.h * H`,
-    // and since W/aspect === H both reduce to a fraction of the line's height
-    // *in pixels*. That works because a horizontal line's height is its
-    // thickness - which stops being true for a vertical column, where the
-    // thickness is the width. Using the wrong axis there inflated the patch
-    // over sevenfold and painted black bars across the page.
-    const thickness = Math.min(boxW, boxH);
-    const padW = patch.hPad * thickness;
-    const padH = patch.vPad * thickness;
+    // Chromium writes these as `hPad * box.h / aspect * W` and `vPad * box.h * H`;
+    // since W/aspect === H, both are a fraction of the line's height in pixels.
+    //
+    // It is tempting to "fix" this for vertical columns, where the height is the
+    // long axis rather than the thickness. Measured against a live response, the
+    // server already adapts: a vertical line comes back with paddings around
+    // 0.05 where a horizontal one gets 0.41, and the formula as written yields a
+    // sane patch. Deriving the padding from the thickness instead under-covers
+    // the text by roughly sevenfold.
+    const padW = patch.hPad * boxH;
+    const padH = patch.vPad * boxH;
     try {
       const bitmap = await createImageBitmap(new Blob([patch.bytes], { type: 'image/webp' }));
       ctx.drawImage(bitmap, -(boxW + padW) / 2, -(boxH + padH) / 2, boxW + padW, boxH + padH);
@@ -316,12 +318,16 @@ async function drawLine(
       : 0;
     const outlineColor = patch ? argbToCss(line.bgColor) : null;
 
-    // When the text was enlarged past its box, give it the room it now needs
-    // so the background still covers it.
-    const grow = size / Math.max(1, fitted);
-    const drawW = grow > 1 ? boxW * grow : boxW;
-    const drawH = grow > 1 ? boxH * grow : boxH;
-    if (grow > 1 && settings.drawBackground) {
+    // When the readable-size floor pushes the font past its box, the text needs
+    // room the box does not have. Sizing that room by the *ratio* is what
+    // painted bars across the page: a vertical column fitted at 3px and floored
+    // at 24px grows eightfold, turning a 27x264 box into a 216x2112 rectangle on
+    // a 760x560 image. Measure the text instead - it cannot run away.
+    const enlarged = size > fitted;
+    const advance = ctx.measureText(text).width;
+    const drawW = enlarged ? Math.min(Math.max(boxW, advance + size * 0.4), width) : boxW;
+    const drawH = enlarged ? Math.min(Math.max(boxH, size * 1.35), height) : boxH;
+    if (enlarged && settings.drawBackground && !skipBackground) {
       ctx.fillStyle = argbToCss(line.bgColor);
       ctx.fillRect(-drawW / 2, -drawH / 2, drawW, drawH);
     }

@@ -1097,9 +1097,8 @@
     ctx.translate(cx, cy);
     ctx.rotate(geometry.angle * DEG);
     if (patch) {
-      const thickness = Math.min(boxW, boxH);
-      const padW = patch.hPad * thickness;
-      const padH = patch.vPad * thickness;
+      const padW = patch.hPad * boxH;
+      const padH = patch.vPad * boxH;
       try {
         const bitmap = await createImageBitmap(new Blob([patch.bytes], { type: "image/webp" }));
         ctx.drawImage(bitmap, -(boxW + padW) / 2, -(boxH + padH) / 2, boxW + padW, boxH + padH);
@@ -1122,10 +1121,11 @@
       const fill = argbToCss(line.textColor);
       const outline = patch ? Math.max(1, Math.round(size * OUTLINE_RATIO * settings2.outlineScale)) : 0;
       const outlineColor = patch ? argbToCss(line.bgColor) : null;
-      const grow = size / Math.max(1, fitted);
-      const drawW = grow > 1 ? boxW * grow : boxW;
-      const drawH = grow > 1 ? boxH * grow : boxH;
-      if (grow > 1 && settings2.drawBackground) {
+      const enlarged = size > fitted;
+      const advance = ctx.measureText(text2).width;
+      const drawW = enlarged ? Math.min(Math.max(boxW, advance + size * 0.4), width) : boxW;
+      const drawH = enlarged ? Math.min(Math.max(boxH, size * 1.35), height) : boxH;
+      if (enlarged && settings2.drawBackground && !skipBackground) {
         ctx.fillStyle = argbToCss(line.bgColor);
         ctx.fillRect(-drawW / 2, -drawH / 2, drawW, drawH);
       }
@@ -1134,8 +1134,8 @@
         drawVertical(draw, text2, drawW, drawH, size, fill, outline, outlineColor);
       } else {
         const justify = justification(block.alignment, isRtl(block), settings2.textAlign);
-        const advance = ctx.measureText(text2).width;
-        const x = justify === "flex-start" ? 0 : justify === "flex-end" ? drawW - advance : (drawW - advance) / 2;
+        const advance2 = ctx.measureText(text2).width;
+        const x = justify === "flex-start" ? 0 : justify === "flex-end" ? drawW - advance2 : (drawW - advance2) / 2;
         ctx.textAlign = "left";
         ctx.textBaseline = "middle";
         strokeThenFill(ctx, text2, x, drawH / 2, outline, outlineColor);
