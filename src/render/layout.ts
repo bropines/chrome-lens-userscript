@@ -70,6 +70,78 @@ export function buildLineText(
   return out;
 }
 
+/**
+ * Greedy wrap. Falls back to per-character when the script has no spaces,
+ * which is how a ja/zh/ko translation arrives.
+ */
+export function wrapText(
+  measure: (s: string) => number,
+  text: string,
+  maxWidth: number
+): string[] {
+  const lines: string[] = [];
+  for (const hardLine of text.split('\n')) {
+    if (!hardLine) {
+      lines.push('');
+      continue;
+    }
+    const spaced = hardLine.includes(' ');
+    const tokens = spaced ? hardLine.split(/\s+/) : [...hardLine];
+    const joiner = spaced ? ' ' : '';
+
+    let current = '';
+    for (const token of tokens) {
+      const candidate = current ? `${current}${joiner}${token}` : token;
+      if (measure(candidate) <= maxWidth || !current) current = candidate;
+      else {
+        lines.push(current);
+        current = token;
+      }
+    }
+    if (current) lines.push(current);
+  }
+  return lines;
+}
+
+/**
+ * Largest font at which `text` wraps to fit a box.
+ *
+ * Unlike the per-line fit, the text here genuinely has to be re-wrapped: the
+ * source line boxes are tall columns that horizontal text cannot occupy, so the
+ * paragraph box becomes one text area instead.
+ */
+export function fitTextBlock(
+  setFont: (size: number) => void,
+  measure: (s: string) => number,
+  lineHeight: (size: number) => number,
+  text: string,
+  boxWidth: number,
+  boxHeight: number
+): { size: number; lines: string[] } {
+  let low = MIN_FONT_SIZE;
+  let high = MAX_FONT_SIZE;
+  let best: string[] = [];
+
+  while (low <= high) {
+    const mid = (low + high) >> 1;
+    setFont(mid);
+    const lines = wrapText(measure, text, boxWidth);
+    const widest = lines.reduce((max, line) => Math.max(max, measure(line)), 0);
+    if (widest >= boxWidth || lines.length * lineHeight(mid) >= boxHeight) high = mid - 1;
+    else {
+      low = mid + 1;
+      best = lines;
+    }
+  }
+
+  const size = Math.max(MIN_FONT_SIZE, Math.min(low - 1, MAX_FONT_SIZE));
+  if (!best.length) {
+    setFont(size);
+    best = wrapText(measure, text, boxWidth);
+  }
+  return { size, lines: best };
+}
+
 /** aRGB uint32 from the server into a CSS colour. */
 export function argbToCss(value: number): string {
   const alpha = ((value >>> 24) & 255) / 255;

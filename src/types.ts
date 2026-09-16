@@ -49,6 +49,8 @@ export interface TranslatedLine {
 export interface TranslationBlock {
   /** The whole paragraph translation; lines index into this. */
   translation: string;
+  /** The detected paragraph's box - the area reflowed text is laid out in. */
+  geometry: Geometry | null;
   sourceLang: string;
   targetLang: string;
   writingDirection: WritingDirection;

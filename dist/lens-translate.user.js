@@ -435,6 +435,7 @@
       });
       blocks.push({
         translation: text(translation, F.TranslationData.translation),
+        geometry: parseGeometry(sub(paragraph, F.TextLayout_Paragraph.geometry)),
         sourceLang: text(translation, F.TranslationData.sourceLanguage),
         targetLang: text(translation, F.TranslationData.targetLanguage),
         writingDirection: num(translation, F.TranslationData.writingDirection),
@@ -655,6 +656,51 @@
       else if (nextLine?.words[0]) out += translation.slice(end, nextLine.words[0][0]);
     });
     return out;
+  }
+  function wrapText(measure, text2, maxWidth) {
+    const lines = [];
+    for (const hardLine of text2.split("\n")) {
+      if (!hardLine) {
+        lines.push("");
+        continue;
+      }
+      const spaced = hardLine.includes(" ");
+      const tokens = spaced ? hardLine.split(/\s+/) : [...hardLine];
+      const joiner = spaced ? " " : "";
+      let current = "";
+      for (const token of tokens) {
+        const candidate = current ? `${current}${joiner}${token}` : token;
+        if (measure(candidate) <= maxWidth || !current) current = candidate;
+        else {
+          lines.push(current);
+          current = token;
+        }
+      }
+      if (current) lines.push(current);
+    }
+    return lines;
+  }
+  function fitTextBlock(setFont, measure, lineHeight, text2, boxWidth, boxHeight) {
+    let low = MIN_FONT_SIZE;
+    let high = MAX_FONT_SIZE;
+    let best = [];
+    while (low <= high) {
+      const mid = low + high >> 1;
+      setFont(mid);
+      const lines = wrapText(measure, text2, boxWidth);
+      const widest = lines.reduce((max, line) => Math.max(max, measure(line)), 0);
+      if (widest >= boxWidth || lines.length * lineHeight(mid) >= boxHeight) high = mid - 1;
+      else {
+        low = mid + 1;
+        best = lines;
+      }
+    }
+    const size = Math.max(MIN_FONT_SIZE, Math.min(low - 1, MAX_FONT_SIZE));
+    if (!best.length) {
+      setFont(size);
+      best = wrapText(measure, text2, boxWidth);
+    }
+    return { size, lines: best };
   }
   function argbToCss(value) {
     const alpha = (value >>> 24 & 255) / 255;
@@ -898,7 +944,47 @@
       }
     }
   }
-  async function drawLine(draw, block, line, nextLine, settings2) {
+  function drawReflowedParagraph(draw, block) {
+    const geometry = block.geometry;
+    if (!geometry || geometry.w <= 0 || geometry.h <= 0) return;
+    const { ctx, width, height, fontFamily } = draw;
+    const boxW = geometry.w * width;
+    const boxH = geometry.h * height;
+    const style = block.lines[0];
+    if (!style) return;
+    const text2 = block.translation.trim();
+    if (!text2) return;
+    ctx.save();
+    ctx.translate(geometry.cx * width, geometry.cy * height);
+    ctx.rotate(geometry.angle * DEG);
+    const { size, lines } = fitTextBlock(
+      (px) => {
+        ctx.font = `${px}px ${fontFamily}`;
+      },
+      (candidate) => ctx.measureText(candidate).width,
+      (px) => px * 1.25,
+      text2,
+      boxW,
+      boxH
+    );
+    const fontSize = Math.max(size, draw.minFontPx);
+    ctx.font = `${fontSize}px ${fontFamily}`;
+    const lineHeight = fontSize * 1.25;
+    ctx.textAlign = "left";
+    ctx.textBaseline = "top";
+    ctx.fillStyle = argbToCss(style.textColor);
+    let y = -Math.min(boxH, lines.length * lineHeight) / 2;
+    for (const line of lines) {
+      const advance = ctx.measureText(line).width;
+      const justify = justification(block.alignment, isRtl(block));
+      const x = justify === "flex-start" ? -boxW / 2 : justify === "flex-end" ? boxW / 2 - advance : -advance / 2;
+      ctx.fillStyle = argbToCss(style.textColor);
+      ctx.fillText(line, x, y);
+      y += lineHeight;
+    }
+    ctx.restore();
+  }
+  async function drawLine(draw, block, line, nextLine, settings2, backgroundOnly = false) {
     const geometry = line.geometry;
     if (!geometry || geometry.w <= 0 || geometry.h <= 0) return;
     const { ctx, width, height, fontFamily } = draw;
@@ -906,14 +992,14 @@
     const boxH = geometry.h * height;
     const cx = geometry.cx * width;
     const cy = geometry.cy * height;
-    const aspect = width / height;
     const patch = settings2.drawBackground ? line.background : null;
     ctx.save();
     ctx.translate(cx, cy);
     ctx.rotate(geometry.angle * DEG);
     if (patch) {
-      const padW = patch.hPad * geometry.h / aspect * width;
-      const padH = patch.vPad * geometry.h * height;
+      const thickness = Math.min(boxW, boxH);
+      const padW = patch.hPad * thickness;
+      const padH = patch.vPad * thickness;
       try {
         const bitmap = await createImageBitmap(new Blob([patch.bytes], { type: "image/webp" }));
         ctx.drawImage(bitmap, -(boxW + padW) / 2, -(boxH + padH) / 2, boxW + padW, boxH + padH);
@@ -926,7 +1012,7 @@
       ctx.fillStyle = argbToCss(line.bgColor);
       ctx.fillRect(-boxW / 2, -boxH / 2, boxW, boxH);
     }
-    const text2 = buildLineText(block.translation, line, nextLine);
+    const text2 = backgroundOnly ? "" : buildLineText(block.translation, line, nextLine);
     if (text2.trim()) {
       const vertical = shouldStayVertical(block, settings2.verticalText);
       const fitted = fitFontSize(text2, vertical ? boxH : boxW, vertical ? boxW : boxH, fontFamily);
@@ -983,10 +1069,16 @@
       minFontPx: settings2.minReadablePx > 0 ? settings2.minReadablePx * canvasPerCssPx : 0
     };
     for (const block of blocks) {
+      const vertical = block.writingDirection === 2;
+      const stayVertical = shouldStayVertical(block, settings2.verticalText);
+      const reflow = vertical && !stayVertical && Boolean(block.geometry);
       for (let i = 0; i < block.lines.length; i += 1) {
         const line = block.lines[i];
-        if (line) await drawLine(draw, block, line, block.lines[i + 1], settings2);
+        if (!line) continue;
+        if (reflow) await drawLine(draw, block, line, block.lines[i + 1], settings2, true);
+        else await drawLine(draw, block, line, block.lines[i + 1], settings2);
       }
+      if (reflow) drawReflowedParagraph(draw, block);
     }
     const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
     if (!blob) throw new Error("Could not encode the translated image");

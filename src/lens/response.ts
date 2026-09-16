@@ -116,6 +116,7 @@ export function parseTranslation(objects: PbMessage | null): TranslationBlock[] 
 
     blocks.push({
       translation: text(translation, F.TranslationData.translation),
+      geometry: parseGeometry(sub(paragraph, F.TextLayout_Paragraph.geometry)),
       sourceLang: text(translation, F.TranslationData.sourceLanguage),
       targetLang: text(translation, F.TranslationData.targetLanguage),
       writingDirection: num(translation, F.TranslationData.writingDirection) as WritingDirection,

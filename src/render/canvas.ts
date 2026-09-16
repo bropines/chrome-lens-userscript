@@ -3,6 +3,7 @@ import {
   argbToCss,
   buildLineText,
   fitFontSize,
+  fitTextBlock,
   isRtl,
   justification,
   shouldStayVertical,
@@ -128,12 +129,73 @@ function drawVertical(
   }
 }
 
+/**
+ * Lay a whole paragraph out horizontally inside its own box.
+ *
+ * A vertical source line box is a tall narrow column, which horizontal text
+ * cannot sensibly occupy - fitting text to it yields something unreadable. When
+ * the translation is not itself going to be set vertically, the paragraph box
+ * becomes one text area and the text is re-wrapped into it.
+ */
+function drawReflowedParagraph(draw: DrawContext, block: TranslationBlock): void {
+  const geometry = block.geometry;
+  if (!geometry || geometry.w <= 0 || geometry.h <= 0) return;
+
+  const { ctx, width, height, fontFamily } = draw;
+  const boxW = geometry.w * width;
+  const boxH = geometry.h * height;
+  const style = block.lines[0];
+  if (!style) return;
+
+  const text = block.translation.trim();
+  if (!text) return;
+
+  ctx.save();
+  ctx.translate(geometry.cx * width, geometry.cy * height);
+  ctx.rotate(geometry.angle * DEG);
+
+  const { size, lines } = fitTextBlock(
+    (px) => {
+      ctx.font = `${px}px ${fontFamily}`;
+    },
+    (candidate) => ctx.measureText(candidate).width,
+    (px) => px * 1.25,
+    text,
+    boxW,
+    boxH
+  );
+  const fontSize = Math.max(size, draw.minFontPx);
+  ctx.font = `${fontSize}px ${fontFamily}`;
+  const lineHeight = fontSize * 1.25;
+
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+  ctx.fillStyle = argbToCss(style.textColor);
+
+  let y = -Math.min(boxH, lines.length * lineHeight) / 2;
+  for (const line of lines) {
+    const advance = ctx.measureText(line).width;
+    const justify = justification(block.alignment, isRtl(block));
+    const x =
+      justify === 'flex-start'
+        ? -boxW / 2
+        : justify === 'flex-end'
+          ? boxW / 2 - advance
+          : -advance / 2;
+    ctx.fillStyle = argbToCss(style.textColor);
+    ctx.fillText(line, x, y);
+    y += lineHeight;
+  }
+  ctx.restore();
+}
+
 async function drawLine(
   draw: DrawContext,
   block: TranslationBlock,
   line: TranslatedLine,
   nextLine: TranslatedLine | undefined,
-  settings: Settings
+  settings: Settings,
+  backgroundOnly = false
 ): Promise<void> {
   const geometry = line.geometry;
   if (!geometry || geometry.w <= 0 || geometry.h <= 0) return;
@@ -143,7 +205,6 @@ async function drawLine(
   const boxH = geometry.h * height;
   const cx = geometry.cx * width;
   const cy = geometry.cy * height;
-  const aspect = width / height;
   const patch = settings.drawBackground ? line.background : null;
 
   ctx.save();
@@ -151,10 +212,15 @@ async function drawLine(
   ctx.rotate(geometry.angle * DEG);
 
   if (patch) {
-    // Both paddings are fractions of the LINE HEIGHT; the horizontal one is
-    // divided by the aspect ratio to become a fraction of width.
-    const padW = (patch.hPad * geometry.h) / aspect * width;
-    const padH = patch.vPad * geometry.h * height;
+    // Chromium writes these as `hPad * box.h / aspect * W` and `vPad * box.h * H`,
+    // and since W/aspect === H both reduce to a fraction of the line's height
+    // *in pixels*. That works because a horizontal line's height is its
+    // thickness - which stops being true for a vertical column, where the
+    // thickness is the width. Using the wrong axis there inflated the patch
+    // over sevenfold and painted black bars across the page.
+    const thickness = Math.min(boxW, boxH);
+    const padW = patch.hPad * thickness;
+    const padH = patch.vPad * thickness;
     try {
       const bitmap = await createImageBitmap(new Blob([patch.bytes], { type: 'image/webp' }));
       ctx.drawImage(bitmap, -(boxW + padW) / 2, -(boxH + padH) / 2, boxW + padW, boxH + padH);
@@ -169,7 +235,7 @@ async function drawLine(
     ctx.fillRect(-boxW / 2, -boxH / 2, boxW, boxH);
   }
 
-  const text = buildLineText(block.translation, line, nextLine);
+  const text = backgroundOnly ? '' : buildLineText(block.translation, line, nextLine);
   if (text.trim()) {
     const vertical = shouldStayVertical(block, settings.verticalText);
     const fitted = fitFontSize(text, vertical ? boxH : boxW, vertical ? boxW : boxH, fontFamily);
@@ -265,10 +331,18 @@ export async function renderToBlob(
   };
 
   for (const block of blocks) {
+    const vertical = block.writingDirection === 2;
+    const stayVertical = shouldStayVertical(block, settings.verticalText);
+    // Erase the source either way; only the text placement changes.
+    const reflow = vertical && !stayVertical && Boolean(block.geometry);
+
     for (let i = 0; i < block.lines.length; i += 1) {
       const line = block.lines[i];
-      if (line) await drawLine(draw, block, line, block.lines[i + 1], settings);
+      if (!line) continue;
+      if (reflow) await drawLine(draw, block, line, block.lines[i + 1], settings, true);
+      else await drawLine(draw, block, line, block.lines[i + 1], settings);
     }
+    if (reflow) drawReflowedParagraph(draw, block);
   }
 
   const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'));

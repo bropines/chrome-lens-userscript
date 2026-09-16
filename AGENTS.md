@@ -115,10 +115,13 @@ From `chrome/browser/resources/lens/overlay/text_layer.ts`:
 - **Font size is a binary search over 3..150px**, testing measured width against
   the box width and `fontBoundingBoxAscent + fontBoundingBoxDescent` against the
   box height — the font's bounding box, not the ink extents of these glyphs.
-- **The background patch is larger than the line box.** Both paddings are
-  fractions of the line *height*; the horizontal one is divided by the image
-  aspect ratio to become a fraction of width. Skipping that makes it wildly
-  too wide.
+- **The background patch is larger than the line box.** Chromium writes this as
+  `hPad * box.h / aspect * W` and `vPad * box.h * H`, and since `W / aspect ===
+  H`, both reduce to a fraction of the line's height **in pixels**. What that
+  really means is *a fraction of the line's thickness* — which only equals the
+  height for a horizontal line. On a vertical column the thickness is the
+  width, and using the height there inflates the patch over sevenfold and
+  paints black bars across the page. Use `min(boxW, boxH)`.
 - **Word offsets are UTF-16 code units** (`icu::UnicodeString` on the server).
   JavaScript indexes strings the same way, so `slice` is already correct here —
   but the Python port has to encode to UTF-16 explicitly.
@@ -148,7 +151,10 @@ first.
   it past the box; lines can then overlap, which is why it is a setting.
 - **Vertical CJK reflow.** Chromium keeps the column. A Russian translation set
   vertically is unreadable, so `verticalText: auto` keeps it only for CJK
-  targets.
+  targets. Reflow is not just a flag: a vertical line box is a tall narrow
+  column that horizontal text cannot occupy, so the *paragraph* box becomes one
+  text area and the text is re-wrapped into it (`drawReflowedParagraph`). The
+  per-line patches are still painted, to erase the source.
 
 ## Conventions
 
