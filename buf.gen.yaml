@@ -1,0 +1,12 @@
+# Generates descriptors into .protogen, which is a build-time artefact only.
+# scripts/gen-fields.ts distils them into src/gen/fields.ts, and that small
+# typed file is the only thing the userscript bundle ever imports.
+version: v2
+inputs:
+  - directory: proto
+plugins:
+  - local: protoc-gen-es
+    out: .protogen
+    opt:
+      - target=ts
+      - import_extension=js

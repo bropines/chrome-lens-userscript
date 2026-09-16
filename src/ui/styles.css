@@ -1,0 +1,211 @@
+/* Everything is namespaced under lt- and pinned to the top layer, because this
+   has to survive on arbitrary pages with arbitrary CSS. */
+
+#lt-button {
+  position: fixed;
+  width: 32px;
+  height: 32px;
+  background: rgba(0, 0, 0, 0.6);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2147483647;
+  opacity: 0;
+  pointer-events: none;
+  cursor: pointer;
+  transition: opacity 0.2s ease-in-out, transform 0.15s ease-in-out, background 0.2s;
+  transform: scale(0.9);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+#lt-button:hover {
+  background: rgba(0, 0, 0, 0.85);
+  transform: scale(1.05) !important;
+}
+#lt-button.lt-busy svg {
+  animation: lt-spin 1s linear infinite;
+}
+#lt-button.lt-active {
+  background: rgba(20, 110, 60, 0.9);
+}
+#lt-button.lt-error {
+  background: rgba(170, 30, 30, 0.9);
+}
+@keyframes lt-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.lt-layer {
+  position: absolute;
+  pointer-events: none;
+  z-index: 2147483000;
+  overflow: hidden;
+}
+.lt-bg {
+  position: absolute;
+  max-width: none;
+}
+.lt-line {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  white-space: pre;
+  line-height: 1;
+  transform-origin: center center;
+  margin: 0;
+  padding: 0;
+}
+
+#lt-toast {
+  position: fixed;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(0, 0, 0, 0.88);
+  color: #fff;
+  padding: 8px 16px;
+  border-radius: 8px;
+  font: 13px/1.4 system-ui, sans-serif;
+  z-index: 2147483647;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.2s;
+  max-width: 70vw;
+}
+#lt-toast.lt-show {
+  opacity: 1;
+}
+
+.lt-panel-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  z-index: 2147483647;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+.lt-panel {
+  background: #fff;
+  color: #1a1a1a;
+  width: min(520px, 92vw);
+  max-height: 86vh;
+  display: flex;
+  flex-direction: column;
+  border-radius: 12px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.35);
+  overflow: hidden;
+}
+.lt-panel-head,
+.lt-panel-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+}
+.lt-panel-head {
+  border-bottom: 1px solid #e6e6e6;
+  justify-content: space-between;
+}
+.lt-panel-foot {
+  border-top: 1px solid #e6e6e6;
+}
+.lt-spacer {
+  flex: 1;
+}
+.lt-panel-body {
+  padding: 8px 16px 16px;
+  overflow-y: auto;
+}
+.lt-row {
+  display: grid;
+  grid-template-columns: 180px 1fr;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 7px 0;
+}
+.lt-row-check {
+  grid-template-columns: 180px auto 1fr;
+}
+.lt-label {
+  color: #333;
+}
+.lt-hint {
+  grid-column: 2 / -1;
+  color: #777;
+  font-size: 12px;
+}
+.lt-input {
+  font: inherit;
+  padding: 6px 8px;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  background: #fff;
+  color: #1a1a1a;
+  min-width: 0;
+}
+.lt-input[type='checkbox'] {
+  justify-self: start;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+}
+.lt-x {
+  border: 0;
+  background: transparent;
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+  color: #666;
+}
+.lt-btn {
+  font: inherit;
+  padding: 7px 14px;
+  border-radius: 7px;
+  cursor: pointer;
+  border: 1px solid #ccc;
+  background: #f5f5f5;
+  color: #1a1a1a;
+}
+.lt-btn.lt-primary {
+  background: #1a73e8;
+  border-color: #1a73e8;
+  color: #fff;
+}
+.lt-btn.lt-ghost:hover {
+  background: #eaeaea;
+}
+
+@media (prefers-color-scheme: dark) {
+  .lt-panel {
+    background: #1f1f22;
+    color: #ececec;
+  }
+  .lt-panel-head,
+  .lt-panel-foot {
+    border-color: #35353a;
+  }
+  .lt-label {
+    color: #d6d6d6;
+  }
+  .lt-hint {
+    color: #9a9a9a;
+  }
+  .lt-input {
+    background: #2a2a2e;
+    border-color: #45454c;
+    color: #ececec;
+  }
+  .lt-btn {
+    background: #2e2e33;
+    border-color: #45454c;
+    color: #ececec;
+  }
+  .lt-btn.lt-ghost:hover {
+    background: #3a3a40;
+  }
+}

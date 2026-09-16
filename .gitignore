@@ -1,5 +1,7 @@
-userscript_check.html
+node_modules/
+dist/
+# Build-time protobuf descriptors. `bun run gen` recreates them; only the
+# distilled src/gen/fields.ts is committed.
+.protogen/
 *.log
-__pycache__/
-*.pyc
-.venv/
+.DS_Store
