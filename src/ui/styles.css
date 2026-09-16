@@ -1,8 +1,14 @@
-/* Everything is namespaced under lt- and pinned to the top layer, because this
-   has to survive on arbitrary pages with arbitrary CSS. */
+/* Lives inside a shadow root, so these selectors compete with nothing. The
+   :host is a fixed, click-through, full-viewport layer; everything here is
+   positioned in viewport coordinates. */
+
+:host {
+  font: 14px/1.45 system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  color: #1a1a1a;
+}
 
 #lt-button {
-  position: fixed;
+  position: absolute;
   width: 32px;
   height: 32px;
   background: rgba(0, 0, 0, 0.6);
@@ -10,7 +16,6 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 2147483647;
   opacity: 0;
   pointer-events: none;
   cursor: pointer;
@@ -21,7 +26,7 @@
 }
 #lt-button:hover {
   background: rgba(0, 0, 0, 0.85);
-  transform: scale(1.05) !important;
+  transform: scale(1.05);
 }
 #lt-button.lt-busy svg {
   animation: lt-spin 1s linear infinite;
@@ -40,9 +45,8 @@
 
 .lt-layer {
   position: absolute;
-  pointer-events: none;
-  z-index: 2147483000;
   overflow: hidden;
+  pointer-events: none;
 }
 .lt-bg {
   position: absolute;
@@ -60,7 +64,7 @@
 }
 
 #lt-toast {
-  position: fixed;
+  position: absolute;
   bottom: 16px;
   left: 50%;
   transform: translateX(-50%);
@@ -68,8 +72,7 @@
   color: #fff;
   padding: 8px 16px;
   border-radius: 8px;
-  font: 13px/1.4 system-ui, sans-serif;
-  z-index: 2147483647;
+  font-size: 13px;
   pointer-events: none;
   opacity: 0;
   transition: opacity 0.2s;
@@ -79,25 +82,25 @@
   opacity: 1;
 }
 
+/* ------------------------------------------------------------- settings */
+
 .lt-panel-backdrop {
-  position: fixed;
+  position: absolute;
   inset: 0;
-  background: rgba(0, 0, 0, 0.45);
-  z-index: 2147483647;
+  background: rgba(0, 0, 0, 0.5);
   display: flex;
   align-items: center;
   justify-content: center;
-  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  pointer-events: auto;
 }
 .lt-panel {
   background: #fff;
-  color: #1a1a1a;
-  width: min(520px, 92vw);
+  width: min(560px, 92vw);
   max-height: 86vh;
   display: flex;
   flex-direction: column;
   border-radius: 12px;
-  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.35);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.4);
   overflow: hidden;
 }
 .lt-panel-head,
@@ -105,11 +108,14 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 12px 16px;
+  padding: 12px 18px;
+  flex: none;
 }
 .lt-panel-head {
   border-bottom: 1px solid #e6e6e6;
   justify-content: space-between;
+  font-size: 15px;
+  font-weight: 600;
 }
 .lt-panel-foot {
   border-top: 1px solid #e6e6e6;
@@ -118,40 +124,40 @@
   flex: 1;
 }
 .lt-panel-body {
-  padding: 8px 16px 16px;
+  padding: 10px 18px 16px;
   overflow-y: auto;
 }
+
 .lt-row {
   display: grid;
-  grid-template-columns: 180px 1fr;
+  grid-template-columns: 190px minmax(0, 1fr);
   align-items: center;
-  gap: 8px 12px;
+  gap: 2px 14px;
   padding: 7px 0;
-}
-.lt-row-check {
-  grid-template-columns: 180px auto 1fr;
 }
 .lt-label {
   color: #333;
 }
 .lt-hint {
-  grid-column: 2 / -1;
-  color: #777;
+  grid-column: 2;
+  color: #808080;
   font-size: 12px;
 }
 .lt-input {
   font: inherit;
-  padding: 6px 8px;
+  padding: 7px 9px;
   border: 1px solid #ccc;
   border-radius: 6px;
   background: #fff;
   color: #1a1a1a;
   min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
 }
 .lt-input[type='checkbox'] {
   justify-self: start;
-  width: 16px;
-  height: 16px;
+  width: 17px;
+  height: 17px;
   padding: 0;
 }
 .lt-x {
@@ -161,10 +167,11 @@
   line-height: 1;
   cursor: pointer;
   color: #666;
+  padding: 0 4px;
 }
 .lt-btn {
   font: inherit;
-  padding: 7px 14px;
+  padding: 7px 15px;
   border-radius: 7px;
   cursor: pointer;
   border: 1px solid #ccc;
@@ -207,5 +214,8 @@
   }
   .lt-btn.lt-ghost:hover {
     background: #3a3a40;
+  }
+  .lt-x {
+    color: #bbb;
   }
 }

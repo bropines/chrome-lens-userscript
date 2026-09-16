@@ -49,9 +49,21 @@ Word offsets index the translation by **UTF-16 code unit**, which is what `icu::
 
 Vertical CJK gets a fifth rule of its own: setting a Russian translation vertically is faithful to the source and miserable to read, so the `verticalText` setting defaults to `auto` and keeps the column only when the target language is itself CJK.
 
-## Cross-origin images
+## Which images, and how they are read
 
-Image bytes are fetched with `GM_xmlhttpRequest` rather than read off the `<img>` element. A cross-origin image without CORS headers taints the canvas and `toBlob` then throws `SecurityError`; fetching the bytes ourselves sidesteps it. Uploads are downscaled and JPEG-encoded with Chromium's own budget — quality 40, and a resize only when the image is both over 1.5 MP and over 1600px on a side.
+Detection is `<img>` elements only, found by walking `event.composedPath()` so images inside a site's own shadow DOM are caught too. An image qualifies when its **rendered** size — not its natural size — is at least `minImageSize` on both axes, so a 4000px asset scaled down to a 20px icon is correctly ignored.
+
+Not covered: CSS `background-image`, `<canvas>`, `<svg>`, and video frames. Images inside a cross-origin `<iframe>` work only if the script runs in that frame too, which `@match *://*/*` arranges.
+
+Reading the pixels goes through the element first. The browser has already downloaded and decoded it, so this costs **no network request at all** and needs no `@connect` permission for the image's host. Only a cross-origin image served without CORS headers taints the canvas, and only then are the bytes re-fetched through `GM_xmlhttpRequest` — which is why `@connect *` is declared.
+
+Uploads use Chromium's own budget: JPEG quality 40, and a resize only when the image is both over 1.5 MP and over 1600px on a side.
+
+## Surviving other people's CSS
+
+All UI — button, toast, settings panel and the translation overlay itself — lives in a **shadow root**, not in the page. Injecting with `GM_addStyle` loses on sites that ship rules like `div { display: inline !important }`: page CSS wins on equal specificity when it comes later, and `!important` beats an injected sheet outright. A shadow root is not a specificity contest; page rules cannot reach inside it.
+
+The shadow host is a fixed, full-viewport, click-through layer, which also means everything inside is positioned in viewport coordinates and follows scrolling by re-reading `getBoundingClientRect`, with no page-offset arithmetic.
 
 Sites with a strict Content-Security-Policy may still block `blob:` URLs in `background-image`. There is no workaround from inside a userscript.
 

@@ -1,6 +1,7 @@
 import { FIELDS, coerce, getSettings, resetSettings, saveSettings } from '../settings.js';
 import type { Field } from '../settings.js';
 import type { Settings } from '../types.js';
+import { uiRoot } from './root.js';
 
 type SavedHandler = (settings: Settings) => void;
 
@@ -132,6 +133,6 @@ export function openSettings(onSaved?: SavedHandler): void {
   };
   document.addEventListener('keydown', onKey, true);
 
-  document.body.appendChild(backdrop);
+  uiRoot().appendChild(backdrop);
   backdrop.querySelector<HTMLElement>('.lt-input')?.focus();
 }

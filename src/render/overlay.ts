@@ -7,6 +7,7 @@ import {
   justification,
   shouldStayVertical,
 } from './layout.js';
+import { uiRoot } from '../ui/root.js';
 import type { Geometry, Settings, TranslatedLine, TranslationBlock } from '../types.js';
 
 interface OverlayEntry {
@@ -28,10 +29,12 @@ export function clearOverlay(img: HTMLImageElement): boolean {
   return true;
 }
 
+/** The shadow host is a fixed full-viewport layer, so these are viewport
+ *  coordinates and scrolling needs no page-offset arithmetic. */
 function placeLayer(layer: HTMLDivElement, img: HTMLImageElement): void {
   const rect = img.getBoundingClientRect();
-  layer.style.top = `${rect.top + window.scrollY}px`;
-  layer.style.left = `${rect.left + window.scrollX}px`;
+  layer.style.top = `${rect.top}px`;
+  layer.style.left = `${rect.left}px`;
   layer.style.width = `${rect.width}px`;
   layer.style.height = `${rect.height}px`;
 }
@@ -94,7 +97,7 @@ export function renderTranslation(
   const layer = document.createElement('div');
   layer.className = 'lt-layer';
   placeLayer(layer, img);
-  document.body.appendChild(layer);
+  uiRoot().appendChild(layer);
 
   const objectUrls: string[] = [];
   overlays.set(img, { layer, objectUrls });

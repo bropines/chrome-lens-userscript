@@ -13,9 +13,12 @@ export default defineConfig({
         author: 'bropines',
         license: 'MIT',
         match: ['*://*/*'],
-        // The Lens endpoint is the only host this ever contacts. GM_xmlhttpRequest
-        // is not subject to CORS, which is what lets the script stay serverless.
-        connect: ['lensfrontend-pa.googleapis.com'],
+        // Lens is the only host the script itself calls. The wildcard is for
+        // image bytes: most images are read straight off the already-decoded
+        // <img> element, but a cross-origin one served without CORS headers
+        // taints the canvas and has to be re-fetched from wherever it lives,
+        // which cannot be known ahead of time.
+        connect: ['lensfrontend-pa.googleapis.com', '*'],
         grant: [
           'GM_xmlhttpRequest',
           'GM_addStyle',
