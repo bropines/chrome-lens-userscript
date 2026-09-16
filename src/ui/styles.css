@@ -7,7 +7,8 @@
   color: #1a1a1a;
 }
 
-#lt-button {
+#lt-button,
+#lt-gear {
   position: absolute;
   width: 32px;
   height: 32px;
@@ -24,9 +25,17 @@
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
   border: 1px solid rgba(255, 255, 255, 0.2);
 }
-#lt-button:hover {
+#lt-button:hover,
+#lt-gear:hover {
   background: rgba(0, 0, 0, 0.85);
   transform: scale(1.05);
+}
+
+/* Appears a beat after the main button, so a passing cursor does not summon
+   two controls at once. */
+#lt-gear {
+  width: 26px;
+  height: 26px;
 }
 #lt-button.lt-busy svg {
   animation: lt-spin 1s linear infinite;

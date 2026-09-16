@@ -39,6 +39,15 @@ function placeLayer(layer: HTMLDivElement, img: HTMLImageElement): void {
   layer.style.height = `${rect.height}px`;
 }
 
+/** Remove every overlay on the page. */
+export function clearAllOverlays(): number {
+  let count = 0;
+  for (const img of Array.from(document.images)) {
+    if (clearOverlay(img)) count += 1;
+  }
+  return count;
+}
+
 /** Overlays live in page coordinates, so they must follow layout changes. */
 export function repositionOverlays(): void {
   for (const img of Array.from(document.images)) {

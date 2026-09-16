@@ -25,10 +25,19 @@ export function uiRoot(): ShadowRoot {
   host.id = HOST_ID;
   // Inline, and marked important, because this one element does live in the
   // page and is the only thing page CSS could still interfere with.
+  //
+  // `all: initial` is what stops inherited properties - font, colour, direction,
+  // line-height - from leaking in through the host, since shadow DOM only
+  // blocks *selectors*. It has to come first, and the font has to be restated
+  // after it: `initial` for font-family is the browser's serif default, and an
+  // inline !important declaration outranks any :host rule, so a stylesheet
+  // cannot put it back.
   host.setAttribute(
     'style',
     [
       'all: initial',
+      "font: 14px/1.45 system-ui, -apple-system, 'Segoe UI', Roboto, Ubuntu, sans-serif",
+      'color: #1a1a1a',
       'position: fixed',
       'top: 0',
       'left: 0',

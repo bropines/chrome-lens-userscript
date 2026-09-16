@@ -59,11 +59,31 @@ Reading the pixels goes through the element first. The browser has already downl
 
 Uploads use Chromium's own budget: JPEG quality 40, and a resize only when the image is both over 1.5 MP and over 1600px on a side.
 
+## Two ways to draw
+
+| | `canvas` (default) | `overlay` |
+|---|---|---|
+| how | the translation is painted into a copy of the image, which replaces it | absolutely positioned DOM lines float above the image |
+| text | raster, scales with the image | stays crisp at any zoom, selectable |
+| dynamic pages | nothing to keep in sync — it *is* the image | drifts on virtualised feeds that recycle and move `<img>` elements |
+
+The overlay is the Chromium-faithful one and looks better standing still. It is not the default because a feed like X recycles its image elements as you scroll, and a separately positioned layer ends up smeared across unrelated parts of the page.
+
+Both are reversible: click the button again, or use **undo all on this page** from the menu. The canvas path stashes the original `src` and `srcset` and puts them back.
+
+## Turning it off
+
+Three menu commands: **settings**, **undo all on this page**, and **toggle on/off**. There is also an `enabled` checkbox in settings; with it off, the hover button does nothing and says so.
+
+Hovering an image shows the translate button, and holding the cursor there for another half second brings up a settings button next to it.
+
 ## Surviving other people's CSS
 
 All UI — button, toast, settings panel and the translation overlay itself — lives in a **shadow root**, not in the page. Injecting with `GM_addStyle` loses on sites that ship rules like `div { display: inline !important }`: page CSS wins on equal specificity when it comes later, and `!important` beats an injected sheet outright. A shadow root is not a specificity contest; page rules cannot reach inside it.
 
 The shadow host is a fixed, full-viewport, click-through layer, which also means everything inside is positioned in viewport coordinates and follows scrolling by re-reading `getBoundingClientRect`, with no page-offset arithmetic.
+
+One subtlety: a shadow root blocks *selectors*, not *inheritance*. Font, colour, direction and line-height still reach in through the host, so the host carries `all: initial !important` — and then has to restate the font, because `initial` for `font-family` is the browser's serif default and an inline `!important` declaration outranks any `:host` rule.
 
 Sites with a strict Content-Security-Policy may still block `blob:` URLs in `background-image`. There is no workaround from inside a userscript.
 
@@ -79,7 +99,7 @@ src/
   image.ts           fetch, downscale, JPEG encode
   gen/fields.ts      generated; do not edit
   lens/              request builder, response parser, transport
-  render/            layout maths, DOM overlay
+  render/            layout maths, canvas painter, DOM overlay, image swap
   ui/                settings panel, styles
 ```
 

@@ -22,6 +22,8 @@ export const DEFAULTS: Settings = {
   fontFamily: '',
   drawBackground: true,
   verticalText: 'auto',
+  renderMode: 'canvas',
+  enabled: true,
 };
 
 type FieldKind = 'text' | 'number' | 'checkbox' | 'select';
@@ -36,6 +38,16 @@ export interface Field<K extends keyof Settings = keyof Settings> {
 }
 
 export const FIELDS: ReadonlyArray<Field> = [
+  { key: 'enabled', label: 'Translation enabled', type: 'checkbox' },
+  {
+    key: 'renderMode',
+    label: 'Render as',
+    type: 'select',
+    options: [
+      ['canvas', 'canvas - replaces the image, survives feeds'],
+      ['overlay', 'overlay - crisp text, can drift on dynamic pages'],
+    ],
+  },
   { key: 'targetLang', label: 'Translate to', type: 'text', hint: 'BCP-47 code, e.g. ru, en, ja' },
   { key: 'sourceLang', label: 'Translate from', type: 'text', hint: 'blank = auto-detect' },
   { key: 'ocrLang', label: 'OCR language hint', type: 'text', hint: 'blank = follow the target' },

@@ -117,11 +117,25 @@ export interface Settings {
   fontFamily: string;
   drawBackground: boolean;
   verticalText: VerticalTextMode;
+  renderMode: RenderMode;
+  enabled: boolean;
 }
 
 /** An image encoded and sized the way Chromium would send it. */
 export interface PreparedImage {
   imageBytes: Bytes;
+  /** Size of the uploaded bytes, after Chromium's downscale rule. */
   width: number;
   height: number;
+  /**
+   * The decoded pixels, at natural size. Reused for rendering so a
+   * cross-origin image that tainted the element's own canvas still works.
+   */
+  source: CanvasImageSource;
+  sourceWidth: number;
+  sourceHeight: number;
+  /** Frees the source when it is an ImageBitmap. */
+  release(): void;
 }
+
+export type RenderMode = 'canvas' | 'overlay';

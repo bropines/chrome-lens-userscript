@@ -1,0 +1,230 @@
+import {
+  OUTLINE_RATIO,
+  argbToCss,
+  buildLineText,
+  fitFontSize,
+  isRtl,
+  justification,
+  shouldStayVertical,
+} from './layout.js';
+import type { Settings, TranslatedLine, TranslationBlock } from '../types.js';
+
+/**
+ * Bake the translation into a bitmap that replaces the image.
+ *
+ * The floating-overlay approach is faithful to Chromium and keeps text crisp,
+ * but it only holds while the page stands still. On a virtualised feed the
+ * <img> elements are recycled and moved constantly, and a separately positioned
+ * layer drifts off them - which is exactly the smear this fixes.
+ *
+ * Painting into the image itself has nothing left to synchronise: it scrolls,
+ * reflows and zooms with the page because it *is* the page.
+ */
+
+const DEG = Math.PI / 180;
+
+/** Ranges CSS text-orientation: mixed keeps upright in vertical writing. */
+const UPRIGHT_RANGES: ReadonlyArray<readonly [number, number]> = [
+  [0x1100, 0x11ff], [0x2e80, 0x303f], [0x3041, 0x33ff], [0x3400, 0x4dbf],
+  [0x4e00, 0x9fff], [0xac00, 0xd7af], [0xf900, 0xfaff], [0xfe10, 0xfe4f],
+  [0xff00, 0xff60], [0xffe0, 0xffe6],
+];
+
+const isUpright = (char: string): boolean => {
+  const code = char.codePointAt(0) ?? 0;
+  return UPRIGHT_RANGES.some(([low, high]) => code >= low && code <= high);
+};
+
+/** Small punctuation hangs in the upper right of its em square. */
+const CORNER_PUNCT = new Set('、。，．');
+
+function verticalRuns(text: string): Array<[boolean, string]> {
+  const runs: Array<[boolean, string]> = [];
+  for (const char of text) {
+    let upright = isUpright(char);
+    const last = runs[runs.length - 1];
+    if (/\s/.test(char) && last) upright = last[0];
+    if (last && last[0] === upright) last[1] += char;
+    else runs.push([upright, char]);
+  }
+  return runs;
+}
+
+interface DrawContext {
+  ctx: CanvasRenderingContext2D;
+  width: number;
+  height: number;
+  fontFamily: string;
+}
+
+function strokeThenFill(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  x: number,
+  y: number,
+  outline: number,
+  outlineColor: string | null
+): void {
+  if (outline && outlineColor) {
+    ctx.fillStyle = outlineColor;
+    for (const [dx, dy] of [
+      [-outline, outline], [outline, outline], [outline, -outline], [-outline, -outline],
+    ] as const) {
+      ctx.fillText(text, x + dx, y + dy);
+    }
+  }
+}
+
+function drawVertical(
+  { ctx }: DrawContext,
+  text: string,
+  boxW: number,
+  boxH: number,
+  size: number,
+  fill: string,
+  outline: number,
+  outlineColor: string | null
+): void {
+  const em = size * 1.16; // approximates ascent + descent for CJK faces
+  let total = 0;
+  for (const [upright, run] of verticalRuns(text)) {
+    total += upright ? em * [...run].length : ctx.measureText(run).width;
+  }
+
+  let y = (boxH - total) / 2;
+  ctx.textBaseline = 'top';
+  ctx.textAlign = 'left';
+
+  for (const [upright, run] of verticalRuns(text)) {
+    if (upright) {
+      for (const char of run) {
+        const advance = ctx.measureText(char).width;
+        // Kuten and touten sit in the upper right rather than centred.
+        const corner = CORNER_PUNCT.has(char);
+        const x = (boxW - advance) / 2 + (corner ? advance * 0.45 : 0);
+        const cy = y - (corner ? em * 0.4 : 0);
+        strokeThenFill(ctx, char, x, cy, outline, outlineColor);
+        ctx.fillStyle = fill;
+        ctx.fillText(char, x, cy);
+        y += em;
+      }
+    } else {
+      // Latin runs lie on their side, rotated a quarter turn clockwise.
+      const advance = ctx.measureText(run).width;
+      ctx.save();
+      ctx.translate(boxW / 2, y);
+      ctx.rotate(90 * DEG);
+      strokeThenFill(ctx, run, 0, -size / 2, outline, outlineColor);
+      ctx.fillStyle = fill;
+      ctx.fillText(run, 0, -size / 2);
+      ctx.restore();
+      y += advance;
+    }
+  }
+}
+
+async function drawLine(
+  draw: DrawContext,
+  block: TranslationBlock,
+  line: TranslatedLine,
+  nextLine: TranslatedLine | undefined,
+  settings: Settings
+): Promise<void> {
+  const geometry = line.geometry;
+  if (!geometry || geometry.w <= 0 || geometry.h <= 0) return;
+
+  const { ctx, width, height, fontFamily } = draw;
+  const boxW = geometry.w * width;
+  const boxH = geometry.h * height;
+  const cx = geometry.cx * width;
+  const cy = geometry.cy * height;
+  const aspect = width / height;
+  const patch = settings.drawBackground ? line.background : null;
+
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.rotate(geometry.angle * DEG);
+
+  if (patch) {
+    // Both paddings are fractions of the LINE HEIGHT; the horizontal one is
+    // divided by the aspect ratio to become a fraction of width.
+    const padW = (patch.hPad * geometry.h) / aspect * width;
+    const padH = patch.vPad * geometry.h * height;
+    try {
+      const bitmap = await createImageBitmap(new Blob([patch.bytes], { type: 'image/webp' }));
+      ctx.drawImage(bitmap, -(boxW + padW) / 2, -(boxH + padH) / 2, boxW + padW, boxH + padH);
+      bitmap.close();
+    } catch {
+      // Fall back to a flat fill if the patch will not decode.
+      ctx.fillStyle = argbToCss(line.bgColor);
+      ctx.fillRect(-boxW / 2, -boxH / 2, boxW, boxH);
+    }
+  } else if (settings.drawBackground) {
+    ctx.fillStyle = argbToCss(line.bgColor);
+    ctx.fillRect(-boxW / 2, -boxH / 2, boxW, boxH);
+  }
+
+  const text = buildLineText(block.translation, line, nextLine);
+  if (text.trim()) {
+    const vertical = shouldStayVertical(block, settings.verticalText);
+    const size = fitFontSize(text, vertical ? boxH : boxW, vertical ? boxW : boxH, fontFamily);
+    ctx.font = `${size}px ${fontFamily}`;
+    ctx.direction = isRtl(block) ? 'rtl' : 'ltr';
+
+    const fill = argbToCss(line.textColor);
+    const outline = patch ? Math.max(1, Math.round(size * OUTLINE_RATIO)) : 0;
+    const outlineColor = patch ? argbToCss(line.bgColor) : null;
+
+    ctx.translate(-boxW / 2, -boxH / 2);
+    if (vertical) {
+      drawVertical(draw, text, boxW, boxH, size, fill, outline, outlineColor);
+    } else {
+      const justify = justification(block.alignment, isRtl(block));
+      const advance = ctx.measureText(text).width;
+      const x =
+        justify === 'flex-start' ? 0 : justify === 'flex-end' ? boxW - advance : (boxW - advance) / 2;
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'middle';
+      strokeThenFill(ctx, text, x, boxH / 2, outline, outlineColor);
+      ctx.fillStyle = fill;
+      ctx.fillText(text, x, boxH / 2);
+    }
+  }
+  ctx.restore();
+}
+
+/**
+ * Paint `source` plus its translation onto a canvas and return a blob URL.
+ *
+ * `source` is whatever was already decoded for the upload, so a cross-origin
+ * image that tainted the element's own canvas still works here.
+ */
+export async function renderToBlobUrl(
+  source: CanvasImageSource,
+  width: number,
+  height: number,
+  blocks: TranslationBlock[],
+  settings: Settings
+): Promise<string> {
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('Could not get a 2d canvas context');
+
+  ctx.drawImage(source, 0, 0, width, height);
+
+  const fontFamily = settings.fontFamily || 'system-ui, -apple-system, sans-serif';
+  const draw: DrawContext = { ctx, width, height, fontFamily };
+
+  for (const block of blocks) {
+    for (let i = 0; i < block.lines.length; i += 1) {
+      const line = block.lines[i];
+      if (line) await drawLine(draw, block, line, block.lines[i + 1], settings);
+    }
+  }
+
+  const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'));
+  if (!blob) throw new Error('Could not encode the translated image');
+  return URL.createObjectURL(blob);
+}

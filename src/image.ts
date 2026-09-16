@@ -32,7 +32,11 @@ function sourceSize(source: Source): { width: number; height: number } {
 }
 
 /** Draw, then JPEG-encode at Chromium's quality. Throws if the canvas is tainted. */
-async function encode(source: Source, settings: Settings): Promise<PreparedImage> {
+async function encode(
+  source: Source,
+  settings: Settings,
+  release: () => void
+): Promise<PreparedImage> {
   const natural = sourceSize(source);
   const { width, height } = targetSize(natural.width, natural.height, settings);
 
@@ -58,7 +62,15 @@ async function encode(source: Source, settings: Settings): Promise<PreparedImage
   });
   if (!jpeg) throw new Error('Canvas is tainted');
 
-  return { imageBytes: new Uint8Array(await jpeg.arrayBuffer()) as Bytes, width, height };
+  return {
+    imageBytes: new Uint8Array(await jpeg.arrayBuffer()) as Bytes,
+    width,
+    height,
+    source,
+    sourceWidth: natural.width,
+    sourceHeight: natural.height,
+    release,
+  };
 }
 
 /**
@@ -76,7 +88,7 @@ export async function prepareImage(
 ): Promise<PreparedImage> {
   if (img.naturalWidth && img.naturalHeight) {
     try {
-      return await encode(img, settings);
+      return await encode(img, settings, () => {});
     } catch {
       // Tainted canvas; fall through to fetching the bytes ourselves.
     }
@@ -88,8 +100,10 @@ export async function prepareImage(
   const blob = await fetchImageBlob(url);
   const bitmap = await createImageBitmap(blob);
   try {
-    return await encode(bitmap, settings);
-  } finally {
+    // The bitmap is kept alive for rendering; the caller releases it.
+    return await encode(bitmap, settings, () => bitmap.close());
+  } catch (e) {
     bitmap.close();
+    throw e;
   }
 }
