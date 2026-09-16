@@ -127,6 +127,11 @@ export interface Settings {
   minReadablePx: number;
   /** Canvas is rendered at this multiple of the image's natural size. */
   supersample: number;
+  /**
+   * How much of Lens's answers to keep in memory, in bytes. Weighed by the
+   * inpainted patches, which dominate. 0 disables caching.
+   */
+  cacheBytes: number;
 }
 
 /** An image encoded and sized the way Chromium would send it. */

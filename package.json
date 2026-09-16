@@ -20,5 +20,10 @@
   },
   "dependencies": {
     "@bufbuild/protobuf": "^2.15.0"
-  }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bropines/chrome-lens-userscript.git"
+  },
+  "homepage": "https://github.com/bropines/chrome-lens-userscript"
 }

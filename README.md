@@ -6,7 +6,7 @@ No server, no extension, no account. TypeScript, built with Vite.
 
 ## Install
 
-Grab `dist/lens-translate.user.js` and drop it into Tampermonkey, or build it yourself:
+[**Install the userscript**](https://github.com/bropines/chrome-lens-userscript/raw/main/dist/lens-translate.user.js) — Tampermonkey picks it up straight from the repo. Or build it yourself:
 
 ```bash
 bun install
@@ -124,6 +124,13 @@ bun run dev        # live-reload userscript for development
 bun run typecheck  # tsc --noEmit, strict
 bun run build      # typecheck, then dist/lens-translate.user.js
 ```
+
+## For agents
+
+`AGENTS.md` records the architecture and, more usefully, the constraints that
+were discovered the hard way — why the renderer is a sibling element, why the
+protobuf codec is hand-rolled while the field numbers are not, and which test
+setups produce false passes.
 
 ## Related
 

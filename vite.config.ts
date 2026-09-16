@@ -7,7 +7,13 @@ export default defineConfig({
       entry: 'src/main.ts',
       userscript: {
         name: 'Lens Translate',
-        namespace: 'https://github.com/bropines/chrome-lens-py',
+        namespace: 'https://github.com/bropines/chrome-lens-userscript',
+        homepage: 'https://github.com/bropines/chrome-lens-userscript',
+        supportURL: 'https://github.com/bropines/chrome-lens-userscript/issues',
+        downloadURL:
+          'https://github.com/bropines/chrome-lens-userscript/raw/main/dist/lens-translate.user.js',
+        updateURL:
+          'https://github.com/bropines/chrome-lens-userscript/raw/main/dist/lens-translate.user.js',
         description:
           "Hover any image, click the button, and its text is translated in place - rendered the way Chromium's own Lens overlay does it.",
         author: 'bropines',

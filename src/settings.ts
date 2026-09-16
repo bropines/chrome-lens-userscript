@@ -27,6 +27,7 @@ export const DEFAULTS: Settings = {
   enabled: true,
   minReadablePx: 12,
   supersample: 2,
+  cacheBytes: 32 * 1024 * 1024,
 };
 
 type FieldKind = 'text' | 'number' | 'checkbox' | 'select';
@@ -104,6 +105,13 @@ export const FIELDS: ReadonlyArray<Field> = [
       ['3', '3x - sharpest, heaviest'],
     ],
   },
+  {
+    key: 'cacheBytes',
+    label: 'Cache size (MB)',
+    type: 'number',
+    step: '4',
+    hint: 'remembers what Lens said, so re-translating costs nothing; 0 disables',
+  },
   { key: 'minImageSize', label: 'Ignore images under (px)', type: 'number' },
   { key: 'jpegQuality', label: 'Upload quality (0..1)', type: 'number', step: '0.05' },
   { key: 'timeoutMs', label: 'Request timeout (ms)', type: 'number', step: '1000' },
@@ -145,6 +153,12 @@ export function resetSettings(): Settings {
 
 /** Turn a form value back into the type the setting is declared with. */
 export function coerce(field: Field, raw: string | boolean): Settings[keyof Settings] {
+  if (field.key === 'cacheBytes') {
+    const megabytes = Number(raw);
+    return (Number.isFinite(megabytes) && megabytes >= 0
+      ? Math.round(megabytes * 1024 * 1024)
+      : DEFAULTS.cacheBytes) as Settings[keyof Settings];
+  }
   if (field.key === 'supersample') {
     const value = Number(raw);
     return (value >= 1 && value <= 3 ? value : DEFAULTS.supersample) as Settings[keyof Settings];

@@ -35,7 +35,11 @@ function buildField(field: Field, settings: Settings): HTMLLabelElement {
       control.checked = Boolean(settings[field.key]);
       row.classList.add('lt-row-check');
     } else {
-      control.value = String(settings[field.key]);
+      // Bytes are stored, megabytes are shown: nobody wants to type 33554432.
+      control.value =
+        field.key === 'cacheBytes'
+          ? String(Math.round((settings.cacheBytes / (1024 * 1024)) * 10) / 10)
+          : String(settings[field.key]);
     }
     input = control;
   }

@@ -1,7 +1,9 @@
 node_modules/
-dist/
 # Build-time protobuf descriptors. `bun run gen` recreates them; only the
 # distilled src/gen/fields.ts is committed.
 .protogen/
 *.log
 .DS_Store
+
+# dist/ is deliberately NOT ignored: Tampermonkey installs and auto-updates
+# straight from the built file in this repo.

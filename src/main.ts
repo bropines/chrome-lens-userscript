@@ -12,6 +12,7 @@ import {
 import { renderToBlobUrl } from './render/canvas.js';
 import { coverImage, isCovered, uncoverAll, uncoverImage } from './render/cover.js';
 import { getSettings, saveSettings } from './settings.js';
+import { cacheKey, cacheStats, clearCache, getCached, putCached } from './cache.js';
 import { openSettings } from './ui/settings-panel.js';
 import { isOurs, uiRoot } from './ui/root.js';
 import type { Settings } from './types.js';
@@ -71,7 +72,14 @@ async function translate(img: HTMLImageElement): Promise<void> {
   try {
     const prepared = await prepareImage(img, settings);
     try {
-      const result = await callLens(prepared, settings);
+      // The upload still happens - the pixels are needed for rendering either
+      // way - but a cache hit skips the round trip and the quota it spends.
+      const key = cacheKey(img.currentSrc || img.src, settings);
+      let result = getCached(key, settings);
+      if (!result) {
+        result = await callLens(prepared, settings);
+        putCached(key, result, settings);
+      }
 
       if (!result.blocks.length) {
         const detected = result.ocr.some((p) => p.lines.length > 0);
@@ -277,6 +285,16 @@ GM_registerMenuCommand('Lens Translate: settings', () =>
     toast('Settings saved');
   })
 );
+
+GM_registerMenuCommand('Lens Translate: clear cache', () => {
+  const { entries, bytes } = cacheStats();
+  clearCache();
+  toast(
+    entries
+      ? `Cleared ${entries} cached result${entries === 1 ? '' : 's'} (${(bytes / 1048576).toFixed(1)} MB)`
+      : 'The cache was already empty'
+  );
+});
 
 GM_registerMenuCommand('Lens Translate: undo all on this page', () => {
   const restored = uncoverAll() + clearAllOverlays();
