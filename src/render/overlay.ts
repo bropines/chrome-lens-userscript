@@ -18,6 +18,18 @@ interface OverlayEntry {
 const overlays = new WeakMap<HTMLImageElement, OverlayEntry>();
 const pct = (value: number): string => `${(value * 100).toFixed(4)}%`;
 
+function textShadow(radius: number, colour: string): string {
+  const r = radius.toFixed(2);
+  const d = (radius * 0.71).toFixed(2);
+  return [
+    [`-${r}px`, '0'], [`${r}px`, '0'], ['0', `-${r}px`], ['0', `${r}px`],
+    [`-${d}px`, `-${d}px`], [`${d}px`, `-${d}px`],
+    [`-${d}px`, `${d}px`], [`${d}px`, `${d}px`],
+  ]
+    .map(([x, y]) => `${x} ${y} 0 ${colour}`)
+    .join(',');
+}
+
 export const hasOverlay = (img: HTMLImageElement): boolean => overlays.has(img);
 
 export function clearOverlay(img: HTMLImageElement): boolean {
@@ -156,12 +168,10 @@ export function renderTranslation(
         `transform:rotate(${geometry.angle}deg)`,
         // The outline keeps the text legible over whatever residue the
         // inpainting left behind.
-        patch
-          ? `text-shadow:${-outline}px ${outline}px 0 ${bgColor},` +
-            `${outline}px ${outline}px 0 ${bgColor},` +
-            `${outline}px ${-outline}px 0 ${bgColor},` +
-            `${-outline}px ${-outline}px 0 ${bgColor}`
-          : '',
+        // Eight directions rather than Chromium's four: the diagonals alone
+        // separate into distinct copies once the offset grows past a pixel or
+        // two, and this renderer has no stroke to fall back on.
+        patch ? `text-shadow:${textShadow(outline, bgColor)}` : '',
       ]
         .filter(Boolean)
         .join(';');

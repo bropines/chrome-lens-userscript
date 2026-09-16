@@ -1,5 +1,4 @@
 import { FIELDS, GROUPS, coerce, getSettings, resetSettings, saveSettings } from '../settings.js';
-import { OUTLINE_RATIO } from '../render/layout.js';
 import type { Field } from '../settings.js';
 import type { Settings } from '../types.js';
 import { uiRoot } from './root.js';
@@ -23,38 +22,65 @@ function drawOutlinePreview(canvas: HTMLCanvasElement, scale: number): void {
   const size = 22;
   ctx.clearRect(0, 0, width, height);
 
-  // Stand-in for leftover glyph edges: faint strokes the text has to survive.
-  ctx.fillStyle = '#f2f0ea';
-  ctx.fillRect(0, 0, width, height);
-  ctx.strokeStyle = 'rgba(40, 40, 40, 0.38)';
-  ctx.lineWidth = 1;
-  for (let i = 0; i < 26; i += 1) {
-    const x = 8 + ((i * 37) % (width - 16));
-    const y = 10 + ((i * 23) % (height - 20));
-    ctx.strokeRect(x, y, 9, 13);
+  // Both polarities, because the answer differs: a dark bubble means light text
+  // outlined in dark, and an outline tuned on a white page can swallow the text
+  // whole on a black one.
+  const halves = [
+    { x: 0, bg: '#f2f0ea', fg: '#141414', label: 'light' },
+    { x: width / 2, bg: '#141414', fg: '#f4f4f4', label: 'dark' },
+  ];
+
+  for (const half of halves) {
+    ctx.save();
     ctx.beginPath();
-    ctx.moveTo(x + 2, y + 4);
-    ctx.lineTo(x + 7, y + 10);
-    ctx.stroke();
-  }
+    ctx.rect(half.x, 0, width / 2, height);
+    ctx.clip();
 
-  ctx.font = `${size}px system-ui, -apple-system, sans-serif`;
-  ctx.textBaseline = 'middle';
-  const sample = 'Пример текста / sample';
-  const x = (width - ctx.measureText(sample).width) / 2;
-  const y = height / 2;
+    ctx.fillStyle = half.bg;
+    ctx.fillRect(half.x, 0, width / 2, height);
 
-  const outline = Math.round(size * OUTLINE_RATIO * 2 * scale);
-  if (outline > 0) {
-    ctx.fillStyle = '#f2f0ea';
-    for (const [dx, dy] of [
-      [-outline, outline], [outline, outline], [outline, -outline], [-outline, -outline],
-    ] as const) {
-      ctx.fillText(sample, x + dx, y + dy);
+    // Stand-in for leftover glyph edges: what the outline has to survive.
+    ctx.strokeStyle = half.fg;
+    ctx.globalAlpha = 0.35;
+    ctx.lineWidth = 1;
+    for (let i = 0; i < 16; i += 1) {
+      const x = half.x + 6 + ((i * 41) % (width / 2 - 14));
+      const y = 8 + ((i * 29) % (height - 18));
+      ctx.strokeRect(x, y, 9, 13);
+      ctx.beginPath();
+      ctx.moveTo(x + 2, y + 4);
+      ctx.lineTo(x + 7, y + 10);
+      ctx.stroke();
     }
+    ctx.globalAlpha = 1;
+
+    ctx.font = `${size}px system-ui, -apple-system, sans-serif`;
+    ctx.textBaseline = 'middle';
+    const sample = half.label === 'light' ? 'Пример текста' : 'sample text';
+    const x = half.x + (width / 2 - ctx.measureText(sample).width) / 2;
+    const y = height / 2;
+
+    // Same stroke the renderer uses, so the sample is the real thing.
+    const outline = size * 0.02 * 2 * scale;
+    if (outline > 0) {
+      ctx.strokeStyle = half.bg;
+      ctx.lineWidth = outline * 2;
+      ctx.lineJoin = 'round';
+      ctx.lineCap = 'round';
+      ctx.miterLimit = 2;
+      ctx.strokeText(sample, x, y);
+    }
+    ctx.fillStyle = half.fg;
+    ctx.fillText(sample, x, y);
+    ctx.restore();
   }
-  ctx.fillStyle = '#1a1a1a';
-  ctx.fillText(sample, x, y);
+
+  ctx.strokeStyle = 'rgba(128,128,128,0.5)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(width / 2, 0);
+  ctx.lineTo(width / 2, height);
+  ctx.stroke();
 }
 
 function buildField(field: Field, settings: Settings): HTMLLabelElement {

@@ -100,9 +100,12 @@ A preset for pages of vertical Japanese, off by default:
 - **Raises the size floor** to at least 14 px and gives reflowed text the
   four-offset outline that per-line text already had.
 
-The outline itself has its own slider, with a live sample drawn over simulated
-residue — the number alone tells you nothing, since the whole point of the
-outline is legibility over what the inpainting leaves behind. 0 removes it.
+The outline itself has its own slider, up to 8x, with a live sample drawn over
+simulated residue — the number alone tells you nothing, since the whole point of
+the outline is legibility over what the inpainting leaves behind. The sample
+shows both polarities side by side, because the answer differs: a dark bubble
+means light text outlined in dark, and a setting tuned on a white page can
+swallow the text whole on a black one. 0 removes it.
 
 ## Text that would be too small to read
 

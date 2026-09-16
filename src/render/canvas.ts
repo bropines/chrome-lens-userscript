@@ -66,6 +66,18 @@ interface DrawContext {
   minFontPx: number;
 }
 
+/**
+ * Draw the outline behind a piece of text.
+ *
+ * Chromium does this with a four-offset text-shadow, because CSS has no
+ * portable text stroke. Canvas does, and the difference matters: four diagonal
+ * copies only read as an outline while the offset is small, and past a couple
+ * of pixels they separate into four ghosts with gaps between them - which is
+ * exactly what the slider exposed at its upper end.
+ *
+ * strokeText straddles the glyph outline, so the visible thickness is half the
+ * line width; round joins keep sharp corners from spiking.
+ */
 function strokeThenFill(
   ctx: CanvasRenderingContext2D,
   text: string,
@@ -74,14 +86,15 @@ function strokeThenFill(
   outline: number,
   outlineColor: string | null
 ): void {
-  if (outline && outlineColor) {
-    ctx.fillStyle = outlineColor;
-    for (const [dx, dy] of [
-      [-outline, outline], [outline, outline], [outline, -outline], [-outline, -outline],
-    ] as const) {
-      ctx.fillText(text, x + dx, y + dy);
-    }
-  }
+  if (outline <= 0 || !outlineColor) return;
+  ctx.save();
+  ctx.strokeStyle = outlineColor;
+  ctx.lineWidth = outline * 2;
+  ctx.lineJoin = 'round';
+  ctx.lineCap = 'round';
+  ctx.miterLimit = 2;
+  ctx.strokeText(text, x, y);
+  ctx.restore();
 }
 
 function drawVertical(

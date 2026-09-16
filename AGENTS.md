@@ -156,6 +156,18 @@ first.
   text area and the text is re-wrapped into it (`drawReflowedParagraph`). The
   per-line patches are still painted, to erase the source.
 
+### The outline is a stroke, not four shadows
+
+Chromium draws it as a four-offset `text-shadow`, because CSS has no portable
+text stroke. Canvas has `strokeText`, and the difference shows up as soon as the
+radius grows: four diagonal copies only read as an outline while the offset is
+small, and past a couple of pixels they separate into four ghosts with gaps
+between them. The canvas renderer strokes; the DOM renderer, which has no
+stroke available, uses eight directions rather than four.
+
+`strokeText` straddles the glyph outline, so the visible thickness is half the
+line width.
+
 ### Wrapping is a property of the language, not the string
 
 `wrapText` decides between word and character breaking from `wrapsPerCharacter`,

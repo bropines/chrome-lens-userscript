@@ -765,6 +765,20 @@
   }
   const overlays = /* @__PURE__ */ new WeakMap();
   const pct = (value) => `${(value * 100).toFixed(4)}%`;
+  function textShadow(radius, colour) {
+    const r = radius.toFixed(2);
+    const d = (radius * 0.71).toFixed(2);
+    return [
+      [`-${r}px`, "0"],
+      [`${r}px`, "0"],
+      ["0", `-${r}px`],
+      ["0", `${r}px`],
+      [`-${d}px`, `-${d}px`],
+      [`${d}px`, `-${d}px`],
+      [`-${d}px`, `${d}px`],
+      [`${d}px`, `${d}px`]
+    ].map(([x, y]) => `${x} ${y} 0 ${colour}`).join(",");
+  }
   const hasOverlay = (img) => overlays.has(img);
   function clearOverlay(img) {
     const entry = overlays.get(img);
@@ -865,7 +879,10 @@
           `transform:rotate(${geometry.angle}deg)`,
           // The outline keeps the text legible over whatever residue the
           // inpainting left behind.
-          patch ? `text-shadow:${-outline}px ${outline}px 0 ${bgColor},${outline}px ${outline}px 0 ${bgColor},${outline}px ${-outline}px 0 ${bgColor},${-outline}px ${-outline}px 0 ${bgColor}` : ""
+          // Eight directions rather than Chromium's four: the diagonals alone
+          // separate into distinct copies once the offset grows past a pixel or
+          // two, and this renderer has no stroke to fall back on.
+          patch ? `text-shadow:${textShadow(outline, bgColor)}` : ""
         ].filter(Boolean).join(";");
         layer.appendChild(element);
         rendered += 1;
@@ -960,17 +977,15 @@
     return runs;
   }
   function strokeThenFill(ctx, text2, x, y, outline, outlineColor) {
-    if (outline && outlineColor) {
-      ctx.fillStyle = outlineColor;
-      for (const [dx, dy] of [
-        [-outline, outline],
-        [outline, outline],
-        [outline, -outline],
-        [-outline, -outline]
-      ]) {
-        ctx.fillText(text2, x + dx, y + dy);
-      }
-    }
+    if (outline <= 0 || !outlineColor) return;
+    ctx.save();
+    ctx.strokeStyle = outlineColor;
+    ctx.lineWidth = outline * 2;
+    ctx.lineJoin = "round";
+    ctx.lineCap = "round";
+    ctx.miterLimit = 2;
+    ctx.strokeText(text2, x, y);
+    ctx.restore();
   }
   function drawVertical({ ctx }, text2, boxW, boxH, size, fill, outline, outlineColor) {
     const em = size * 1.16;
@@ -1712,38 +1727,54 @@
     const { width, height } = canvas;
     const size = 22;
     ctx.clearRect(0, 0, width, height);
-    ctx.fillStyle = "#f2f0ea";
-    ctx.fillRect(0, 0, width, height);
-    ctx.strokeStyle = "rgba(40, 40, 40, 0.38)";
-    ctx.lineWidth = 1;
-    for (let i = 0; i < 26; i += 1) {
-      const x2 = 8 + i * 37 % (width - 16);
-      const y2 = 10 + i * 23 % (height - 20);
-      ctx.strokeRect(x2, y2, 9, 13);
+    const halves = [
+      { x: 0, bg: "#f2f0ea", fg: "#141414", label: "light" },
+      { x: width / 2, bg: "#141414", fg: "#f4f4f4", label: "dark" }
+    ];
+    for (const half of halves) {
+      ctx.save();
       ctx.beginPath();
-      ctx.moveTo(x2 + 2, y2 + 4);
-      ctx.lineTo(x2 + 7, y2 + 10);
-      ctx.stroke();
-    }
-    ctx.font = `${size}px system-ui, -apple-system, sans-serif`;
-    ctx.textBaseline = "middle";
-    const sample = "Пример текста / sample";
-    const x = (width - ctx.measureText(sample).width) / 2;
-    const y = height / 2;
-    const outline = Math.round(size * OUTLINE_RATIO * 2 * scale);
-    if (outline > 0) {
-      ctx.fillStyle = "#f2f0ea";
-      for (const [dx, dy] of [
-        [-outline, outline],
-        [outline, outline],
-        [outline, -outline],
-        [-outline, -outline]
-      ]) {
-        ctx.fillText(sample, x + dx, y + dy);
+      ctx.rect(half.x, 0, width / 2, height);
+      ctx.clip();
+      ctx.fillStyle = half.bg;
+      ctx.fillRect(half.x, 0, width / 2, height);
+      ctx.strokeStyle = half.fg;
+      ctx.globalAlpha = 0.35;
+      ctx.lineWidth = 1;
+      for (let i = 0; i < 16; i += 1) {
+        const x2 = half.x + 6 + i * 41 % (width / 2 - 14);
+        const y2 = 8 + i * 29 % (height - 18);
+        ctx.strokeRect(x2, y2, 9, 13);
+        ctx.beginPath();
+        ctx.moveTo(x2 + 2, y2 + 4);
+        ctx.lineTo(x2 + 7, y2 + 10);
+        ctx.stroke();
       }
+      ctx.globalAlpha = 1;
+      ctx.font = `${size}px system-ui, -apple-system, sans-serif`;
+      ctx.textBaseline = "middle";
+      const sample = half.label === "light" ? "Пример текста" : "sample text";
+      const x = half.x + (width / 2 - ctx.measureText(sample).width) / 2;
+      const y = height / 2;
+      const outline = size * 0.02 * 2 * scale;
+      if (outline > 0) {
+        ctx.strokeStyle = half.bg;
+        ctx.lineWidth = outline * 2;
+        ctx.lineJoin = "round";
+        ctx.lineCap = "round";
+        ctx.miterLimit = 2;
+        ctx.strokeText(sample, x, y);
+      }
+      ctx.fillStyle = half.fg;
+      ctx.fillText(sample, x, y);
+      ctx.restore();
     }
-    ctx.fillStyle = "#1a1a1a";
-    ctx.fillText(sample, x, y);
+    ctx.strokeStyle = "rgba(128,128,128,0.5)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(width / 2, 0);
+    ctx.lineTo(width / 2, height);
+    ctx.stroke();
   }
   function buildField(field, settings2) {
     const row = document.createElement("label");
