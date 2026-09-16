@@ -1,0 +1,5 @@
+userscript_check.html
+*.log
+__pycache__/
+*.pyc
+.venv/
