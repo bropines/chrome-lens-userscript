@@ -28,6 +28,8 @@ export const DEFAULTS: Settings = {
   minReadablePx: 12,
   supersample: 2,
   cacheBytes: 32 * 1024 * 1024,
+  mangaMode: false,
+  mangaBoxGrowth: 1.45,
 };
 
 type FieldKind = 'text' | 'number' | 'checkbox' | 'select';
@@ -74,6 +76,19 @@ export const FIELDS: ReadonlyArray<Field> = [
       ['keep', 'keep - always vertical, like Chromium'],
       ['horizontal', 'horizontal - always reflow'],
     ],
+  },
+  {
+    key: 'mangaMode',
+    label: 'Manga mode',
+    type: 'checkbox',
+    hint: 'always reflow vertical text, widen the layout area, bigger minimum size',
+  },
+  {
+    key: 'mangaBoxGrowth',
+    label: 'Bubble fill (manga mode)',
+    type: 'number',
+    step: '0.05',
+    hint: 'how far past the detected text box to lay out; 1 = exactly the box',
   },
   { key: 'drawBackground', label: 'Erase the original text', type: 'checkbox' },
   { key: 'fontFamily', label: 'Font family', type: 'text', hint: 'blank = the page font' },

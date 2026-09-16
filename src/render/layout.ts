@@ -77,7 +77,8 @@ export function buildLineText(
 export function wrapText(
   measure: (s: string) => number,
   text: string,
-  maxWidth: number
+  maxWidth: number,
+  perCharacter = false
 ): string[] {
   const lines: string[] = [];
   for (const hardLine of text.split('\n')) {
@@ -85,9 +86,11 @@ export function wrapText(
       lines.push('');
       continue;
     }
-    const spaced = hardLine.includes(' ');
-    const tokens = spaced ? hardLine.split(/\s+/) : [...hardLine];
-    const joiner = spaced ? ' ' : '';
+    // Whether to break between characters is a property of the *language*, not
+    // of this particular string. Deciding it from `includes(' ')` meant a short
+    // Russian word with no space in it got split letter by letter.
+    const tokens = perCharacter ? [...hardLine] : hardLine.split(/\s+/);
+    const joiner = perCharacter ? '' : ' ';
 
     let current = '';
     for (const token of tokens) {
@@ -116,7 +119,8 @@ export function fitTextBlock(
   lineHeight: (size: number) => number,
   text: string,
   boxWidth: number,
-  boxHeight: number
+  boxHeight: number,
+  perCharacter = false
 ): { size: number; lines: string[] } {
   let low = MIN_FONT_SIZE;
   let high = MAX_FONT_SIZE;
@@ -125,7 +129,7 @@ export function fitTextBlock(
   while (low <= high) {
     const mid = (low + high) >> 1;
     setFont(mid);
-    const lines = wrapText(measure, text, boxWidth);
+    const lines = wrapText(measure, text, boxWidth, perCharacter);
     const widest = lines.reduce((max, line) => Math.max(max, measure(line)), 0);
     if (widest >= boxWidth || lines.length * lineHeight(mid) >= boxHeight) high = mid - 1;
     else {
@@ -137,7 +141,7 @@ export function fitTextBlock(
   const size = Math.max(MIN_FONT_SIZE, Math.min(low - 1, MAX_FONT_SIZE));
   if (!best.length) {
     setFont(size);
-    best = wrapText(measure, text, boxWidth);
+    best = wrapText(measure, text, boxWidth, perCharacter);
   }
   return { size, lines: best };
 }
@@ -159,6 +163,11 @@ export function shouldStayVertical(block: TranslationBlock, mode: VerticalTextMo
   if (block.writingDirection !== WritingDirection.TopToBottom) return false;
   if (mode === 'keep') return true;
   if (mode === 'horizontal') return false;
+  return CJK_LANGS.has(baseLang(block.targetLang));
+}
+
+/** ja, zh and ko wrap between characters; everything else wraps between words. */
+export function wrapsPerCharacter(block: TranslationBlock): boolean {
   return CJK_LANGS.has(baseLang(block.targetLang));
 }
 

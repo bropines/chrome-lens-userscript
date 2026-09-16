@@ -657,16 +657,15 @@
     });
     return out;
   }
-  function wrapText(measure, text2, maxWidth) {
+  function wrapText(measure, text2, maxWidth, perCharacter = false) {
     const lines = [];
     for (const hardLine of text2.split("\n")) {
       if (!hardLine) {
         lines.push("");
         continue;
       }
-      const spaced = hardLine.includes(" ");
-      const tokens = spaced ? hardLine.split(/\s+/) : [...hardLine];
-      const joiner = spaced ? " " : "";
+      const tokens = perCharacter ? [...hardLine] : hardLine.split(/\s+/);
+      const joiner = perCharacter ? "" : " ";
       let current = "";
       for (const token of tokens) {
         const candidate = current ? `${current}${joiner}${token}` : token;
@@ -680,14 +679,14 @@
     }
     return lines;
   }
-  function fitTextBlock(setFont, measure, lineHeight, text2, boxWidth, boxHeight) {
+  function fitTextBlock(setFont, measure, lineHeight, text2, boxWidth, boxHeight, perCharacter = false) {
     let low = MIN_FONT_SIZE;
     let high = MAX_FONT_SIZE;
     let best = [];
     while (low <= high) {
       const mid = low + high >> 1;
       setFont(mid);
-      const lines = wrapText(measure, text2, boxWidth);
+      const lines = wrapText(measure, text2, boxWidth, perCharacter);
       const widest = lines.reduce((max, line) => Math.max(max, measure(line)), 0);
       if (widest >= boxWidth || lines.length * lineHeight(mid) >= boxHeight) high = mid - 1;
       else {
@@ -698,7 +697,7 @@
     const size = Math.max(MIN_FONT_SIZE, Math.min(low - 1, MAX_FONT_SIZE));
     if (!best.length) {
       setFont(size);
-      best = wrapText(measure, text2, boxWidth);
+      best = wrapText(measure, text2, boxWidth, perCharacter);
     }
     return { size, lines: best };
   }
@@ -710,6 +709,9 @@
     if (block.writingDirection !== WritingDirection.TopToBottom) return false;
     if (mode === "keep") return true;
     if (mode === "horizontal") return false;
+    return CJK_LANGS.has(baseLang(block.targetLang));
+  }
+  function wrapsPerCharacter(block) {
     return CJK_LANGS.has(baseLang(block.targetLang));
   }
   function isRtl(block) {
@@ -944,12 +946,13 @@
       }
     }
   }
-  function drawReflowedParagraph(draw, block) {
+  function drawReflowedParagraph(draw, block, settings2) {
     const geometry = block.geometry;
     if (!geometry || geometry.w <= 0 || geometry.h <= 0) return;
     const { ctx, width, height, fontFamily } = draw;
-    const boxW = geometry.w * width;
-    const boxH = geometry.h * height;
+    const growth = settings2.mangaMode ? Math.max(1, settings2.mangaBoxGrowth) : 1;
+    const boxW = geometry.w * width * growth;
+    const boxH = geometry.h * height * Math.min(growth, 1.2);
     const style = block.lines[0];
     if (!style) return;
     const text2 = block.translation.trim();
@@ -957,6 +960,14 @@
     ctx.save();
     ctx.translate(geometry.cx * width, geometry.cy * height);
     ctx.rotate(geometry.angle * DEG);
+    if (settings2.mangaMode && settings2.drawBackground) {
+      const fillW = geometry.w * width * 1.16;
+      const fillH = geometry.h * height * 1.16;
+      ctx.fillStyle = argbToCss(style.bgColor);
+      ctx.beginPath();
+      ctx.ellipse(0, 0, fillW / 2, fillH / 2, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
     const { size, lines } = fitTextBlock(
       (px) => {
         ctx.font = `${px}px ${fontFamily}`;
@@ -965,20 +976,24 @@
       (px) => px * 1.25,
       text2,
       boxW,
-      boxH
+      boxH,
+      wrapsPerCharacter(block)
     );
     const fontSize = Math.max(size, draw.minFontPx);
     ctx.font = `${fontSize}px ${fontFamily}`;
     const lineHeight = fontSize * 1.25;
     ctx.textAlign = "left";
     ctx.textBaseline = "top";
-    ctx.fillStyle = argbToCss(style.textColor);
+    const fill = argbToCss(style.textColor);
+    const outline = Math.max(1, Math.round(fontSize * OUTLINE_RATIO * 2));
+    const outlineColor = argbToCss(style.bgColor);
+    const justify = justification(block.alignment, isRtl(block));
     let y = -Math.min(boxH, lines.length * lineHeight) / 2;
     for (const line of lines) {
       const advance = ctx.measureText(line).width;
-      const justify = justification(block.alignment, isRtl(block));
       const x = justify === "flex-start" ? -boxW / 2 : justify === "flex-end" ? boxW / 2 - advance : -advance / 2;
-      ctx.fillStyle = argbToCss(style.textColor);
+      strokeThenFill(ctx, line, x, y, outline, outlineColor);
+      ctx.fillStyle = fill;
       ctx.fillText(line, x, y);
       y += lineHeight;
     }
@@ -1061,16 +1076,17 @@
     ctx.drawImage(source, 0, 0, width, height);
     const fontFamily = settings2.fontFamily || "system-ui, -apple-system, sans-serif";
     const canvasPerCssPx = width / Math.max(1, displayedWidth);
+    const floorCssPx = settings2.mangaMode ? Math.max(settings2.minReadablePx, 14) : settings2.minReadablePx;
     const draw = {
       ctx,
       width,
       height,
       fontFamily,
-      minFontPx: settings2.minReadablePx > 0 ? settings2.minReadablePx * canvasPerCssPx : 0
+      minFontPx: floorCssPx > 0 ? floorCssPx * canvasPerCssPx : 0
     };
     for (const block of blocks) {
       const vertical = block.writingDirection === 2;
-      const stayVertical = shouldStayVertical(block, settings2.verticalText);
+      const stayVertical = !settings2.mangaMode && shouldStayVertical(block, settings2.verticalText);
       const reflow = vertical && !stayVertical && Boolean(block.geometry);
       for (let i = 0; i < block.lines.length; i += 1) {
         const line = block.lines[i];
@@ -1078,7 +1094,7 @@
         if (reflow) await drawLine(draw, block, line, block.lines[i + 1], settings2, true);
         else await drawLine(draw, block, line, block.lines[i + 1], settings2);
       }
-      if (reflow) drawReflowedParagraph(draw, block);
+      if (reflow) drawReflowedParagraph(draw, block, settings2);
     }
     const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
     if (!blob) throw new Error("Could not encode the translated image");
@@ -1278,7 +1294,9 @@
     enabled: true,
     minReadablePx: 12,
     supersample: 2,
-    cacheBytes: 32 * 1024 * 1024
+    cacheBytes: 32 * 1024 * 1024,
+    mangaMode: false,
+    mangaBoxGrowth: 1.45
   };
   const FIELDS = [
     { key: "enabled", label: "Translation enabled", type: "checkbox" },
@@ -1313,6 +1331,19 @@
         ["keep", "keep - always vertical, like Chromium"],
         ["horizontal", "horizontal - always reflow"]
       ]
+    },
+    {
+      key: "mangaMode",
+      label: "Manga mode",
+      type: "checkbox",
+      hint: "always reflow vertical text, widen the layout area, bigger minimum size"
+    },
+    {
+      key: "mangaBoxGrowth",
+      label: "Bubble fill (manga mode)",
+      type: "number",
+      step: "0.05",
+      hint: "how far past the detected text box to lay out; 1 = exactly the box"
     },
     { key: "drawBackground", label: "Erase the original text", type: "checkbox" },
     { key: "fontFamily", label: "Font family", type: "text", hint: "blank = the page font" },
@@ -1484,6 +1515,8 @@
       settings2.drawBackground ? 1 : 0,
       settings2.minReadablePx,
       settings2.supersample,
+      settings2.mangaMode ? 1 : 0,
+      settings2.mangaBoxGrowth,
       Math.round(displayedWidth / 50)
     ].join("");
   }

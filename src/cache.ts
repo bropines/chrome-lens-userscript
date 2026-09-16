@@ -127,6 +127,8 @@ export function renderKey(key: string, settings: Settings, displayedWidth: numbe
     settings.drawBackground ? 1 : 0,
     settings.minReadablePx,
     settings.supersample,
+    settings.mangaMode ? 1 : 0,
+    settings.mangaBoxGrowth,
     Math.round(displayedWidth / 50),
   ].join('');
 }

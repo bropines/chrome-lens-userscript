@@ -134,6 +134,15 @@ export interface Settings {
    * inpainted patches, which dominate. 0 disables caching.
    */
   cacheBytes: number;
+  /**
+   * Manga preset. Speech bubbles are round and the detected paragraph box hugs
+   * the glyphs, so reflowed text is forced into a column far narrower than the
+   * bubble actually is. This widens the layout area, raises the size floor and
+   * always reflows vertical source text.
+   */
+  mangaMode: boolean;
+  /** How much wider than the detected paragraph box to lay text out, in manga mode. */
+  mangaBoxGrowth: number;
 }
 
 /** An image encoded and sized the way Chromium would send it. */

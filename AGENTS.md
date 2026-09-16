@@ -156,6 +156,22 @@ first.
   text area and the text is re-wrapped into it (`drawReflowedParagraph`). The
   per-line patches are still painted, to erase the source.
 
+### Wrapping is a property of the language, not the string
+
+`wrapText` decides between word and character breaking from `wrapsPerCharacter`,
+which looks at the *target language*. It used to check whether the string
+contained a space, which meant a short Russian word with none in it got split
+letter by letter down a column.
+
+### The inpainting leaves residue
+
+The patches erase the source glyphs but keep their anti-aliased edges. On one
+horizontal line that is barely visible; on a page of vertical text it reads as
+noise under the translation. Nothing on the client can improve the patch itself
+— the Python renderer shows the same — so manga mode covers the detected area
+with the line's background colour instead, as an ellipse so it does not cut
+across a round bubble's outline.
+
 ## Conventions
 
 - Strict TypeScript. `noUncheckedIndexedAccess` and `exactOptionalPropertyTypes`

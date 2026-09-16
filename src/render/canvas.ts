@@ -7,6 +7,7 @@ import {
   isRtl,
   justification,
   shouldStayVertical,
+  wrapsPerCharacter,
 } from './layout.js';
 import type { Settings, TranslatedLine, TranslationBlock } from '../types.js';
 
@@ -137,13 +138,21 @@ function drawVertical(
  * the translation is not itself going to be set vertically, the paragraph box
  * becomes one text area and the text is re-wrapped into it.
  */
-function drawReflowedParagraph(draw: DrawContext, block: TranslationBlock): void {
+function drawReflowedParagraph(
+  draw: DrawContext,
+  block: TranslationBlock,
+  settings: Settings
+): void {
   const geometry = block.geometry;
   if (!geometry || geometry.w <= 0 || geometry.h <= 0) return;
 
   const { ctx, width, height, fontFamily } = draw;
-  const boxW = geometry.w * width;
-  const boxH = geometry.h * height;
+  // The detected box hugs the glyphs. A speech bubble is round and has room
+  // around them, so manga mode lays out wider than the box and lets the text
+  // use it - otherwise a bubble's worth of Russian wraps into a thin column.
+  const growth = settings.mangaMode ? Math.max(1, settings.mangaBoxGrowth) : 1;
+  const boxW = geometry.w * width * growth;
+  const boxH = geometry.h * height * Math.min(growth, 1.2);
   const style = block.lines[0];
   if (!style) return;
 
@@ -154,6 +163,26 @@ function drawReflowedParagraph(draw: DrawContext, block: TranslationBlock): void
   ctx.translate(geometry.cx * width, geometry.cy * height);
   ctx.rotate(geometry.angle * DEG);
 
+  // The per-line patches erase the source imperfectly - the server's inpainting
+  // leaves the anti-aliased edges of the original glyphs behind, and on a page
+  // of vertical text that residue reads as noise under the translation.
+  //
+  // A speech bubble's interior is a single flat colour, so covering the layout
+  // area with that colour wipes the residue completely. An ellipse rather than a
+  // rectangle because bubbles are round: it stays inside the outline instead of
+  // cutting across it.
+  if (settings.mangaMode && settings.drawBackground) {
+    // Sized from the *detected* box, not the widened layout one: the residue
+    // sits where the source glyphs were, and an ellipse drawn to the layout box
+    // would bulge past the bubble's outline.
+    const fillW = geometry.w * width * 1.16;
+    const fillH = geometry.h * height * 1.16;
+    ctx.fillStyle = argbToCss(style.bgColor);
+    ctx.beginPath();
+    ctx.ellipse(0, 0, fillW / 2, fillH / 2, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
   const { size, lines } = fitTextBlock(
     (px) => {
       ctx.font = `${px}px ${fontFamily}`;
@@ -162,7 +191,8 @@ function drawReflowedParagraph(draw: DrawContext, block: TranslationBlock): void
     (px) => px * 1.25,
     text,
     boxW,
-    boxH
+    boxH,
+    wrapsPerCharacter(block)
   );
   const fontSize = Math.max(size, draw.minFontPx);
   ctx.font = `${fontSize}px ${fontFamily}`;
@@ -170,19 +200,26 @@ function drawReflowedParagraph(draw: DrawContext, block: TranslationBlock): void
 
   ctx.textAlign = 'left';
   ctx.textBaseline = 'top';
-  ctx.fillStyle = argbToCss(style.textColor);
+
+  const fill = argbToCss(style.textColor);
+  // Reflowed text had no outline at all, which is why it sat unprotected on top
+  // of whatever the inpainting left behind. Same four-offset shadow Chromium
+  // uses per line.
+  const outline = Math.max(1, Math.round(fontSize * OUTLINE_RATIO * 2));
+  const outlineColor = argbToCss(style.bgColor);
+  const justify = justification(block.alignment, isRtl(block));
 
   let y = -Math.min(boxH, lines.length * lineHeight) / 2;
   for (const line of lines) {
     const advance = ctx.measureText(line).width;
-    const justify = justification(block.alignment, isRtl(block));
     const x =
       justify === 'flex-start'
         ? -boxW / 2
         : justify === 'flex-end'
           ? boxW / 2 - advance
           : -advance / 2;
-    ctx.fillStyle = argbToCss(style.textColor);
+    strokeThenFill(ctx, line, x, y, outline, outlineColor);
+    ctx.fillStyle = fill;
     ctx.fillText(line, x, y);
     y += lineHeight;
   }
@@ -322,17 +359,23 @@ export async function renderToBlob(
   const fontFamily = settings.fontFamily || 'system-ui, -apple-system, sans-serif';
   // One displayed CSS pixel is this many canvas pixels.
   const canvasPerCssPx = width / Math.max(1, displayedWidth);
+  // Manga is read at a glance; a floor that is fine for a shop sign is not.
+  const floorCssPx = settings.mangaMode
+    ? Math.max(settings.minReadablePx, 14)
+    : settings.minReadablePx;
   const draw: DrawContext = {
     ctx,
     width,
     height,
     fontFamily,
-    minFontPx: settings.minReadablePx > 0 ? settings.minReadablePx * canvasPerCssPx : 0,
+    minFontPx: floorCssPx > 0 ? floorCssPx * canvasPerCssPx : 0,
   };
 
   for (const block of blocks) {
     const vertical = block.writingDirection === 2;
-    const stayVertical = shouldStayVertical(block, settings.verticalText);
+    // Manga mode never leaves a column standing: that is the whole point of it.
+    const stayVertical =
+      !settings.mangaMode && shouldStayVertical(block, settings.verticalText);
     // Erase the source either way; only the text placement changes.
     const reflow = vertical && !stayVertical && Boolean(block.geometry);
 
@@ -342,7 +385,7 @@ export async function renderToBlob(
       if (reflow) await drawLine(draw, block, line, block.lines[i + 1], settings, true);
       else await drawLine(draw, block, line, block.lines[i + 1], settings);
     }
-    if (reflow) drawReflowedParagraph(draw, block);
+    if (reflow) drawReflowedParagraph(draw, block, settings);
   }
 
   const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'));

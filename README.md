@@ -65,6 +65,22 @@ If step 3 does get reached and fails with "permanently blocked by the user", cle
 
 Uploads use Chromium's own budget: JPEG quality 40, and a resize only when the image is both over 1.5 MP and over 1600px on a side.
 
+## Manga mode
+
+A preset for pages of vertical Japanese, off by default:
+
+- **Always reflows** vertical text, whatever the target language.
+- **Lays out wider than the detected box.** That box hugs the glyphs, but a
+  speech bubble is round and has room around them, so reflowed text otherwise
+  wraps into a thin column. `mangaBoxGrowth` controls how far past it to go.
+- **Wipes the bubble.** The server's inpainting erases the source imperfectly,
+  leaving the anti-aliased edges of the original glyphs behind; on a page of
+  vertical text that residue reads as noise. Bubble interiors are one flat
+  colour, so the detected area is covered with that colour — as an ellipse,
+  since a rectangle would cut across the bubble's outline.
+- **Raises the size floor** to at least 14 px and gives reflowed text the
+  four-offset outline that per-line text already had.
+
 ## Text that would be too small to read
 
 Lens sizes translated text to fit the *original* line box. On a 2400px page shown 600px wide, fine print measured here fitted at 9–13px, which is 2–3px on screen — no more readable than the original was, and that is the complaint.
