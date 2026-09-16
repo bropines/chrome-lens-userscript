@@ -168,9 +168,15 @@ letter by letter down a column.
 The patches erase the source glyphs but keep their anti-aliased edges. On one
 horizontal line that is barely visible; on a page of vertical text it reads as
 noise under the translation. Nothing on the client can improve the patch itself
-— the Python renderer shows the same — so manga mode covers the detected area
-with the line's background colour instead, as an ellipse so it does not cut
-across a round bubble's outline.
+— the Python renderer shows the same.
+
+`eraseMode: 'hull'` covers the area instead, and the *shape* is the point
+(`render/hull.ts`). The paragraph's bounding box is wrong for it: for columns
+at an angle, or ragged lines, a rectangle takes in far more than the text and an
+ellipse inscribed in it takes in too little at the corners. The convex hull of
+every line box's corners is exactly the text's extent. Growing it and rounding
+its corners is one operation — stroke the hull path with a round-joined line of
+width `2 * pad`, then fill.
 
 ## Conventions
 

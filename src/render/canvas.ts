@@ -9,6 +9,8 @@ import {
   shouldStayVertical,
   wrapsPerCharacter,
 } from './layout.js';
+import { boxCorners, convexHull, fillHull } from './hull.js';
+import type { Point } from './hull.js';
 import type { Settings, TranslatedLine, TranslationBlock } from '../types.js';
 
 /**
@@ -163,26 +165,6 @@ function drawReflowedParagraph(
   ctx.translate(geometry.cx * width, geometry.cy * height);
   ctx.rotate(geometry.angle * DEG);
 
-  // The per-line patches erase the source imperfectly - the server's inpainting
-  // leaves the anti-aliased edges of the original glyphs behind, and on a page
-  // of vertical text that residue reads as noise under the translation.
-  //
-  // A speech bubble's interior is a single flat colour, so covering the layout
-  // area with that colour wipes the residue completely. An ellipse rather than a
-  // rectangle because bubbles are round: it stays inside the outline instead of
-  // cutting across it.
-  if (settings.mangaMode && settings.drawBackground) {
-    // Sized from the *detected* box, not the widened layout one: the residue
-    // sits where the source glyphs were, and an ellipse drawn to the layout box
-    // would bulge past the bubble's outline.
-    const fillW = geometry.w * width * 1.16;
-    const fillH = geometry.h * height * 1.16;
-    ctx.fillStyle = argbToCss(style.bgColor);
-    ctx.beginPath();
-    ctx.ellipse(0, 0, fillW / 2, fillH / 2, 0, 0, Math.PI * 2);
-    ctx.fill();
-  }
-
   const { size, lines } = fitTextBlock(
     (px) => {
       ctx.font = `${px}px ${fontFamily}`;
@@ -210,7 +192,7 @@ function drawReflowedParagraph(
     Math.round(fontSize * OUTLINE_RATIO * 2 * settings.outlineScale)
   );
   const outlineColor = argbToCss(style.bgColor);
-  const justify = justification(block.alignment, isRtl(block));
+  const justify = justification(block.alignment, isRtl(block), settings.textAlign);
 
   let y = -Math.min(boxH, lines.length * lineHeight) / 2;
   for (const line of lines) {
@@ -229,13 +211,41 @@ function drawReflowedParagraph(
   ctx.restore();
 }
 
+/**
+ * Cover the whole area the source text occupied, in one shape.
+ *
+ * Preferred over per-line patches when the inpainting's leftovers matter more
+ * than fidelity - which is the case on a page of vertical text, where the
+ * residue runs as streaks the full height of a bubble.
+ */
+function eraseTextArea(draw: DrawContext, block: TranslationBlock, settings: Settings): void {
+  const { ctx, width, height } = draw;
+  const points: Point[] = [];
+  let thinnest = Infinity;
+
+  for (const line of block.lines) {
+    if (!line.geometry) continue;
+    points.push(...boxCorners(line.geometry, width, height));
+    thinnest = Math.min(thinnest, line.geometry.w * width, line.geometry.h * height);
+  }
+  if (points.length < 3) return;
+
+  const style = block.lines.find((line) => line.geometry) ?? block.lines[0];
+  if (!style) return;
+
+  // Padding in line heights, so it scales with the text rather than the image.
+  const pad = Number.isFinite(thinnest) ? thinnest * settings.hullPadding : 0;
+  fillHull(ctx, convexHull(points), argbToCss(style.bgColor), pad);
+}
+
 async function drawLine(
   draw: DrawContext,
   block: TranslationBlock,
   line: TranslatedLine,
   nextLine: TranslatedLine | undefined,
   settings: Settings,
-  backgroundOnly = false
+  backgroundOnly = false,
+  skipBackground = false
 ): Promise<void> {
   const geometry = line.geometry;
   if (!geometry || geometry.w <= 0 || geometry.h <= 0) return;
@@ -245,7 +255,7 @@ async function drawLine(
   const boxH = geometry.h * height;
   const cx = geometry.cx * width;
   const cy = geometry.cy * height;
-  const patch = settings.drawBackground ? line.background : null;
+  const patch = settings.drawBackground && !skipBackground ? line.background : null;
 
   ctx.save();
   ctx.translate(cx, cy);
@@ -270,7 +280,7 @@ async function drawLine(
       ctx.fillStyle = argbToCss(line.bgColor);
       ctx.fillRect(-boxW / 2, -boxH / 2, boxW, boxH);
     }
-  } else if (settings.drawBackground) {
+  } else if (settings.drawBackground && !skipBackground) {
     ctx.fillStyle = argbToCss(line.bgColor);
     ctx.fillRect(-boxW / 2, -boxH / 2, boxW, boxH);
   }
@@ -307,7 +317,7 @@ async function drawLine(
     if (vertical) {
       drawVertical(draw, text, drawW, drawH, size, fill, outline, outlineColor);
     } else {
-      const justify = justification(block.alignment, isRtl(block));
+      const justify = justification(block.alignment, isRtl(block), settings.textAlign);
       const advance = ctx.measureText(text).width;
       const x =
         justify === 'flex-start'
@@ -381,14 +391,20 @@ export async function renderToBlob(
     // Manga mode never leaves a column standing: that is the whole point of it.
     const stayVertical =
       !settings.mangaMode && shouldStayVertical(block, settings.verticalText);
+    // Manga mode implies hull erasing; the residue is the reason it exists.
+    const hull = settings.drawBackground && (settings.eraseMode === 'hull' || settings.mangaMode);
+    if (hull) eraseTextArea(draw, block, settings);
     // Erase the source either way; only the text placement changes.
     const reflow = vertical && !stayVertical && Boolean(block.geometry);
 
     for (let i = 0; i < block.lines.length; i += 1) {
       const line = block.lines[i];
       if (!line) continue;
-      if (reflow) await drawLine(draw, block, line, block.lines[i + 1], settings, true);
-      else await drawLine(draw, block, line, block.lines[i + 1], settings);
+      // With a hull already painted, the per-line patches would only put the
+      // residue back.
+      if (reflow) {
+        if (!hull) await drawLine(draw, block, line, block.lines[i + 1], settings, true);
+      } else await drawLine(draw, block, line, block.lines[i + 1], settings, false, hull);
     }
     if (reflow) drawReflowedParagraph(draw, block, settings);
   }

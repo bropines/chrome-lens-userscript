@@ -1,4 +1,4 @@
-import { FIELDS, coerce, getSettings, resetSettings, saveSettings } from '../settings.js';
+import { FIELDS, GROUPS, coerce, getSettings, resetSettings, saveSettings } from '../settings.js';
 import { OUTLINE_RATIO } from '../render/layout.js';
 import type { Field } from '../settings.js';
 import type { Settings } from '../types.js';
@@ -77,14 +77,17 @@ function buildField(field: Field, settings: Settings): HTMLLabelElement {
 
     const readout = document.createElement('span');
     readout.className = 'lt-readout';
+    const wantsPreview = field.key === 'outlineScale';
     const preview = document.createElement('canvas');
     preview.className = 'lt-preview';
     preview.width = 460;
     preview.height = 64;
 
     const refresh = (): void => {
-      readout.textContent = `${Number(slider.value).toFixed(1)}x`;
-      drawOutlinePreview(preview, Number(slider.value));
+      const value = Number(slider.value);
+      readout.textContent =
+        field.unit === '%' ? `${Math.round(value * 100)}%` : `${value.toFixed(1)}x`;
+      if (wantsPreview) drawOutlinePreview(preview, value);
     };
     slider.addEventListener('input', refresh);
     refresh();
@@ -95,7 +98,7 @@ function buildField(field: Field, settings: Settings): HTMLLabelElement {
     slider.className = 'lt-input';
     slider.dataset['key'] = field.key;
     row.appendChild(holder);
-    row.appendChild(preview);
+    if (wantsPreview) row.appendChild(preview);
 
     if (field.hint) {
       const hint = document.createElement('span');
@@ -190,7 +193,17 @@ export function openSettings(onSaved?: SavedHandler): void {
   panel = backdrop;
 
   const body = backdrop.querySelector<HTMLDivElement>('.lt-panel-body');
-  if (body) for (const field of FIELDS) body.appendChild(buildField(field, settings));
+  if (body) {
+    for (const group of GROUPS) {
+      const fields = FIELDS.filter((field) => field.group === group);
+      if (!fields.length) continue;
+      const heading = document.createElement('div');
+      heading.className = 'lt-group';
+      heading.textContent = group;
+      body.appendChild(heading);
+      for (const field of fields) body.appendChild(buildField(field, settings));
+    }
+  }
 
   backdrop.addEventListener('click', (event) => {
     const target = event.target as HTMLElement;

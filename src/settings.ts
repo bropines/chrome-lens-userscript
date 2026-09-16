@@ -31,6 +31,9 @@ export const DEFAULTS: Settings = {
   mangaMode: false,
   mangaBoxGrowth: 1.45,
   outlineScale: 1,
+  eraseMode: 'patch',
+  hullPadding: 0.45,
+  textAlign: 'auto',
 };
 
 type FieldKind = 'text' | 'number' | 'checkbox' | 'select' | 'range';
@@ -39,17 +42,30 @@ export interface Field<K extends keyof Settings = keyof Settings> {
   key: K;
   label: string;
   type: FieldKind;
+  /** Section heading this field is filed under in the panel. */
+  group: string;
   hint?: string;
   step?: string;
   min?: string;
   max?: string;
+  /** How a range's value reads out: 'x' for a multiplier, '%' for a fraction. */
+  unit?: 'x' | '%';
   options?: ReadonlyArray<readonly [string, string]>;
 }
 
+export const GROUPS = [
+  'Languages',
+  'Layout',
+  'Erasing the original',
+  'Legibility',
+  'Behaviour',
+  'Advanced',
+] as const;
+
 export const FIELDS: ReadonlyArray<Field> = [
-  { key: 'enabled', label: 'Translation enabled', type: 'checkbox' },
+  { key: 'enabled', group: 'Behaviour', label: 'Translation enabled', type: 'checkbox' },
   {
-    key: 'renderMode',
+    key: 'renderMode', group: 'Behaviour',
     label: 'Render as',
     type: 'select',
     options: [
@@ -57,21 +73,21 @@ export const FIELDS: ReadonlyArray<Field> = [
       ['overlay', 'overlay - crisp text, can drift on dynamic pages'],
     ],
   },
-  { key: 'targetLang', label: 'Translate to', type: 'select', options: languageOptions() },
+  { key: 'targetLang', group: 'Languages', label: 'Translate to', type: 'select', options: languageOptions() },
   {
-    key: 'sourceLang',
+    key: 'sourceLang', group: 'Languages',
     label: 'Translate from',
     type: 'select',
     options: languageOptions('Detect automatically'),
   },
   {
-    key: 'ocrLang',
+    key: 'ocrLang', group: 'Languages',
     label: 'OCR language hint',
     type: 'select',
     options: languageOptions('Follow the target'),
   },
   {
-    key: 'verticalText',
+    key: 'verticalText', group: 'Layout',
     label: 'Vertical CJK text',
     type: 'select',
     options: [
@@ -81,32 +97,64 @@ export const FIELDS: ReadonlyArray<Field> = [
     ],
   },
   {
-    key: 'mangaMode',
+    key: 'textAlign',
+    group: 'Layout',
+    label: 'Text alignment',
+    type: 'select',
+    options: [
+      ['auto', 'auto - follow the source, like Chromium'],
+      ['left', 'left'],
+      ['center', 'center'],
+      ['right', 'right'],
+    ],
+  },
+  {
+    key: 'mangaMode', group: 'Layout',
     label: 'Manga mode',
     type: 'checkbox',
     hint: 'always reflow vertical text, widen the layout area, bigger minimum size',
   },
   {
-    key: 'mangaBoxGrowth',
+    key: 'mangaBoxGrowth', group: 'Layout',
     label: 'Bubble fill (manga mode)',
     type: 'number',
     step: '0.05',
     hint: 'how far past the detected text box to lay out; 1 = exactly the box',
   },
-  { key: 'drawBackground', label: 'Erase the original text', type: 'checkbox' },
+  { key: 'drawBackground', group: 'Erasing the original', label: 'Erase the original text', type: 'checkbox' },
   {
-    key: 'outlineScale',
+    key: 'eraseMode', group: 'Erasing the original',
+    label: 'How to erase',
+    type: 'select',
+    options: [
+      ['patch', "patch - the server's inpainting, like Chromium"],
+      ['hull', 'hull - cover the whole text area with its background colour'],
+    ],
+  },
+  {
+    key: 'hullPadding', group: 'Erasing the original',
+    label: 'Cover margin',
+    type: 'range',
+    min: '0',
+    max: '2',
+    step: '0.05',
+    unit: '%',
+    hint: 'how far past the text the cover extends, relative to line height',
+  },
+  {
+    key: 'outlineScale', group: 'Legibility',
     label: 'Text outline',
     type: 'range',
     min: '0',
-    max: '4',
+    max: '8',
     step: '0.1',
+    unit: 'x',
     hint: 'thickens the outline behind translated text; 0 removes it',
   },
-  { key: 'fontFamily', label: 'Font family', type: 'text', hint: 'blank = the page font' },
-  { key: 'showButton', label: 'Show the hover button', type: 'checkbox' },
+  { key: 'fontFamily', group: 'Layout', label: 'Font family', type: 'text', hint: 'blank = the page font' },
+  { key: 'showButton', group: 'Behaviour', label: 'Show the hover button', type: 'checkbox' },
   {
-    key: 'hotkey',
+    key: 'hotkey', group: 'Behaviour',
     label: 'Modifier + click',
     type: 'select',
     options: [
@@ -117,13 +165,13 @@ export const FIELDS: ReadonlyArray<Field> = [
     ],
   },
   {
-    key: 'minReadablePx',
+    key: 'minReadablePx', group: 'Legibility',
     label: 'Minimum text size (px)',
     type: 'number',
     hint: 'enlarges text that would render too small to read; 0 disables',
   },
   {
-    key: 'supersample',
+    key: 'supersample', group: 'Legibility',
     label: 'Render sharpness',
     type: 'select',
     options: [
@@ -133,18 +181,18 @@ export const FIELDS: ReadonlyArray<Field> = [
     ],
   },
   {
-    key: 'cacheBytes',
+    key: 'cacheBytes', group: 'Behaviour',
     label: 'Cache size (MB)',
     type: 'number',
     step: '4',
     hint: 'remembers what Lens said, so re-translating costs nothing; 0 disables',
   },
-  { key: 'minImageSize', label: 'Ignore images under (px)', type: 'number' },
-  { key: 'jpegQuality', label: 'Upload quality (0..1)', type: 'number', step: '0.05' },
-  { key: 'timeoutMs', label: 'Request timeout (ms)', type: 'number', step: '1000' },
-  { key: 'region', label: 'Client region', type: 'text' },
-  { key: 'timeZone', label: 'Client time zone', type: 'text' },
-  { key: 'apiKey', label: 'API key', type: 'text', hint: 'only change if you have your own' },
+  { key: 'minImageSize', group: 'Behaviour', label: 'Ignore images under (px)', type: 'number' },
+  { key: 'jpegQuality', group: 'Advanced', label: 'Upload quality (0..1)', type: 'number', step: '0.05' },
+  { key: 'timeoutMs', group: 'Advanced', label: 'Request timeout (ms)', type: 'number', step: '1000' },
+  { key: 'region', group: 'Advanced', label: 'Client region', type: 'text' },
+  { key: 'timeZone', group: 'Advanced', label: 'Client time zone', type: 'text' },
+  { key: 'apiKey', group: 'Advanced', label: 'API key', type: 'text', hint: 'only change if you have your own' },
 ];
 
 let cache: Settings | null = null;

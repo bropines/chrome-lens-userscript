@@ -149,6 +149,23 @@ export interface Settings {
    * inpainting leaves a lot of the source showing through.
    */
   outlineScale: number;
+  /**
+   * How to erase the source text.
+   *   'patch' - the server's inpainted patches, as Chromium does. Faithful, but
+   *             it leaves the anti-aliased edges of the original glyphs behind.
+   *   'hull'  - cover the convex hull of the line boxes with the line's
+   *             background colour. Wipes the residue; only right where that
+   *             colour is flat, which in a speech bubble it is.
+   */
+  eraseMode: 'patch' | 'hull';
+  /** How far past the text's hull to extend the cover, as a fraction of line height. */
+  hullPadding: number;
+  /**
+   * Override the alignment the server reports. 'auto' follows it, which is what
+   * Chromium does; the rest force a side, which is usually what you want once
+   * the text has been reflowed into a different shape than the source.
+   */
+  textAlign: 'auto' | 'left' | 'center' | 'right';
 }
 
 /** An image encoded and sized the way Chromium would send it. */

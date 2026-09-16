@@ -130,6 +130,9 @@ export function renderKey(key: string, settings: Settings, displayedWidth: numbe
     settings.mangaMode ? 1 : 0,
     settings.mangaBoxGrowth,
     settings.outlineScale,
+    settings.eraseMode,
+    settings.hullPadding,
+    settings.textAlign,
     Math.round(displayedWidth / 50),
   ].join('');
 }

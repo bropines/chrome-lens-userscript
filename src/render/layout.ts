@@ -176,8 +176,21 @@ export function isRtl(block: TranslationBlock): boolean {
   return RTL_LANGS.has(baseLang(block.targetLang));
 }
 
-/** Alignment enum to flex justification. Chromium's default is centre. */
-export function justification(alignment: Alignment, rtl: boolean): string {
+/**
+ * Alignment enum to flex justification, with an override.
+ *
+ * Chromium always follows the source. Once text has been reflowed into a shape
+ * the source never had, following it stops being obviously right, so the
+ * setting can force a side.
+ */
+export function justification(
+  alignment: Alignment,
+  rtl: boolean,
+  override: 'auto' | 'left' | 'center' | 'right' = 'auto'
+): string {
+  if (override !== 'auto') {
+    return { left: 'flex-start', center: 'center', right: 'flex-end' }[override];
+  }
   const map: Record<Alignment, string> = {
     [Alignment.Left]: 'flex-start',
     [Alignment.Right]: 'flex-end',

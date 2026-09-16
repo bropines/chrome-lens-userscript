@@ -65,6 +65,25 @@ If step 3 does get reached and fails with "permanently blocked by the user", cle
 
 Uploads use Chromium's own budget: JPEG quality 40, and a resize only when the image is both over 1.5 MP and over 1600px on a side.
 
+## Erasing the original
+
+Two ways, chosen in settings:
+
+- **`patch`** — the server's inpainted patches, what Chromium does. Faithful,
+  but it erases glyphs while keeping their anti-aliased edges, and on a page of
+  vertical text that residue reads as streaks the full height of a bubble.
+- **`hull`** — cover the convex hull of every line box with the line's
+  background colour. The paragraph's bounding box is the wrong shape for this:
+  for columns at an angle, or ragged lines, a rectangle takes in far more than
+  the text and an ellipse inscribed in it takes in too little at the corners.
+  The hull of the line-box corners is exactly the text's extent, whatever
+  arrangement the lines are in.
+
+`hull` only makes sense where the background is flat, which inside a speech
+bubble it is. **Cover margin** controls how far past the text it extends,
+relative to line height; the shape is grown and its corners rounded in one step
+by stroking the hull with a round-joined line before filling it.
+
 ## Manga mode
 
 A preset for pages of vertical Japanese, off by default:

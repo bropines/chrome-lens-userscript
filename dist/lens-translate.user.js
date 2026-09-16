@@ -718,7 +718,10 @@
     if (block.writingDirection === WritingDirection.RightToLeft) return true;
     return RTL_LANGS.has(baseLang(block.targetLang));
   }
-  function justification(alignment, rtl) {
+  function justification(alignment, rtl, override = "auto") {
+    if (override !== "auto") {
+      return { left: "flex-start", center: "center", right: "flex-end" }[override];
+    }
     const map = {
       [Alignment.Left]: "flex-start",
       [Alignment.Right]: "flex-end",
@@ -727,7 +730,7 @@
     const value = map[alignment] ?? "center";
     return rtl && value === "flex-start" ? "flex-end" : value;
   }
-  const styles = "/* Lives inside a shadow root, so these selectors compete with nothing. The\r\n   :host is a fixed, click-through, full-viewport layer; everything here is\r\n   positioned in viewport coordinates. */\r\n\r\n:host {\r\n  font: 14px/1.45 system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;\r\n  color: #1a1a1a;\r\n}\r\n\r\n#lt-button,\r\n#lt-gear {\r\n  position: absolute;\r\n  width: 32px;\r\n  height: 32px;\r\n  background: rgba(0, 0, 0, 0.6);\r\n  border-radius: 50%;\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  opacity: 0;\r\n  pointer-events: none;\r\n  cursor: pointer;\r\n  transition: opacity 0.2s ease-in-out, transform 0.15s ease-in-out, background 0.2s;\r\n  transform: scale(0.9);\r\n  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);\r\n  border: 1px solid rgba(255, 255, 255, 0.2);\r\n}\r\n#lt-button:hover,\r\n#lt-gear:hover {\r\n  background: rgba(0, 0, 0, 0.85);\r\n  transform: scale(1.05);\r\n}\r\n\r\n/* Appears a beat after the main button, so a passing cursor does not summon\r\n   two controls at once. */\r\n#lt-gear {\r\n  width: 26px;\r\n  height: 26px;\r\n}\r\n#lt-button.lt-busy svg {\r\n  animation: lt-spin 1s linear infinite;\r\n}\r\n#lt-button.lt-active {\r\n  background: rgba(20, 110, 60, 0.9);\r\n}\r\n#lt-button.lt-error {\r\n  background: rgba(170, 30, 30, 0.9);\r\n}\r\n@keyframes lt-spin {\r\n  to {\r\n    transform: rotate(360deg);\r\n  }\r\n}\r\n\r\n.lt-layer {\r\n  position: absolute;\r\n  overflow: hidden;\r\n  pointer-events: none;\r\n}\r\n.lt-bg {\r\n  position: absolute;\r\n  max-width: none;\r\n}\r\n.lt-line {\r\n  position: absolute;\r\n  display: flex;\r\n  align-items: center;\r\n  white-space: pre;\r\n  line-height: 1;\r\n  transform-origin: center center;\r\n  margin: 0;\r\n  padding: 0;\r\n}\r\n\r\n#lt-toast {\r\n  position: absolute;\r\n  bottom: 16px;\r\n  left: 50%;\r\n  transform: translateX(-50%);\r\n  background: rgba(0, 0, 0, 0.88);\r\n  color: #fff;\r\n  padding: 8px 16px;\r\n  border-radius: 8px;\r\n  font-size: 13px;\r\n  pointer-events: none;\r\n  opacity: 0;\r\n  transition: opacity 0.2s;\r\n  max-width: 70vw;\r\n}\r\n#lt-toast.lt-show {\r\n  opacity: 1;\r\n}\r\n\r\n/* ------------------------------------------------------------- settings */\r\n\r\n.lt-panel-backdrop {\r\n  position: absolute;\r\n  inset: 0;\r\n  background: rgba(0, 0, 0, 0.5);\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  pointer-events: auto;\r\n}\r\n.lt-panel {\r\n  background: #fff;\r\n  width: min(560px, 92vw);\r\n  max-height: 86vh;\r\n  display: flex;\r\n  flex-direction: column;\r\n  border-radius: 12px;\r\n  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.4);\r\n  overflow: hidden;\r\n}\r\n.lt-panel-head,\r\n.lt-panel-foot {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: 8px;\r\n  padding: 12px 18px;\r\n  flex: none;\r\n}\r\n.lt-panel-head {\r\n  border-bottom: 1px solid #e6e6e6;\r\n  justify-content: space-between;\r\n  font-size: 15px;\r\n  font-weight: 600;\r\n}\r\n.lt-panel-foot {\r\n  border-top: 1px solid #e6e6e6;\r\n}\r\n.lt-spacer {\r\n  flex: 1;\r\n}\r\n.lt-panel-body {\r\n  padding: 10px 18px 16px;\r\n  overflow-y: auto;\r\n}\r\n\r\n.lt-row {\r\n  display: grid;\r\n  grid-template-columns: 190px minmax(0, 1fr);\r\n  align-items: center;\r\n  gap: 2px 14px;\r\n  padding: 7px 0;\r\n}\r\n.lt-label {\r\n  color: #333;\r\n}\r\n.lt-hint {\r\n  grid-column: 2;\r\n  color: #808080;\r\n  font-size: 12px;\r\n}\r\n.lt-input {\r\n  font: inherit;\r\n  padding: 7px 9px;\r\n  border: 1px solid #ccc;\r\n  border-radius: 6px;\r\n  background: #fff;\r\n  color: #1a1a1a;\r\n  min-width: 0;\r\n  width: 100%;\r\n  box-sizing: border-box;\r\n}\r\n.lt-input[type='checkbox'] {\r\n  justify-self: start;\r\n  width: 17px;\r\n  height: 17px;\r\n  padding: 0;\r\n}\r\n.lt-x {\r\n  border: 0;\r\n  background: transparent;\r\n  font-size: 22px;\r\n  line-height: 1;\r\n  cursor: pointer;\r\n  color: #666;\r\n  padding: 0 4px;\r\n}\r\n.lt-btn {\r\n  font: inherit;\r\n  padding: 7px 15px;\r\n  border-radius: 7px;\r\n  cursor: pointer;\r\n  border: 1px solid #ccc;\r\n  background: #f5f5f5;\r\n  color: #1a1a1a;\r\n}\r\n.lt-btn.lt-primary {\r\n  background: #1a73e8;\r\n  border-color: #1a73e8;\r\n  color: #fff;\r\n}\r\n.lt-btn.lt-ghost:hover {\r\n  background: #eaeaea;\r\n}\r\n\r\n@media (prefers-color-scheme: dark) {\r\n  .lt-panel {\r\n    background: #1f1f22;\r\n    color: #ececec;\r\n  }\r\n  .lt-panel-head,\r\n  .lt-panel-foot {\r\n    border-color: #35353a;\r\n  }\r\n  .lt-label {\r\n    color: #d6d6d6;\r\n  }\r\n  .lt-hint {\r\n    color: #9a9a9a;\r\n  }\r\n  .lt-input {\r\n    background: #2a2a2e;\r\n    border-color: #45454c;\r\n    color: #ececec;\r\n  }\r\n  .lt-btn {\r\n    background: #2e2e33;\r\n    border-color: #45454c;\r\n    color: #ececec;\r\n  }\r\n  .lt-btn.lt-ghost:hover {\r\n    background: #3a3a40;\r\n  }\r\n  .lt-x {\r\n    color: #bbb;\r\n  }\r\n}\r\n\n/* Outline slider with its live sample. */\n.lt-slider {\n  display: flex;\n  align-items: center;\n  gap: 10px;\n  min-width: 0;\n}\n.lt-slider input[type='range'] {\n  flex: 1;\n  width: auto;\n  padding: 0;\n  border: 0;\n  background: transparent;\n  accent-color: #1a73e8;\n}\n.lt-readout {\n  min-width: 42px;\n  text-align: right;\n  font-variant-numeric: tabular-nums;\n  color: #666;\n}\n.lt-preview {\n  grid-column: 2;\n  width: 100%;\n  height: auto;\n  border-radius: 6px;\n  border: 1px solid #ddd;\n  margin-top: 6px;\n}\n@media (prefers-color-scheme: dark) {\n  .lt-readout {\n    color: #aaa;\n  }\n  .lt-preview {\n    border-color: #45454c;\n  }\n}\n";
+  const styles = "/* Lives inside a shadow root, so these selectors compete with nothing. The\r\n   :host is a fixed, click-through, full-viewport layer; everything here is\r\n   positioned in viewport coordinates. */\r\n\r\n:host {\r\n  font: 14px/1.45 system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;\r\n  color: #1a1a1a;\r\n}\r\n\r\n#lt-button,\r\n#lt-gear {\r\n  position: absolute;\r\n  width: 32px;\r\n  height: 32px;\r\n  background: rgba(0, 0, 0, 0.6);\r\n  border-radius: 50%;\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  opacity: 0;\r\n  pointer-events: none;\r\n  cursor: pointer;\r\n  transition: opacity 0.2s ease-in-out, transform 0.15s ease-in-out, background 0.2s;\r\n  transform: scale(0.9);\r\n  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);\r\n  border: 1px solid rgba(255, 255, 255, 0.2);\r\n}\r\n#lt-button:hover,\r\n#lt-gear:hover {\r\n  background: rgba(0, 0, 0, 0.85);\r\n  transform: scale(1.05);\r\n}\r\n\r\n/* Appears a beat after the main button, so a passing cursor does not summon\r\n   two controls at once. */\r\n#lt-gear {\r\n  width: 26px;\r\n  height: 26px;\r\n}\r\n#lt-button.lt-busy svg {\r\n  animation: lt-spin 1s linear infinite;\r\n}\r\n#lt-button.lt-active {\r\n  background: rgba(20, 110, 60, 0.9);\r\n}\r\n#lt-button.lt-error {\r\n  background: rgba(170, 30, 30, 0.9);\r\n}\r\n@keyframes lt-spin {\r\n  to {\r\n    transform: rotate(360deg);\r\n  }\r\n}\r\n\r\n.lt-layer {\r\n  position: absolute;\r\n  overflow: hidden;\r\n  pointer-events: none;\r\n}\r\n.lt-bg {\r\n  position: absolute;\r\n  max-width: none;\r\n}\r\n.lt-line {\r\n  position: absolute;\r\n  display: flex;\r\n  align-items: center;\r\n  white-space: pre;\r\n  line-height: 1;\r\n  transform-origin: center center;\r\n  margin: 0;\r\n  padding: 0;\r\n}\r\n\r\n#lt-toast {\r\n  position: absolute;\r\n  bottom: 16px;\r\n  left: 50%;\r\n  transform: translateX(-50%);\r\n  background: rgba(0, 0, 0, 0.88);\r\n  color: #fff;\r\n  padding: 8px 16px;\r\n  border-radius: 8px;\r\n  font-size: 13px;\r\n  pointer-events: none;\r\n  opacity: 0;\r\n  transition: opacity 0.2s;\r\n  max-width: 70vw;\r\n}\r\n#lt-toast.lt-show {\r\n  opacity: 1;\r\n}\r\n\r\n/* ------------------------------------------------------------- settings */\r\n\r\n.lt-panel-backdrop {\r\n  position: absolute;\r\n  inset: 0;\r\n  background: rgba(0, 0, 0, 0.5);\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  pointer-events: auto;\r\n}\r\n.lt-panel {\r\n  background: #fff;\r\n  width: min(560px, 92vw);\r\n  max-height: 86vh;\r\n  display: flex;\r\n  flex-direction: column;\r\n  border-radius: 12px;\r\n  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.4);\r\n  overflow: hidden;\r\n}\r\n.lt-panel-head,\r\n.lt-panel-foot {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: 8px;\r\n  padding: 12px 18px;\r\n  flex: none;\r\n}\r\n.lt-panel-head {\r\n  border-bottom: 1px solid #e6e6e6;\r\n  justify-content: space-between;\r\n  font-size: 15px;\r\n  font-weight: 600;\r\n}\r\n.lt-panel-foot {\r\n  border-top: 1px solid #e6e6e6;\r\n}\r\n.lt-spacer {\r\n  flex: 1;\r\n}\r\n.lt-panel-body {\r\n  padding: 10px 18px 16px;\r\n  overflow-y: auto;\r\n}\r\n\r\n.lt-row {\r\n  display: grid;\r\n  grid-template-columns: 190px minmax(0, 1fr);\r\n  align-items: center;\r\n  gap: 2px 14px;\r\n  padding: 7px 0;\r\n}\r\n.lt-label {\r\n  color: #333;\r\n}\r\n.lt-hint {\r\n  grid-column: 2;\r\n  color: #808080;\r\n  font-size: 12px;\r\n}\r\n.lt-input {\r\n  font: inherit;\r\n  padding: 7px 9px;\r\n  border: 1px solid #ccc;\r\n  border-radius: 6px;\r\n  background: #fff;\r\n  color: #1a1a1a;\r\n  min-width: 0;\r\n  width: 100%;\r\n  box-sizing: border-box;\r\n}\r\n.lt-input[type='checkbox'] {\r\n  justify-self: start;\r\n  width: 17px;\r\n  height: 17px;\r\n  padding: 0;\r\n}\r\n.lt-x {\r\n  border: 0;\r\n  background: transparent;\r\n  font-size: 22px;\r\n  line-height: 1;\r\n  cursor: pointer;\r\n  color: #666;\r\n  padding: 0 4px;\r\n}\r\n.lt-btn {\r\n  font: inherit;\r\n  padding: 7px 15px;\r\n  border-radius: 7px;\r\n  cursor: pointer;\r\n  border: 1px solid #ccc;\r\n  background: #f5f5f5;\r\n  color: #1a1a1a;\r\n}\r\n.lt-btn.lt-primary {\r\n  background: #1a73e8;\r\n  border-color: #1a73e8;\r\n  color: #fff;\r\n}\r\n.lt-btn.lt-ghost:hover {\r\n  background: #eaeaea;\r\n}\r\n\r\n@media (prefers-color-scheme: dark) {\r\n  .lt-panel {\r\n    background: #1f1f22;\r\n    color: #ececec;\r\n  }\r\n  .lt-panel-head,\r\n  .lt-panel-foot {\r\n    border-color: #35353a;\r\n  }\r\n  .lt-label {\r\n    color: #d6d6d6;\r\n  }\r\n  .lt-hint {\r\n    color: #9a9a9a;\r\n  }\r\n  .lt-input {\r\n    background: #2a2a2e;\r\n    border-color: #45454c;\r\n    color: #ececec;\r\n  }\r\n  .lt-btn {\r\n    background: #2e2e33;\r\n    border-color: #45454c;\r\n    color: #ececec;\r\n  }\r\n  .lt-btn.lt-ghost:hover {\r\n    background: #3a3a40;\r\n  }\r\n  .lt-x {\r\n    color: #bbb;\r\n  }\r\n}\r\n\n/* Outline slider with its live sample. */\n.lt-slider {\n  display: flex;\n  align-items: center;\n  gap: 10px;\n  min-width: 0;\n}\n.lt-slider input[type='range'] {\n  flex: 1;\n  width: auto;\n  padding: 0;\n  border: 0;\n  background: transparent;\n  accent-color: #1a73e8;\n}\n.lt-readout {\n  min-width: 42px;\n  text-align: right;\n  font-variant-numeric: tabular-nums;\n  color: #666;\n}\n.lt-preview {\n  grid-column: 2;\n  width: 100%;\n  height: auto;\n  border-radius: 6px;\n  border: 1px solid #ddd;\n  margin-top: 6px;\n}\n@media (prefers-color-scheme: dark) {\n  .lt-readout {\n    color: #aaa;\n  }\n  .lt-preview {\n    border-color: #45454c;\n  }\n}\n\n/* Section headings. */\n.lt-group {\n  grid-column: 1 / -1;\n  margin: 16px 0 4px;\n  padding-bottom: 5px;\n  border-bottom: 1px solid #e6e6e6;\n  font-size: 11px;\n  font-weight: 600;\n  letter-spacing: 0.07em;\n  text-transform: uppercase;\n  color: #888;\n}\n.lt-group:first-child {\n  margin-top: 4px;\n}\n@media (prefers-color-scheme: dark) {\n  .lt-group {\n    border-color: #35353a;\n    color: #8c8c96;\n  }\n}\n";
   const HOST_ID = "lens-translate-root";
   let shadow = null;
   function uiRoot() {
@@ -870,6 +873,63 @@
     }
     return rendered;
   }
+  function boxCorners(geometry, width, height) {
+    const cx = geometry.cx * width;
+    const cy = geometry.cy * height;
+    const halfW = geometry.w * width / 2;
+    const halfH = geometry.h * height / 2;
+    const radians = geometry.angle * Math.PI / 180;
+    const cos = Math.cos(radians);
+    const sin = Math.sin(radians);
+    return [
+      [-halfW, -halfH],
+      [halfW, -halfH],
+      [halfW, halfH],
+      [-halfW, halfH]
+    ].map(([dx, dy]) => ({
+      x: cx + dx * cos - dy * sin,
+      y: cy + dx * sin + dy * cos
+    }));
+  }
+  const cross = (o, a, b) => (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+  function convexHull(points) {
+    if (points.length < 3) return [...points];
+    const sorted = [...points].sort((a, b) => a.x - b.x || a.y - b.y);
+    const build = (input) => {
+      const chain = [];
+      for (const point of input) {
+        while (chain.length >= 2) {
+          const last = chain[chain.length - 1];
+          const prev = chain[chain.length - 2];
+          if (cross(prev, last, point) > 0) break;
+          chain.pop();
+        }
+        chain.push(point);
+      }
+      chain.pop();
+      return chain;
+    };
+    return [...build(sorted), ...build([...sorted].reverse())];
+  }
+  function fillHull(ctx, hull, colour, pad) {
+    if (hull.length < 3) return;
+    ctx.save();
+    ctx.beginPath();
+    const [first, ...rest] = hull;
+    ctx.moveTo(first.x, first.y);
+    for (const point of rest) ctx.lineTo(point.x, point.y);
+    ctx.closePath();
+    ctx.fillStyle = colour;
+    if (pad > 0) {
+      ctx.strokeStyle = colour;
+      ctx.lineWidth = pad * 2;
+      ctx.lineJoin = "round";
+      ctx.lineCap = "round";
+      ctx.stroke();
+    }
+    ctx.fill();
+    ctx.restore();
+  }
   const DEG = Math.PI / 180;
   const UPRIGHT_RANGES = [
     [4352, 4607],
@@ -960,14 +1020,6 @@
     ctx.save();
     ctx.translate(geometry.cx * width, geometry.cy * height);
     ctx.rotate(geometry.angle * DEG);
-    if (settings2.mangaMode && settings2.drawBackground) {
-      const fillW = geometry.w * width * 1.16;
-      const fillH = geometry.h * height * 1.16;
-      ctx.fillStyle = argbToCss(style.bgColor);
-      ctx.beginPath();
-      ctx.ellipse(0, 0, fillW / 2, fillH / 2, 0, 0, Math.PI * 2);
-      ctx.fill();
-    }
     const { size, lines } = fitTextBlock(
       (px) => {
         ctx.font = `${px}px ${fontFamily}`;
@@ -990,7 +1042,7 @@
       Math.round(fontSize * OUTLINE_RATIO * 2 * settings2.outlineScale)
     );
     const outlineColor = argbToCss(style.bgColor);
-    const justify = justification(block.alignment, isRtl(block));
+    const justify = justification(block.alignment, isRtl(block), settings2.textAlign);
     let y = -Math.min(boxH, lines.length * lineHeight) / 2;
     for (const line of lines) {
       const advance = ctx.measureText(line).width;
@@ -1002,7 +1054,22 @@
     }
     ctx.restore();
   }
-  async function drawLine(draw, block, line, nextLine, settings2, backgroundOnly = false) {
+  function eraseTextArea(draw, block, settings2) {
+    const { ctx, width, height } = draw;
+    const points = [];
+    let thinnest = Infinity;
+    for (const line of block.lines) {
+      if (!line.geometry) continue;
+      points.push(...boxCorners(line.geometry, width, height));
+      thinnest = Math.min(thinnest, line.geometry.w * width, line.geometry.h * height);
+    }
+    if (points.length < 3) return;
+    const style = block.lines.find((line) => line.geometry) ?? block.lines[0];
+    if (!style) return;
+    const pad = Number.isFinite(thinnest) ? thinnest * settings2.hullPadding : 0;
+    fillHull(ctx, convexHull(points), argbToCss(style.bgColor), pad);
+  }
+  async function drawLine(draw, block, line, nextLine, settings2, backgroundOnly = false, skipBackground = false) {
     const geometry = line.geometry;
     if (!geometry || geometry.w <= 0 || geometry.h <= 0) return;
     const { ctx, width, height, fontFamily } = draw;
@@ -1010,7 +1077,7 @@
     const boxH = geometry.h * height;
     const cx = geometry.cx * width;
     const cy = geometry.cy * height;
-    const patch = settings2.drawBackground ? line.background : null;
+    const patch = settings2.drawBackground && !skipBackground ? line.background : null;
     ctx.save();
     ctx.translate(cx, cy);
     ctx.rotate(geometry.angle * DEG);
@@ -1026,7 +1093,7 @@
         ctx.fillStyle = argbToCss(line.bgColor);
         ctx.fillRect(-boxW / 2, -boxH / 2, boxW, boxH);
       }
-    } else if (settings2.drawBackground) {
+    } else if (settings2.drawBackground && !skipBackground) {
       ctx.fillStyle = argbToCss(line.bgColor);
       ctx.fillRect(-boxW / 2, -boxH / 2, boxW, boxH);
     }
@@ -1051,7 +1118,7 @@
       if (vertical) {
         drawVertical(draw, text2, drawW, drawH, size, fill, outline, outlineColor);
       } else {
-        const justify = justification(block.alignment, isRtl(block));
+        const justify = justification(block.alignment, isRtl(block), settings2.textAlign);
         const advance = ctx.measureText(text2).width;
         const x = justify === "flex-start" ? 0 : justify === "flex-end" ? drawW - advance : (drawW - advance) / 2;
         ctx.textAlign = "left";
@@ -1090,12 +1157,15 @@
     for (const block of blocks) {
       const vertical = block.writingDirection === 2;
       const stayVertical = !settings2.mangaMode && shouldStayVertical(block, settings2.verticalText);
+      const hull = settings2.drawBackground && (settings2.eraseMode === "hull" || settings2.mangaMode);
+      if (hull) eraseTextArea(draw, block, settings2);
       const reflow = vertical && !stayVertical && Boolean(block.geometry);
       for (let i = 0; i < block.lines.length; i += 1) {
         const line = block.lines[i];
         if (!line) continue;
-        if (reflow) await drawLine(draw, block, line, block.lines[i + 1], settings2, true);
-        else await drawLine(draw, block, line, block.lines[i + 1], settings2);
+        if (reflow) {
+          if (!hull) await drawLine(draw, block, line, block.lines[i + 1], settings2, true);
+        } else await drawLine(draw, block, line, block.lines[i + 1], settings2, false, hull);
       }
       if (reflow) drawReflowedParagraph(draw, block, settings2);
     }
@@ -1300,12 +1370,24 @@
     cacheBytes: 32 * 1024 * 1024,
     mangaMode: false,
     mangaBoxGrowth: 1.45,
-    outlineScale: 1
+    outlineScale: 1,
+    eraseMode: "patch",
+    hullPadding: 0.45,
+    textAlign: "auto"
   };
+  const GROUPS = [
+    "Languages",
+    "Layout",
+    "Erasing the original",
+    "Legibility",
+    "Behaviour",
+    "Advanced"
+  ];
   const FIELDS = [
-    { key: "enabled", label: "Translation enabled", type: "checkbox" },
+    { key: "enabled", group: "Behaviour", label: "Translation enabled", type: "checkbox" },
     {
       key: "renderMode",
+      group: "Behaviour",
       label: "Render as",
       type: "select",
       options: [
@@ -1313,21 +1395,24 @@
         ["overlay", "overlay - crisp text, can drift on dynamic pages"]
       ]
     },
-    { key: "targetLang", label: "Translate to", type: "select", options: languageOptions() },
+    { key: "targetLang", group: "Languages", label: "Translate to", type: "select", options: languageOptions() },
     {
       key: "sourceLang",
+      group: "Languages",
       label: "Translate from",
       type: "select",
       options: languageOptions("Detect automatically")
     },
     {
       key: "ocrLang",
+      group: "Languages",
       label: "OCR language hint",
       type: "select",
       options: languageOptions("Follow the target")
     },
     {
       key: "verticalText",
+      group: "Layout",
       label: "Vertical CJK text",
       type: "select",
       options: [
@@ -1337,32 +1422,70 @@
       ]
     },
     {
+      key: "textAlign",
+      group: "Layout",
+      label: "Text alignment",
+      type: "select",
+      options: [
+        ["auto", "auto - follow the source, like Chromium"],
+        ["left", "left"],
+        ["center", "center"],
+        ["right", "right"]
+      ]
+    },
+    {
       key: "mangaMode",
+      group: "Layout",
       label: "Manga mode",
       type: "checkbox",
       hint: "always reflow vertical text, widen the layout area, bigger minimum size"
     },
     {
       key: "mangaBoxGrowth",
+      group: "Layout",
       label: "Bubble fill (manga mode)",
       type: "number",
       step: "0.05",
       hint: "how far past the detected text box to lay out; 1 = exactly the box"
     },
-    { key: "drawBackground", label: "Erase the original text", type: "checkbox" },
+    { key: "drawBackground", group: "Erasing the original", label: "Erase the original text", type: "checkbox" },
+    {
+      key: "eraseMode",
+      group: "Erasing the original",
+      label: "How to erase",
+      type: "select",
+      options: [
+        ["patch", "patch - the server's inpainting, like Chromium"],
+        ["hull", "hull - cover the whole text area with its background colour"]
+      ]
+    },
+    {
+      key: "hullPadding",
+      group: "Erasing the original",
+      label: "Cover margin",
+      type: "range",
+      min: "0",
+      max: "2",
+      step: "0.05",
+      unit: "%",
+      hint: "how far past the text the cover extends, relative to line height"
+    },
     {
       key: "outlineScale",
+      group: "Legibility",
       label: "Text outline",
       type: "range",
       min: "0",
-      max: "4",
+      max: "8",
       step: "0.1",
+      unit: "x",
       hint: "thickens the outline behind translated text; 0 removes it"
     },
-    { key: "fontFamily", label: "Font family", type: "text", hint: "blank = the page font" },
-    { key: "showButton", label: "Show the hover button", type: "checkbox" },
+    { key: "fontFamily", group: "Layout", label: "Font family", type: "text", hint: "blank = the page font" },
+    { key: "showButton", group: "Behaviour", label: "Show the hover button", type: "checkbox" },
     {
       key: "hotkey",
+      group: "Behaviour",
       label: "Modifier + click",
       type: "select",
       options: [
@@ -1374,12 +1497,14 @@
     },
     {
       key: "minReadablePx",
+      group: "Legibility",
       label: "Minimum text size (px)",
       type: "number",
       hint: "enlarges text that would render too small to read; 0 disables"
     },
     {
       key: "supersample",
+      group: "Legibility",
       label: "Render sharpness",
       type: "select",
       options: [
@@ -1390,17 +1515,18 @@
     },
     {
       key: "cacheBytes",
+      group: "Behaviour",
       label: "Cache size (MB)",
       type: "number",
       step: "4",
       hint: "remembers what Lens said, so re-translating costs nothing; 0 disables"
     },
-    { key: "minImageSize", label: "Ignore images under (px)", type: "number" },
-    { key: "jpegQuality", label: "Upload quality (0..1)", type: "number", step: "0.05" },
-    { key: "timeoutMs", label: "Request timeout (ms)", type: "number", step: "1000" },
-    { key: "region", label: "Client region", type: "text" },
-    { key: "timeZone", label: "Client time zone", type: "text" },
-    { key: "apiKey", label: "API key", type: "text", hint: "only change if you have your own" }
+    { key: "minImageSize", group: "Behaviour", label: "Ignore images under (px)", type: "number" },
+    { key: "jpegQuality", group: "Advanced", label: "Upload quality (0..1)", type: "number", step: "0.05" },
+    { key: "timeoutMs", group: "Advanced", label: "Request timeout (ms)", type: "number", step: "1000" },
+    { key: "region", group: "Advanced", label: "Client region", type: "text" },
+    { key: "timeZone", group: "Advanced", label: "Client time zone", type: "text" },
+    { key: "apiKey", group: "Advanced", label: "API key", type: "text", hint: "only change if you have your own" }
   ];
   let cache = null;
   function getSettings() {
@@ -1531,6 +1657,9 @@
       settings2.mangaMode ? 1 : 0,
       settings2.mangaBoxGrowth,
       settings2.outlineScale,
+      settings2.eraseMode,
+      settings2.hullPadding,
+      settings2.textAlign,
       Math.round(displayedWidth / 50)
     ].join("");
   }
@@ -1633,13 +1762,15 @@
       slider.value = String(settings2[field.key]);
       const readout = document.createElement("span");
       readout.className = "lt-readout";
+      const wantsPreview = field.key === "outlineScale";
       const preview = document.createElement("canvas");
       preview.className = "lt-preview";
       preview.width = 460;
       preview.height = 64;
       const refresh = () => {
-        readout.textContent = `${Number(slider.value).toFixed(1)}x`;
-        drawOutlinePreview(preview, Number(slider.value));
+        const value = Number(slider.value);
+        readout.textContent = field.unit === "%" ? `${Math.round(value * 100)}%` : `${value.toFixed(1)}x`;
+        if (wantsPreview) drawOutlinePreview(preview, value);
       };
       slider.addEventListener("input", refresh);
       refresh();
@@ -1649,7 +1780,7 @@
       slider.className = "lt-input";
       slider.dataset["key"] = field.key;
       row.appendChild(holder);
-      row.appendChild(preview);
+      if (wantsPreview) row.appendChild(preview);
       if (field.hint) {
         const hint = document.createElement("span");
         hint.className = "lt-hint";
@@ -1731,7 +1862,17 @@
     </div>`;
     panel = backdrop;
     const body = backdrop.querySelector(".lt-panel-body");
-    if (body) for (const field of FIELDS) body.appendChild(buildField(field, settings2));
+    if (body) {
+      for (const group of GROUPS) {
+        const fields = FIELDS.filter((field) => field.group === group);
+        if (!fields.length) continue;
+        const heading = document.createElement("div");
+        heading.className = "lt-group";
+        heading.textContent = group;
+        body.appendChild(heading);
+        for (const field of fields) body.appendChild(buildField(field, settings2));
+      }
+    }
     backdrop.addEventListener("click", (event) => {
       const target = event.target;
       if (target === backdrop) return closeSettings();
