@@ -55,6 +55,11 @@ interface DrawContext {
   width: number;
   height: number;
   fontFamily: string;
+  /**
+   * Smallest font size, in canvas pixels, that will still be readable once the
+   * page scales this canvas down to its displayed size. Zero disables the floor.
+   */
+  minFontPx: number;
 }
 
 function strokeThenFill(
@@ -167,7 +172,12 @@ async function drawLine(
   const text = buildLineText(block.translation, line, nextLine);
   if (text.trim()) {
     const vertical = shouldStayVertical(block, settings.verticalText);
-    const size = fitFontSize(text, vertical ? boxH : boxW, vertical ? boxW : boxH, fontFamily);
+    const fitted = fitFontSize(text, vertical ? boxH : boxW, vertical ? boxW : boxH, fontFamily);
+    // Lens sizes text to the original line box, so fine print on a large image
+    // comes back at a few pixels once the page scales the image down. Raising
+    // it past the box is the only way to make it legible; lines can then
+    // overlap, which is why the floor is a setting.
+    const size = Math.max(fitted, draw.minFontPx);
     ctx.font = `${size}px ${fontFamily}`;
     ctx.direction = isRtl(block) ? 'rtl' : 'ltr';
 
@@ -175,19 +185,33 @@ async function drawLine(
     const outline = patch ? Math.max(1, Math.round(size * OUTLINE_RATIO)) : 0;
     const outlineColor = patch ? argbToCss(line.bgColor) : null;
 
-    ctx.translate(-boxW / 2, -boxH / 2);
+    // When the text was enlarged past its box, give it the room it now needs
+    // so the background still covers it.
+    const grow = size / Math.max(1, fitted);
+    const drawW = grow > 1 ? boxW * grow : boxW;
+    const drawH = grow > 1 ? boxH * grow : boxH;
+    if (grow > 1 && settings.drawBackground) {
+      ctx.fillStyle = argbToCss(line.bgColor);
+      ctx.fillRect(-drawW / 2, -drawH / 2, drawW, drawH);
+    }
+
+    ctx.translate(-drawW / 2, -drawH / 2);
     if (vertical) {
-      drawVertical(draw, text, boxW, boxH, size, fill, outline, outlineColor);
+      drawVertical(draw, text, drawW, drawH, size, fill, outline, outlineColor);
     } else {
       const justify = justification(block.alignment, isRtl(block));
       const advance = ctx.measureText(text).width;
       const x =
-        justify === 'flex-start' ? 0 : justify === 'flex-end' ? boxW - advance : (boxW - advance) / 2;
+        justify === 'flex-start'
+          ? 0
+          : justify === 'flex-end'
+            ? drawW - advance
+            : (drawW - advance) / 2;
       ctx.textAlign = 'left';
       ctx.textBaseline = 'middle';
-      strokeThenFill(ctx, text, x, boxH / 2, outline, outlineColor);
+      strokeThenFill(ctx, text, x, drawH / 2, outline, outlineColor);
       ctx.fillStyle = fill;
-      ctx.fillText(text, x, boxH / 2);
+      ctx.fillText(text, x, drawH / 2);
     }
   }
   ctx.restore();
@@ -201,21 +225,41 @@ async function drawLine(
  */
 export async function renderToBlobUrl(
   source: CanvasImageSource,
-  width: number,
-  height: number,
+  naturalWidth: number,
+  naturalHeight: number,
   blocks: TranslationBlock[],
-  settings: Settings
+  settings: Settings,
+  displayedWidth = naturalWidth
 ): Promise<string> {
+  // Supersampling: the canvas replaces the image, so rendering above natural
+  // size is what keeps text sharp when the reader zooms in or opens it full
+  // size. Capped so a large photo does not turn into a huge bitmap.
+  const scale = Math.min(
+    Math.max(1, Math.round(settings.supersample)),
+    Math.max(1, Math.floor(8000 / Math.max(naturalWidth, naturalHeight)))
+  );
+  const width = naturalWidth * scale;
+  const height = naturalHeight * scale;
+
   const canvas = document.createElement('canvas');
   canvas.width = width;
   canvas.height = height;
   const ctx = canvas.getContext('2d');
   if (!ctx) throw new Error('Could not get a 2d canvas context');
 
+  ctx.imageSmoothingQuality = 'high';
   ctx.drawImage(source, 0, 0, width, height);
 
   const fontFamily = settings.fontFamily || 'system-ui, -apple-system, sans-serif';
-  const draw: DrawContext = { ctx, width, height, fontFamily };
+  // One displayed CSS pixel is this many canvas pixels.
+  const canvasPerCssPx = width / Math.max(1, displayedWidth);
+  const draw: DrawContext = {
+    ctx,
+    width,
+    height,
+    fontFamily,
+    minFontPx: settings.minReadablePx > 0 ? settings.minReadablePx * canvasPerCssPx : 0,
+  };
 
   for (const block of blocks) {
     for (let i = 0; i < block.lines.length; i += 1) {

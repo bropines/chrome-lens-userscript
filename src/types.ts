@@ -119,6 +119,14 @@ export interface Settings {
   verticalText: VerticalTextMode;
   renderMode: RenderMode;
   enabled: boolean;
+  /**
+   * Smallest size, in CSS pixels as displayed, that translated text is allowed
+   * to render at. Lens fits text to the original line box, which on a large
+   * image shown small means single-digit pixels. 0 turns the floor off.
+   */
+  minReadablePx: number;
+  /** Canvas is rendered at this multiple of the image's natural size. */
+  supersample: number;
 }
 
 /** An image encoded and sized the way Chromium would send it. */

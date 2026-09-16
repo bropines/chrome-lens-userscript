@@ -60,7 +60,13 @@ export function fetchImageBlob(url: string): Promise<Blob> {
         }
         resolve(response.response as Blob);
       },
-      onerror: () => reject(new Error('Could not fetch the image')),
+      onerror: () =>
+        reject(
+          new Error(
+            'Could not fetch the image. If Tampermonkey blocked this domain, ' +
+              'clear it under Settings > Security > Blocked domains.'
+          )
+        ),
     });
   });
 }

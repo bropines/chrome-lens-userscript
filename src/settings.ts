@@ -1,4 +1,5 @@
 import { GM_getValue, GM_setValue } from '$';
+import { languageOptions } from './languages.js';
 import type { Settings } from './types.js';
 
 const STORAGE_KEY = 'lens-translate:settings';
@@ -24,6 +25,8 @@ export const DEFAULTS: Settings = {
   verticalText: 'auto',
   renderMode: 'canvas',
   enabled: true,
+  minReadablePx: 12,
+  supersample: 2,
 };
 
 type FieldKind = 'text' | 'number' | 'checkbox' | 'select';
@@ -48,9 +51,19 @@ export const FIELDS: ReadonlyArray<Field> = [
       ['overlay', 'overlay - crisp text, can drift on dynamic pages'],
     ],
   },
-  { key: 'targetLang', label: 'Translate to', type: 'text', hint: 'BCP-47 code, e.g. ru, en, ja' },
-  { key: 'sourceLang', label: 'Translate from', type: 'text', hint: 'blank = auto-detect' },
-  { key: 'ocrLang', label: 'OCR language hint', type: 'text', hint: 'blank = follow the target' },
+  { key: 'targetLang', label: 'Translate to', type: 'select', options: languageOptions() },
+  {
+    key: 'sourceLang',
+    label: 'Translate from',
+    type: 'select',
+    options: languageOptions('Detect automatically'),
+  },
+  {
+    key: 'ocrLang',
+    label: 'OCR language hint',
+    type: 'select',
+    options: languageOptions('Follow the target'),
+  },
   {
     key: 'verticalText',
     label: 'Vertical CJK text',
@@ -73,6 +86,22 @@ export const FIELDS: ReadonlyArray<Field> = [
       ['ctrl', 'Ctrl + click'],
       ['shift', 'Shift + click'],
       ['none', 'off'],
+    ],
+  },
+  {
+    key: 'minReadablePx',
+    label: 'Minimum text size (px)',
+    type: 'number',
+    hint: 'enlarges text that would render too small to read; 0 disables',
+  },
+  {
+    key: 'supersample',
+    label: 'Render sharpness',
+    type: 'select',
+    options: [
+      ['1', '1x - smallest images'],
+      ['2', '2x - sharper when zoomed (default)'],
+      ['3', '3x - sharpest, heaviest'],
     ],
   },
   { key: 'minImageSize', label: 'Ignore images under (px)', type: 'number' },
@@ -116,6 +145,10 @@ export function resetSettings(): Settings {
 
 /** Turn a form value back into the type the setting is declared with. */
 export function coerce(field: Field, raw: string | boolean): Settings[keyof Settings] {
+  if (field.key === 'supersample') {
+    const value = Number(raw);
+    return (value >= 1 && value <= 3 ? value : DEFAULTS.supersample) as Settings[keyof Settings];
+  }
   if (field.type === 'checkbox') return Boolean(raw) as Settings[keyof Settings];
   if (field.type === 'number') {
     const value = Number(raw);

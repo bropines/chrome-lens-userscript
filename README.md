@@ -55,9 +55,21 @@ Detection is `<img>` elements only, found by walking `event.composedPath()` so i
 
 Not covered: CSS `background-image`, `<canvas>`, `<svg>`, and video frames. Images inside a cross-origin `<iframe>` work only if the script runs in that frame too, which `@match *://*/*` arranges.
 
-Reading the pixels goes through the element first. The browser has already downloaded and decoded it, so this costs **no network request at all** and needs no `@connect` permission for the image's host. Only a cross-origin image served without CORS headers taints the canvas, and only then are the bytes re-fetched through `GM_xmlhttpRequest` — which is why `@connect *` is declared.
+Reading the pixels has three ways in, cheapest first:
+
+1. **The element as it stands.** The browser has already downloaded and decoded it, so this costs no network request at all. Works for same-origin images.
+2. **The same URL re-requested with `crossOrigin`.** A plain `<img>` is not *requested* with CORS, so drawing it taints the canvas even when the host would have allowed it — and most image hosts, `pbs.twimg.com` included, send `Access-Control-Allow-Origin: *`. Asking again with CORS usually comes straight out of the HTTP cache.
+3. **`GM_xmlhttpRequest`.** Only for hosts that send no CORS headers at all. This is the one that needs `@connect *`, and it is rarely reached.
+
+If step 3 does get reached and fails with "permanently blocked by the user", clear the domain under Tampermonkey → Settings → Security → Blocked domains.
 
 Uploads use Chromium's own budget: JPEG quality 40, and a resize only when the image is both over 1.5 MP and over 1600px on a side.
+
+## Text that would be too small to read
+
+Lens sizes translated text to fit the *original* line box. On a 2400px page shown 600px wide, fine print measured here fitted at 9–13px, which is 2–3px on screen — no more readable than the original was, and that is the complaint.
+
+Two settings address it. **Minimum text size** (default 12 CSS px as displayed) raises anything below the floor, growing its background to match; lines in a dense paragraph can then overlap, which is the trade and why it is adjustable — 0 turns it off. **Render sharpness** draws the canvas at 1x/2x/3x the image's natural size, so zooming in or opening the image full size keeps the text crisp rather than smearing.
 
 ## Two ways to draw
 

@@ -89,7 +89,9 @@ async function translate(img: HTMLImageElement): Promise<void> {
           prepared.sourceWidth,
           prepared.sourceHeight,
           result.blocks,
-          settings
+          settings,
+          // The displayed width is what decides whether text will be legible.
+          img.getBoundingClientRect().width || prepared.sourceWidth
         );
         swapImage(img, url);
       } else if (!renderTranslation(img, result.blocks, settings)) {

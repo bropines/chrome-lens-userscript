@@ -74,13 +74,33 @@ async function encode(
 }
 
 /**
+ * Re-request the same URL with CORS so the canvas stays clean.
+ *
+ * Most image hosts - pbs.twimg.com among them - send
+ * `Access-Control-Allow-Origin: *`, but a plain <img> in the page is not
+ * *requested* with CORS, so drawing it taints the canvas anyway. Asking again
+ * with crossOrigin set usually comes straight out of the HTTP cache and makes
+ * the pixels readable, which avoids needing a GM request, and therefore avoids
+ * needing permission for the image's host at all.
+ */
+function loadWithCors(url: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const probe = new Image();
+    probe.crossOrigin = 'anonymous';
+    probe.decoding = 'sync';
+    probe.onload = () => resolve(probe);
+    probe.onerror = () => reject(new Error('CORS load failed'));
+    probe.src = url;
+  });
+}
+
+/**
  * Get the image into Chromium's upload shape.
  *
- * The element is tried first: the browser has already downloaded and decoded
- * it, so this costs no network at all and, more usefully, needs no @connect
- * permission for the image's host. Only a cross-origin image served without
- * CORS headers taints the canvas, and only then do the bytes get re-fetched
- * through GM_xmlhttpRequest.
+ * Three ways in, cheapest first: the element as it stands, the same URL
+ * re-requested with CORS, and finally the raw bytes over GM_xmlhttpRequest.
+ * Only the last needs permission for the image's host, and it is rarely
+ * reached.
  */
 export async function prepareImage(
   img: HTMLImageElement,
@@ -96,6 +116,14 @@ export async function prepareImage(
 
   const url = img.currentSrc || img.src;
   if (!url) throw new Error('This image has no source to read');
+
+  try {
+    const cors = await loadWithCors(url);
+    return await encode(cors, settings, () => {});
+  } catch {
+    // Either the host sends no CORS headers, or it sends them but the canvas
+    // still came out tainted. Fall through to fetching the bytes.
+  }
 
   const blob = await fetchImageBlob(url);
   const bitmap = await createImageBitmap(blob);
