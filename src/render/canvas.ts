@@ -218,19 +218,22 @@ async function drawLine(
 }
 
 /**
- * Paint `source` plus its translation onto a canvas and return a blob URL.
+ * Paint `source` plus its translation onto a canvas and return it as a blob.
+ *
+ * A blob rather than an object URL, so the cache can hold it without owning a
+ * URL whose lifetime is tied to whichever overlay happens to be showing.
  *
  * `source` is whatever was already decoded for the upload, so a cross-origin
  * image that tainted the element's own canvas still works here.
  */
-export async function renderToBlobUrl(
+export async function renderToBlob(
   source: CanvasImageSource,
   naturalWidth: number,
   naturalHeight: number,
   blocks: TranslationBlock[],
   settings: Settings,
   displayedWidth = naturalWidth
-): Promise<string> {
+): Promise<Blob> {
   // Supersampling: the canvas replaces the image, so rendering above natural
   // size is what keeps text sharp when the reader zooms in or opens it full
   // size. Capped so a large photo does not turn into a huge bitmap.
@@ -270,5 +273,5 @@ export async function renderToBlobUrl(
 
   const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'));
   if (!blob) throw new Error('Could not encode the translated image');
-  return URL.createObjectURL(blob);
+  return blob;
 }

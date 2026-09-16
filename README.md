@@ -87,6 +87,30 @@ Getting this right took three attempts, and the two that failed are worth record
 
 Both modes are reversible: click the button again, or use **undo all on this page** from the menu.
 
+## Caching
+
+Two levels, sharing one byte budget (32 MB by default, adjustable, 0 disables,
+clearable from the menu):
+
+- **Lens responses**, keyed by the image plus the three language settings. Only
+  the response — re-rendering from it is local, so changing a render setting
+  takes effect without invalidating anything.
+- **Finished renderings**, keyed additionally by everything that changes how it
+  looks. A repeat toggle hits this one and costs *nothing*: no pixels fetched,
+  no canvas painted, no round trip.
+
+Two details that took measuring to get right:
+
+- The key normalizes the URL. Twitter serves one photo as `?name=small` /
+  `medium` / `large` / `orig` and React rewrites `src` between them, so keying
+  on the raw URL made every layout change a miss.
+- The cache check sits *ahead* of the JPEG encode. Encoding an upload that is
+  never sent was the expensive half of a cache hit.
+
+Eviction is by total bytes rather than entry count, because the weight is
+almost entirely the inpainted WebP patches and the rendered PNGs, and those vary
+hugely between a two-word sign and a page of manga.
+
 ## Turning it off
 
 Three menu commands: **settings**, **undo all on this page**, and **toggle on/off**. There is also an `enabled` checkbox in settings; with it off, the hover button does nothing and says so.

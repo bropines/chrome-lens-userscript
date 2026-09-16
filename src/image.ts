@@ -23,7 +23,7 @@ export function targetSize(
   };
 }
 
-type Source = HTMLImageElement | ImageBitmap;
+export type Source = HTMLImageElement | ImageBitmap;
 
 function sourceSize(source: Source): { width: number; height: number } {
   return source instanceof HTMLImageElement
@@ -32,10 +32,10 @@ function sourceSize(source: Source): { width: number; height: number } {
 }
 
 /** Draw, then JPEG-encode at Chromium's quality. Throws if the canvas is tainted. */
-async function encode(
+export async function encodeForUpload(
   source: Source,
   settings: Settings,
-  release: () => void
+  release: () => void = () => {}
 ): Promise<PreparedImage> {
   const natural = sourceSize(source);
   const { width, height } = targetSize(natural.width, natural.height, settings);
@@ -108,7 +108,7 @@ export async function prepareImage(
 ): Promise<PreparedImage> {
   if (img.naturalWidth && img.naturalHeight) {
     try {
-      return await encode(img, settings, () => {});
+      return await encodeForUpload(img, settings);
     } catch {
       // Tainted canvas; fall through to fetching the bytes ourselves.
     }
@@ -119,7 +119,7 @@ export async function prepareImage(
 
   try {
     const cors = await loadWithCors(url);
-    return await encode(cors, settings, () => {});
+    return await encodeForUpload(cors, settings);
   } catch {
     // Either the host sends no CORS headers, or it sends them but the canvas
     // still came out tainted. Fall through to fetching the bytes.
@@ -129,9 +129,65 @@ export async function prepareImage(
   const bitmap = await createImageBitmap(blob);
   try {
     // The bitmap is kept alive for rendering; the caller releases it.
-    return await encode(bitmap, settings, () => bitmap.close());
+    return await encodeForUpload(bitmap, settings, () => bitmap.close());
   } catch (e) {
     bitmap.close();
     throw e;
   }
+}
+
+
+/**
+ * Decoded pixels only, without the JPEG encode.
+ *
+ * On a cache hit the bytes are never uploaded, so encoding them is pure waste -
+ * and the encode is the expensive half. The same three-step ladder applies:
+ * the element as it stands, the URL re-requested with CORS, then the raw bytes.
+ */
+export async function acquireSource(
+  img: HTMLImageElement
+): Promise<{ source: Source; width: number; height: number; release(): void }> {
+  const probe = document.createElement('canvas');
+  probe.width = 1;
+  probe.height = 1;
+
+  /** Cheap test for whether this source can be read back out of a canvas. */
+  const readable = (candidate: Source): boolean => {
+    try {
+      const ctx = probe.getContext('2d');
+      if (!ctx) return false;
+      ctx.drawImage(candidate, 0, 0, 1, 1);
+      ctx.getImageData(0, 0, 1, 1);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  if (img.naturalWidth && img.naturalHeight && readable(img)) {
+    const size = sourceSize(img);
+    return { source: img, ...size, release: () => {} };
+  }
+
+  const url = img.currentSrc || img.src;
+  if (!url) throw new Error('This image has no source to read');
+
+  try {
+    const cors = await loadWithCors(url);
+    if (readable(cors)) {
+      const size = sourceSize(cors);
+      return { source: cors, ...size, release: () => {} };
+    }
+  } catch {
+    // Falls through to fetching the bytes.
+  }
+
+  const blob = await fetchImageBlob(url);
+  const bitmap = await createImageBitmap(blob);
+  return {
+    source: bitmap,
+    width: bitmap.width,
+    height: bitmap.height,
+    release: () => bitmap.close(),
+  };
 }

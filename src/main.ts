@@ -1,7 +1,7 @@
 import { GM_registerMenuCommand } from '$';
 
 import { callLens } from './lens/client.js';
-import { prepareImage } from './image.js';
+import { acquireSource, encodeForUpload } from './image.js';
 import {
   clearAllOverlays,
   clearOverlay,
@@ -9,10 +9,19 @@ import {
   renderTranslation,
   repositionOverlays,
 } from './render/overlay.js';
-import { renderToBlobUrl } from './render/canvas.js';
+import { renderToBlob } from './render/canvas.js';
 import { coverImage, isCovered, uncoverAll, uncoverImage } from './render/cover.js';
 import { getSettings, saveSettings } from './settings.js';
-import { cacheKey, cacheStats, clearCache, getCached, putCached } from './cache.js';
+import {
+  cacheKey,
+  cacheStats,
+  clearCache,
+  getCached,
+  getRender,
+  putCached,
+  putRender,
+  renderKey,
+} from './cache.js';
 import { openSettings } from './ui/settings-panel.js';
 import { isOurs, uiRoot } from './ui/root.js';
 import type { Settings } from './types.js';
@@ -70,14 +79,28 @@ async function translate(img: HTMLImageElement): Promise<void> {
   button.classList.add('lt-busy');
   button.classList.remove('lt-error');
   try {
-    const prepared = await prepareImage(img, settings);
+    const key = cacheKey(img.currentSrc || img.src, settings);
+    const displayedWidth = img.getBoundingClientRect().width || img.naturalWidth;
+
+    // A finished rendering short-circuits everything: no pixels to fetch, no
+    // canvas to paint, no round trip. This is the path a repeat toggle takes.
+    if (settings.renderMode === 'canvas') {
+      const done = getRender(renderKey(key, settings, displayedWidth), settings);
+      if (done && coverImage(img, URL.createObjectURL(done))) {
+        if (currentImage === img) button.classList.add('lt-active');
+        return;
+      }
+    }
+
+    // Pixels are needed for rendering either way. The JPEG encode and the round
+    // trip are not, so both sit behind the response cache - encoding an upload
+    // nobody sends was the expensive half of a cache hit.
+    const prepared = await acquireSource(img);
     try {
-      // The upload still happens - the pixels are needed for rendering either
-      // way - but a cache hit skips the round trip and the quota it spends.
-      const key = cacheKey(img.currentSrc || img.src, settings);
       let result = getCached(key, settings);
       if (!result) {
-        result = await callLens(prepared, settings);
+        const upload = await encodeForUpload(prepared.source, settings);
+        result = await callLens(upload, settings);
         putCached(key, result, settings);
       }
 
@@ -92,15 +115,17 @@ async function translate(img: HTMLImageElement): Promise<void> {
       }
 
       if (settings.renderMode === 'canvas') {
-        const url = await renderToBlobUrl(
+        const blob = await renderToBlob(
           prepared.source,
-          prepared.sourceWidth,
-          prepared.sourceHeight,
+          prepared.width,
+          prepared.height,
           result.blocks,
           settings,
           // The displayed width is what decides whether text will be legible.
-          img.getBoundingClientRect().width || prepared.sourceWidth
+          displayedWidth
         );
+        putRender(renderKey(key, settings, displayedWidth), blob, settings);
+        const url = URL.createObjectURL(blob);
         if (!coverImage(img, url)) {
           URL.revokeObjectURL(url);
           toast('This image cannot be covered here');

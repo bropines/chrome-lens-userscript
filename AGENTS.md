@@ -123,6 +123,24 @@ From `chrome/browser/resources/lens/overlay/text_layer.ts`:
   JavaScript indexes strings the same way, so `slice` is already correct here —
   but the Python port has to encode to UTF-16 explicitly.
 
+### The cache has two levels, and their order matters
+
+`cache.ts` holds Lens responses *and* finished renderings, sharing one byte
+budget. Two mistakes were made here and both are worth not repeating:
+
+- The response cache was keyed on the raw image URL. Twitter serves one photo
+  as `?name=small` / `medium` / `large` / `orig` and React rewrites `src`
+  between them, so every layout change was a miss. Keys go through
+  `normalizeUrl`, which drops rendition parameters.
+- The cache check sat *after* `prepareImage`, so a hit still fetched pixels and
+  JPEG-encoded an upload nobody would send. The render cache is now checked
+  first and short-circuits everything; the response cache sits ahead of the
+  encode.
+
+Verified by counting `drawImage` calls and POSTs: three translations of the same
+photo under three rendition URLs cost one POST and zero pixel reads after the
+first.
+
 ### Deliberate departures from Chromium
 
 - **Minimum readable size.** Lens fits text to the original line box, so fine

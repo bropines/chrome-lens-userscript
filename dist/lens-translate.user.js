@@ -521,7 +521,8 @@
   function sourceSize(source) {
     return source instanceof HTMLImageElement ? { width: source.naturalWidth, height: source.naturalHeight } : { width: source.width, height: source.height };
   }
-  async function encode(source, settings2, release) {
+  async function encodeForUpload(source, settings2, release = () => {
+  }) {
     const natural = sourceSize(source);
     const { width, height } = targetSize(natural.width, natural.height, settings2);
     const canvas = document.createElement("canvas");
@@ -560,30 +561,45 @@
       probe.src = url;
     });
   }
-  async function prepareImage(img, settings2) {
-    if (img.naturalWidth && img.naturalHeight) {
+  async function acquireSource(img) {
+    const probe = document.createElement("canvas");
+    probe.width = 1;
+    probe.height = 1;
+    const readable = (candidate) => {
       try {
-        return await encode(img, settings2, () => {
-        });
+        const ctx = probe.getContext("2d");
+        if (!ctx) return false;
+        ctx.drawImage(candidate, 0, 0, 1, 1);
+        ctx.getImageData(0, 0, 1, 1);
+        return true;
       } catch {
+        return false;
       }
+    };
+    if (img.naturalWidth && img.naturalHeight && readable(img)) {
+      const size = sourceSize(img);
+      return { source: img, ...size, release: () => {
+      } };
     }
     const url = img.currentSrc || img.src;
     if (!url) throw new Error("This image has no source to read");
     try {
       const cors = await loadWithCors(url);
-      return await encode(cors, settings2, () => {
-      });
+      if (readable(cors)) {
+        const size = sourceSize(cors);
+        return { source: cors, ...size, release: () => {
+        } };
+      }
     } catch {
     }
     const blob = await fetchImageBlob(url);
     const bitmap = await createImageBitmap(blob);
-    try {
-      return await encode(bitmap, settings2, () => bitmap.close());
-    } catch (e) {
-      bitmap.close();
-      throw e;
-    }
+    return {
+      source: bitmap,
+      width: bitmap.width,
+      height: bitmap.height,
+      release: () => bitmap.close()
+    };
   }
   const WritingDirection = {
     RightToLeft: 1,
@@ -943,7 +959,7 @@
     }
     ctx.restore();
   }
-  async function renderToBlobUrl(source, naturalWidth, naturalHeight, blocks, settings2, displayedWidth = naturalWidth) {
+  async function renderToBlob(source, naturalWidth, naturalHeight, blocks, settings2, displayedWidth = naturalWidth) {
     const scale = Math.min(
       Math.max(1, Math.round(settings2.supersample)),
       Math.max(1, Math.floor(8e3 / Math.max(naturalWidth, naturalHeight)))
@@ -974,7 +990,7 @@
     }
     const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
     if (!blob) throw new Error("Could not encode the translated image");
-    return URL.createObjectURL(blob);
+    return blob;
   }
   const covers = /* @__PURE__ */ new WeakMap();
   const live = /* @__PURE__ */ new Set();
@@ -1302,8 +1318,40 @@
   const entries = /* @__PURE__ */ new Map();
   let totalBytes = 0;
   let clock = 0;
+  const RENDITION_PARAMS = /* @__PURE__ */ new Set([
+    "name",
+    "format",
+    "fm",
+    "w",
+    "width",
+    "h",
+    "height",
+    "size",
+    "s",
+    "q",
+    "quality",
+    "dpr",
+    "resize",
+    "fit",
+    "crop",
+    "auto"
+  ]);
+  function normalizeUrl(raw) {
+    if (!raw || raw.startsWith("data:") || raw.startsWith("blob:")) return raw;
+    try {
+      const url = new URL(raw, document.baseURI);
+      for (const name of [...url.searchParams.keys()]) {
+        if (RENDITION_PARAMS.has(name.toLowerCase())) url.searchParams.delete(name);
+      }
+      url.hash = "";
+      const query = url.searchParams.toString();
+      return `${url.origin}${url.pathname}${query ? `?${query}` : ""}`;
+    } catch {
+      return raw;
+    }
+  }
   function cacheKey(url, settings2) {
-    return [url, settings2.targetLang, settings2.sourceLang, settings2.ocrLang].join("\0");
+    return [normalizeUrl(url), settings2.targetLang, settings2.sourceLang, settings2.ocrLang].join("\0");
   }
   function getCached(key, settings2) {
     if (settings2.cacheBytes <= 0) return null;
@@ -1335,15 +1383,59 @@
       entries.delete(oldestKey);
     }
   }
+  function renderKey(key, settings2, displayedWidth) {
+    return [
+      key,
+      settings2.renderMode,
+      settings2.verticalText,
+      settings2.fontFamily,
+      settings2.drawBackground ? 1 : 0,
+      settings2.minReadablePx,
+      settings2.supersample,
+      Math.round(displayedWidth / 50)
+    ].join("");
+  }
+  const renders = /* @__PURE__ */ new Map();
+  let renderBytes = 0;
+  function getRender(key, settings2) {
+    if (settings2.cacheBytes <= 0) return null;
+    const entry = renders.get(key);
+    if (!entry) return null;
+    entry.used = ++clock;
+    return entry.blob;
+  }
+  function putRender(key, blob, settings2) {
+    const limit = settings2.cacheBytes;
+    if (limit <= 0 || blob.size > limit) return;
+    const existing = renders.get(key);
+    if (existing) renderBytes -= existing.blob.size;
+    renders.set(key, { blob, used: ++clock });
+    renderBytes += blob.size;
+    while (renderBytes > limit && renders.size > 1) {
+      let oldestKey = null;
+      let oldestUsed = Infinity;
+      for (const [candidate, entry] of renders) {
+        if (entry.used < oldestUsed) {
+          oldestUsed = entry.used;
+          oldestKey = candidate;
+        }
+      }
+      if (oldestKey === null) break;
+      renderBytes -= renders.get(oldestKey)?.blob.size ?? 0;
+      renders.delete(oldestKey);
+    }
+  }
   function clearCache() {
-    const stats = { entries: entries.size, bytes: totalBytes };
+    const stats = { entries: entries.size + renders.size, bytes: totalBytes + renderBytes };
     entries.clear();
+    renders.clear();
     totalBytes = 0;
+    renderBytes = 0;
     return stats;
   }
   const cacheStats = () => ({
-    entries: entries.size,
-    bytes: totalBytes
+    entries: entries.size + renders.size,
+    bytes: totalBytes + renderBytes
   });
   let panel = null;
   function buildField(field, settings2) {
@@ -1503,12 +1595,21 @@
     button.classList.add("lt-busy");
     button.classList.remove("lt-error");
     try {
-      const prepared = await prepareImage(img, settings);
+      const key = cacheKey(img.currentSrc || img.src, settings);
+      const displayedWidth = img.getBoundingClientRect().width || img.naturalWidth;
+      if (settings.renderMode === "canvas") {
+        const done = getRender(renderKey(key, settings, displayedWidth), settings);
+        if (done && coverImage(img, URL.createObjectURL(done))) {
+          if (currentImage === img) button.classList.add("lt-active");
+          return;
+        }
+      }
+      const prepared = await acquireSource(img);
       try {
-        const key = cacheKey(img.currentSrc || img.src, settings);
         let result = getCached(key, settings);
         if (!result) {
-          result = await callLens(prepared, settings);
+          const upload = await encodeForUpload(prepared.source, settings);
+          result = await callLens(upload, settings);
           putCached(key, result, settings);
         }
         if (!result.blocks.length) {
@@ -1519,15 +1620,17 @@
           return;
         }
         if (settings.renderMode === "canvas") {
-          const url = await renderToBlobUrl(
+          const blob = await renderToBlob(
             prepared.source,
-            prepared.sourceWidth,
-            prepared.sourceHeight,
+            prepared.width,
+            prepared.height,
             result.blocks,
             settings,
             // The displayed width is what decides whether text will be legible.
-            img.getBoundingClientRect().width || prepared.sourceWidth
+            displayedWidth
           );
+          putRender(renderKey(key, settings, displayedWidth), blob, settings);
+          const url = URL.createObjectURL(blob);
           if (!coverImage(img, url)) {
             URL.revokeObjectURL(url);
             toast("This image cannot be covered here");
