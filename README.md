@@ -75,13 +75,17 @@ Two settings address it. **Minimum text size** (default 12 CSS px as displayed) 
 
 | | `canvas` (default) | `overlay` |
 |---|---|---|
-| how | the translation is painted into a copy of the image, which replaces it | absolutely positioned DOM lines float above the image |
+| how | the translation is painted into a picture laid over the image as a sibling element | absolutely positioned DOM lines float above the image |
 | text | raster, scales with the image | stays crisp at any zoom, selectable |
-| dynamic pages | nothing to keep in sync — it *is* the image | drifts on virtualised feeds that recycle and move `<img>` elements |
+| dynamic pages | tracks the image with no bookkeeping | drifts on virtualised feeds that recycle and move `<img>` elements |
 
-The overlay is the Chromium-faithful one and looks better standing still. It is not the default because a feed like X recycles its image elements as you scroll, and a separately positioned layer ends up smeared across unrelated parts of the page.
+Getting this right took three attempts, and the two that failed are worth recording:
 
-Both are reversible: click the button again, or use **undo all on this page** from the menu. The canvas path stashes the original `src` and `srcset` and puts them back.
+1. **A layer parented to `<body>`**, positioned from `getBoundingClientRect`. It drifts on a virtualised feed, which moves and recycles its `<img>` elements constantly — the translation ends up smeared across unrelated parts of the page.
+2. **Overwriting the image's own `src`.** Nothing to keep in sync, but it starts a tug-of-war with whoever owns the element: React re-asserts `src` on its next render and the translation vanishes within a second. A `MutationObserver` that puts it back measured 30 rounds against a harness that re-asserts on every change, then conceded.
+3. **A sibling element, absolutely positioned over the image.** It shares the image's containing block, so `offsetLeft`/`offsetTop` need no correction for scrolling and it tracks the image through reflow for free; and the framework never touches it, because it did not create it. Measured zero framework reverts and pixel-exact alignment.
+
+Both modes are reversible: click the button again, or use **undo all on this page** from the menu.
 
 ## Turning it off
 

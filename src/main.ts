@@ -10,7 +10,7 @@ import {
   repositionOverlays,
 } from './render/overlay.js';
 import { renderToBlobUrl } from './render/canvas.js';
-import { isSwapped, restoreAll, restoreImage, swapImage } from './render/swap.js';
+import { coverImage, isCovered, uncoverAll, uncoverImage } from './render/cover.js';
 import { getSettings, saveSettings } from './settings.js';
 import { openSettings } from './ui/settings-panel.js';
 import { isOurs, uiRoot } from './ui/root.js';
@@ -49,10 +49,10 @@ function toast(message: string, ms = 3200): void {
 
 const busy = new WeakSet<HTMLImageElement>();
 
-const isTranslated = (img: HTMLImageElement): boolean => isSwapped(img) || hasOverlay(img);
+const isTranslated = (img: HTMLImageElement): boolean => isCovered(img) || hasOverlay(img);
 
 function undo(img: HTMLImageElement): boolean {
-  const restored = restoreImage(img) || clearOverlay(img);
+  const restored = uncoverImage(img) || clearOverlay(img);
   if (restored) button.classList.remove('lt-active');
   return restored;
 }
@@ -93,7 +93,11 @@ async function translate(img: HTMLImageElement): Promise<void> {
           // The displayed width is what decides whether text will be legible.
           img.getBoundingClientRect().width || prepared.sourceWidth
         );
-        swapImage(img, url);
+        if (!coverImage(img, url)) {
+          URL.revokeObjectURL(url);
+          toast('This image cannot be covered here');
+          return;
+        }
       } else if (!renderTranslation(img, result.blocks, settings)) {
         toast('Nothing could be placed on this image');
         return;
@@ -275,14 +279,14 @@ GM_registerMenuCommand('Lens Translate: settings', () =>
 );
 
 GM_registerMenuCommand('Lens Translate: undo all on this page', () => {
-  const restored = restoreAll() + clearAllOverlays();
+  const restored = uncoverAll() + clearAllOverlays();
   toast(restored ? `Restored ${restored} image${restored === 1 ? '' : 's'}` : 'Nothing to restore');
 });
 
 GM_registerMenuCommand('Lens Translate: toggle on/off', () => {
   settings = saveSettings({ enabled: !settings.enabled });
   if (!settings.enabled) {
-    restoreAll();
+    uncoverAll();
     clearAllOverlays();
     hideButton();
   }

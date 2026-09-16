@@ -47,7 +47,7 @@ export const FIELDS: ReadonlyArray<Field> = [
     label: 'Render as',
     type: 'select',
     options: [
-      ['canvas', 'canvas - replaces the image, survives feeds'],
+      ['canvas', 'canvas - a picture laid over the image (default)'],
       ['overlay', 'overlay - crisp text, can drift on dynamic pages'],
     ],
   },
