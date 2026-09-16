@@ -1,4 +1,5 @@
 import { FIELDS, coerce, getSettings, resetSettings, saveSettings } from '../settings.js';
+import { OUTLINE_RATIO } from '../render/layout.js';
 import type { Field } from '../settings.js';
 import type { Settings } from '../types.js';
 import { uiRoot } from './root.js';
@@ -6,6 +7,55 @@ import { uiRoot } from './root.js';
 type SavedHandler = (settings: Settings) => void;
 
 let panel: HTMLDivElement | null = null;
+
+/**
+ * A live sample of the outline.
+ *
+ * The number on its own says nothing - the point of the outline is legibility
+ * over the residue the server's inpainting leaves behind, so the preview draws
+ * that residue and the text on top of it.
+ */
+function drawOutlinePreview(canvas: HTMLCanvasElement, scale: number): void {
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+
+  const { width, height } = canvas;
+  const size = 22;
+  ctx.clearRect(0, 0, width, height);
+
+  // Stand-in for leftover glyph edges: faint strokes the text has to survive.
+  ctx.fillStyle = '#f2f0ea';
+  ctx.fillRect(0, 0, width, height);
+  ctx.strokeStyle = 'rgba(40, 40, 40, 0.38)';
+  ctx.lineWidth = 1;
+  for (let i = 0; i < 26; i += 1) {
+    const x = 8 + ((i * 37) % (width - 16));
+    const y = 10 + ((i * 23) % (height - 20));
+    ctx.strokeRect(x, y, 9, 13);
+    ctx.beginPath();
+    ctx.moveTo(x + 2, y + 4);
+    ctx.lineTo(x + 7, y + 10);
+    ctx.stroke();
+  }
+
+  ctx.font = `${size}px system-ui, -apple-system, sans-serif`;
+  ctx.textBaseline = 'middle';
+  const sample = 'Пример текста / sample';
+  const x = (width - ctx.measureText(sample).width) / 2;
+  const y = height / 2;
+
+  const outline = Math.round(size * OUTLINE_RATIO * 2 * scale);
+  if (outline > 0) {
+    ctx.fillStyle = '#f2f0ea';
+    for (const [dx, dy] of [
+      [-outline, outline], [outline, outline], [outline, -outline], [-outline, -outline],
+    ] as const) {
+      ctx.fillText(sample, x + dx, y + dy);
+    }
+  }
+  ctx.fillStyle = '#1a1a1a';
+  ctx.fillText(sample, x, y);
+}
 
 function buildField(field: Field, settings: Settings): HTMLLabelElement {
   const row = document.createElement('label');
@@ -17,6 +67,45 @@ function buildField(field: Field, settings: Settings): HTMLLabelElement {
   row.appendChild(label);
 
   let input: HTMLInputElement | HTMLSelectElement;
+  if (field.type === 'range') {
+    const slider = document.createElement('input');
+    slider.type = 'range';
+    if (field.min) slider.min = field.min;
+    if (field.max) slider.max = field.max;
+    if (field.step) slider.step = field.step;
+    slider.value = String(settings[field.key]);
+
+    const readout = document.createElement('span');
+    readout.className = 'lt-readout';
+    const preview = document.createElement('canvas');
+    preview.className = 'lt-preview';
+    preview.width = 460;
+    preview.height = 64;
+
+    const refresh = (): void => {
+      readout.textContent = `${Number(slider.value).toFixed(1)}x`;
+      drawOutlinePreview(preview, Number(slider.value));
+    };
+    slider.addEventListener('input', refresh);
+    refresh();
+
+    const holder = document.createElement('span');
+    holder.className = 'lt-slider';
+    holder.append(slider, readout);
+    slider.className = 'lt-input';
+    slider.dataset['key'] = field.key;
+    row.appendChild(holder);
+    row.appendChild(preview);
+
+    if (field.hint) {
+      const hint = document.createElement('span');
+      hint.className = 'lt-hint';
+      hint.textContent = field.hint;
+      row.appendChild(hint);
+    }
+    return row;
+  }
+
   if (field.type === 'select') {
     const select = document.createElement('select');
     for (const [value, text] of field.options ?? []) {

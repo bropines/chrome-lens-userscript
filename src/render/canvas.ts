@@ -205,7 +205,10 @@ function drawReflowedParagraph(
   // Reflowed text had no outline at all, which is why it sat unprotected on top
   // of whatever the inpainting left behind. Same four-offset shadow Chromium
   // uses per line.
-  const outline = Math.max(1, Math.round(fontSize * OUTLINE_RATIO * 2));
+  const outline = Math.max(
+    0,
+    Math.round(fontSize * OUTLINE_RATIO * 2 * settings.outlineScale)
+  );
   const outlineColor = argbToCss(style.bgColor);
   const justify = justification(block.alignment, isRtl(block));
 
@@ -285,7 +288,9 @@ async function drawLine(
     ctx.direction = isRtl(block) ? 'rtl' : 'ltr';
 
     const fill = argbToCss(line.textColor);
-    const outline = patch ? Math.max(1, Math.round(size * OUTLINE_RATIO)) : 0;
+    const outline = patch
+      ? Math.max(1, Math.round(size * OUTLINE_RATIO * settings.outlineScale))
+      : 0;
     const outlineColor = patch ? argbToCss(line.bgColor) : null;
 
     // When the text was enlarged past its box, give it the room it now needs

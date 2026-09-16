@@ -131,7 +131,7 @@ export function renderTranslation(
       const boxH = geometry.h * rect.height;
       const size = fitFontSize(str, vertical ? boxH : boxW, vertical ? boxW : boxH, fontFamily);
       const bgColor = argbToCss(line.bgColor);
-      const outline = size * OUTLINE_RATIO;
+      const outline = size * OUTLINE_RATIO * settings.outlineScale;
 
       // Without a patch the background must be opaque, and Chromium adds a few
       // pixels of padding in that case only.

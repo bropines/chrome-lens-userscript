@@ -727,7 +727,7 @@
     const value = map[alignment] ?? "center";
     return rtl && value === "flex-start" ? "flex-end" : value;
   }
-  const styles = "/* Lives inside a shadow root, so these selectors compete with nothing. The\r\n   :host is a fixed, click-through, full-viewport layer; everything here is\r\n   positioned in viewport coordinates. */\r\n\r\n:host {\r\n  font: 14px/1.45 system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;\r\n  color: #1a1a1a;\r\n}\r\n\r\n#lt-button,\r\n#lt-gear {\r\n  position: absolute;\r\n  width: 32px;\r\n  height: 32px;\r\n  background: rgba(0, 0, 0, 0.6);\r\n  border-radius: 50%;\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  opacity: 0;\r\n  pointer-events: none;\r\n  cursor: pointer;\r\n  transition: opacity 0.2s ease-in-out, transform 0.15s ease-in-out, background 0.2s;\r\n  transform: scale(0.9);\r\n  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);\r\n  border: 1px solid rgba(255, 255, 255, 0.2);\r\n}\r\n#lt-button:hover,\r\n#lt-gear:hover {\r\n  background: rgba(0, 0, 0, 0.85);\r\n  transform: scale(1.05);\r\n}\r\n\r\n/* Appears a beat after the main button, so a passing cursor does not summon\r\n   two controls at once. */\r\n#lt-gear {\r\n  width: 26px;\r\n  height: 26px;\r\n}\r\n#lt-button.lt-busy svg {\r\n  animation: lt-spin 1s linear infinite;\r\n}\r\n#lt-button.lt-active {\r\n  background: rgba(20, 110, 60, 0.9);\r\n}\r\n#lt-button.lt-error {\r\n  background: rgba(170, 30, 30, 0.9);\r\n}\r\n@keyframes lt-spin {\r\n  to {\r\n    transform: rotate(360deg);\r\n  }\r\n}\r\n\r\n.lt-layer {\r\n  position: absolute;\r\n  overflow: hidden;\r\n  pointer-events: none;\r\n}\r\n.lt-bg {\r\n  position: absolute;\r\n  max-width: none;\r\n}\r\n.lt-line {\r\n  position: absolute;\r\n  display: flex;\r\n  align-items: center;\r\n  white-space: pre;\r\n  line-height: 1;\r\n  transform-origin: center center;\r\n  margin: 0;\r\n  padding: 0;\r\n}\r\n\r\n#lt-toast {\r\n  position: absolute;\r\n  bottom: 16px;\r\n  left: 50%;\r\n  transform: translateX(-50%);\r\n  background: rgba(0, 0, 0, 0.88);\r\n  color: #fff;\r\n  padding: 8px 16px;\r\n  border-radius: 8px;\r\n  font-size: 13px;\r\n  pointer-events: none;\r\n  opacity: 0;\r\n  transition: opacity 0.2s;\r\n  max-width: 70vw;\r\n}\r\n#lt-toast.lt-show {\r\n  opacity: 1;\r\n}\r\n\r\n/* ------------------------------------------------------------- settings */\r\n\r\n.lt-panel-backdrop {\r\n  position: absolute;\r\n  inset: 0;\r\n  background: rgba(0, 0, 0, 0.5);\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  pointer-events: auto;\r\n}\r\n.lt-panel {\r\n  background: #fff;\r\n  width: min(560px, 92vw);\r\n  max-height: 86vh;\r\n  display: flex;\r\n  flex-direction: column;\r\n  border-radius: 12px;\r\n  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.4);\r\n  overflow: hidden;\r\n}\r\n.lt-panel-head,\r\n.lt-panel-foot {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: 8px;\r\n  padding: 12px 18px;\r\n  flex: none;\r\n}\r\n.lt-panel-head {\r\n  border-bottom: 1px solid #e6e6e6;\r\n  justify-content: space-between;\r\n  font-size: 15px;\r\n  font-weight: 600;\r\n}\r\n.lt-panel-foot {\r\n  border-top: 1px solid #e6e6e6;\r\n}\r\n.lt-spacer {\r\n  flex: 1;\r\n}\r\n.lt-panel-body {\r\n  padding: 10px 18px 16px;\r\n  overflow-y: auto;\r\n}\r\n\r\n.lt-row {\r\n  display: grid;\r\n  grid-template-columns: 190px minmax(0, 1fr);\r\n  align-items: center;\r\n  gap: 2px 14px;\r\n  padding: 7px 0;\r\n}\r\n.lt-label {\r\n  color: #333;\r\n}\r\n.lt-hint {\r\n  grid-column: 2;\r\n  color: #808080;\r\n  font-size: 12px;\r\n}\r\n.lt-input {\r\n  font: inherit;\r\n  padding: 7px 9px;\r\n  border: 1px solid #ccc;\r\n  border-radius: 6px;\r\n  background: #fff;\r\n  color: #1a1a1a;\r\n  min-width: 0;\r\n  width: 100%;\r\n  box-sizing: border-box;\r\n}\r\n.lt-input[type='checkbox'] {\r\n  justify-self: start;\r\n  width: 17px;\r\n  height: 17px;\r\n  padding: 0;\r\n}\r\n.lt-x {\r\n  border: 0;\r\n  background: transparent;\r\n  font-size: 22px;\r\n  line-height: 1;\r\n  cursor: pointer;\r\n  color: #666;\r\n  padding: 0 4px;\r\n}\r\n.lt-btn {\r\n  font: inherit;\r\n  padding: 7px 15px;\r\n  border-radius: 7px;\r\n  cursor: pointer;\r\n  border: 1px solid #ccc;\r\n  background: #f5f5f5;\r\n  color: #1a1a1a;\r\n}\r\n.lt-btn.lt-primary {\r\n  background: #1a73e8;\r\n  border-color: #1a73e8;\r\n  color: #fff;\r\n}\r\n.lt-btn.lt-ghost:hover {\r\n  background: #eaeaea;\r\n}\r\n\r\n@media (prefers-color-scheme: dark) {\r\n  .lt-panel {\r\n    background: #1f1f22;\r\n    color: #ececec;\r\n  }\r\n  .lt-panel-head,\r\n  .lt-panel-foot {\r\n    border-color: #35353a;\r\n  }\r\n  .lt-label {\r\n    color: #d6d6d6;\r\n  }\r\n  .lt-hint {\r\n    color: #9a9a9a;\r\n  }\r\n  .lt-input {\r\n    background: #2a2a2e;\r\n    border-color: #45454c;\r\n    color: #ececec;\r\n  }\r\n  .lt-btn {\r\n    background: #2e2e33;\r\n    border-color: #45454c;\r\n    color: #ececec;\r\n  }\r\n  .lt-btn.lt-ghost:hover {\r\n    background: #3a3a40;\r\n  }\r\n  .lt-x {\r\n    color: #bbb;\r\n  }\r\n}\r\n";
+  const styles = "/* Lives inside a shadow root, so these selectors compete with nothing. The\r\n   :host is a fixed, click-through, full-viewport layer; everything here is\r\n   positioned in viewport coordinates. */\r\n\r\n:host {\r\n  font: 14px/1.45 system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;\r\n  color: #1a1a1a;\r\n}\r\n\r\n#lt-button,\r\n#lt-gear {\r\n  position: absolute;\r\n  width: 32px;\r\n  height: 32px;\r\n  background: rgba(0, 0, 0, 0.6);\r\n  border-radius: 50%;\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  opacity: 0;\r\n  pointer-events: none;\r\n  cursor: pointer;\r\n  transition: opacity 0.2s ease-in-out, transform 0.15s ease-in-out, background 0.2s;\r\n  transform: scale(0.9);\r\n  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);\r\n  border: 1px solid rgba(255, 255, 255, 0.2);\r\n}\r\n#lt-button:hover,\r\n#lt-gear:hover {\r\n  background: rgba(0, 0, 0, 0.85);\r\n  transform: scale(1.05);\r\n}\r\n\r\n/* Appears a beat after the main button, so a passing cursor does not summon\r\n   two controls at once. */\r\n#lt-gear {\r\n  width: 26px;\r\n  height: 26px;\r\n}\r\n#lt-button.lt-busy svg {\r\n  animation: lt-spin 1s linear infinite;\r\n}\r\n#lt-button.lt-active {\r\n  background: rgba(20, 110, 60, 0.9);\r\n}\r\n#lt-button.lt-error {\r\n  background: rgba(170, 30, 30, 0.9);\r\n}\r\n@keyframes lt-spin {\r\n  to {\r\n    transform: rotate(360deg);\r\n  }\r\n}\r\n\r\n.lt-layer {\r\n  position: absolute;\r\n  overflow: hidden;\r\n  pointer-events: none;\r\n}\r\n.lt-bg {\r\n  position: absolute;\r\n  max-width: none;\r\n}\r\n.lt-line {\r\n  position: absolute;\r\n  display: flex;\r\n  align-items: center;\r\n  white-space: pre;\r\n  line-height: 1;\r\n  transform-origin: center center;\r\n  margin: 0;\r\n  padding: 0;\r\n}\r\n\r\n#lt-toast {\r\n  position: absolute;\r\n  bottom: 16px;\r\n  left: 50%;\r\n  transform: translateX(-50%);\r\n  background: rgba(0, 0, 0, 0.88);\r\n  color: #fff;\r\n  padding: 8px 16px;\r\n  border-radius: 8px;\r\n  font-size: 13px;\r\n  pointer-events: none;\r\n  opacity: 0;\r\n  transition: opacity 0.2s;\r\n  max-width: 70vw;\r\n}\r\n#lt-toast.lt-show {\r\n  opacity: 1;\r\n}\r\n\r\n/* ------------------------------------------------------------- settings */\r\n\r\n.lt-panel-backdrop {\r\n  position: absolute;\r\n  inset: 0;\r\n  background: rgba(0, 0, 0, 0.5);\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  pointer-events: auto;\r\n}\r\n.lt-panel {\r\n  background: #fff;\r\n  width: min(560px, 92vw);\r\n  max-height: 86vh;\r\n  display: flex;\r\n  flex-direction: column;\r\n  border-radius: 12px;\r\n  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.4);\r\n  overflow: hidden;\r\n}\r\n.lt-panel-head,\r\n.lt-panel-foot {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: 8px;\r\n  padding: 12px 18px;\r\n  flex: none;\r\n}\r\n.lt-panel-head {\r\n  border-bottom: 1px solid #e6e6e6;\r\n  justify-content: space-between;\r\n  font-size: 15px;\r\n  font-weight: 600;\r\n}\r\n.lt-panel-foot {\r\n  border-top: 1px solid #e6e6e6;\r\n}\r\n.lt-spacer {\r\n  flex: 1;\r\n}\r\n.lt-panel-body {\r\n  padding: 10px 18px 16px;\r\n  overflow-y: auto;\r\n}\r\n\r\n.lt-row {\r\n  display: grid;\r\n  grid-template-columns: 190px minmax(0, 1fr);\r\n  align-items: center;\r\n  gap: 2px 14px;\r\n  padding: 7px 0;\r\n}\r\n.lt-label {\r\n  color: #333;\r\n}\r\n.lt-hint {\r\n  grid-column: 2;\r\n  color: #808080;\r\n  font-size: 12px;\r\n}\r\n.lt-input {\r\n  font: inherit;\r\n  padding: 7px 9px;\r\n  border: 1px solid #ccc;\r\n  border-radius: 6px;\r\n  background: #fff;\r\n  color: #1a1a1a;\r\n  min-width: 0;\r\n  width: 100%;\r\n  box-sizing: border-box;\r\n}\r\n.lt-input[type='checkbox'] {\r\n  justify-self: start;\r\n  width: 17px;\r\n  height: 17px;\r\n  padding: 0;\r\n}\r\n.lt-x {\r\n  border: 0;\r\n  background: transparent;\r\n  font-size: 22px;\r\n  line-height: 1;\r\n  cursor: pointer;\r\n  color: #666;\r\n  padding: 0 4px;\r\n}\r\n.lt-btn {\r\n  font: inherit;\r\n  padding: 7px 15px;\r\n  border-radius: 7px;\r\n  cursor: pointer;\r\n  border: 1px solid #ccc;\r\n  background: #f5f5f5;\r\n  color: #1a1a1a;\r\n}\r\n.lt-btn.lt-primary {\r\n  background: #1a73e8;\r\n  border-color: #1a73e8;\r\n  color: #fff;\r\n}\r\n.lt-btn.lt-ghost:hover {\r\n  background: #eaeaea;\r\n}\r\n\r\n@media (prefers-color-scheme: dark) {\r\n  .lt-panel {\r\n    background: #1f1f22;\r\n    color: #ececec;\r\n  }\r\n  .lt-panel-head,\r\n  .lt-panel-foot {\r\n    border-color: #35353a;\r\n  }\r\n  .lt-label {\r\n    color: #d6d6d6;\r\n  }\r\n  .lt-hint {\r\n    color: #9a9a9a;\r\n  }\r\n  .lt-input {\r\n    background: #2a2a2e;\r\n    border-color: #45454c;\r\n    color: #ececec;\r\n  }\r\n  .lt-btn {\r\n    background: #2e2e33;\r\n    border-color: #45454c;\r\n    color: #ececec;\r\n  }\r\n  .lt-btn.lt-ghost:hover {\r\n    background: #3a3a40;\r\n  }\r\n  .lt-x {\r\n    color: #bbb;\r\n  }\r\n}\r\n\n/* Outline slider with its live sample. */\n.lt-slider {\n  display: flex;\n  align-items: center;\n  gap: 10px;\n  min-width: 0;\n}\n.lt-slider input[type='range'] {\n  flex: 1;\n  width: auto;\n  padding: 0;\n  border: 0;\n  background: transparent;\n  accent-color: #1a73e8;\n}\n.lt-readout {\n  min-width: 42px;\n  text-align: right;\n  font-variant-numeric: tabular-nums;\n  color: #666;\n}\n.lt-preview {\n  grid-column: 2;\n  width: 100%;\n  height: auto;\n  border-radius: 6px;\n  border: 1px solid #ddd;\n  margin-top: 6px;\n}\n@media (prefers-color-scheme: dark) {\n  .lt-readout {\n    color: #aaa;\n  }\n  .lt-preview {\n    border-color: #45454c;\n  }\n}\n";
   const HOST_ID = "lens-translate-root";
   let shadow = null;
   function uiRoot() {
@@ -841,7 +841,7 @@
         const boxH = geometry.h * rect.height;
         const size = fitFontSize(str, vertical ? boxH : boxW, vertical ? boxW : boxH, fontFamily);
         const bgColor = argbToCss(line.bgColor);
-        const outline = size * OUTLINE_RATIO;
+        const outline = size * OUTLINE_RATIO * settings2.outlineScale;
         const padX = patch ? 0 : 2;
         const padY = patch ? 0 : 1;
         const element = document.createElement("div");
@@ -985,7 +985,10 @@
     ctx.textAlign = "left";
     ctx.textBaseline = "top";
     const fill = argbToCss(style.textColor);
-    const outline = Math.max(1, Math.round(fontSize * OUTLINE_RATIO * 2));
+    const outline = Math.max(
+      0,
+      Math.round(fontSize * OUTLINE_RATIO * 2 * settings2.outlineScale)
+    );
     const outlineColor = argbToCss(style.bgColor);
     const justify = justification(block.alignment, isRtl(block));
     let y = -Math.min(boxH, lines.length * lineHeight) / 2;
@@ -1035,7 +1038,7 @@
       ctx.font = `${size}px ${fontFamily}`;
       ctx.direction = isRtl(block) ? "rtl" : "ltr";
       const fill = argbToCss(line.textColor);
-      const outline = patch ? Math.max(1, Math.round(size * OUTLINE_RATIO)) : 0;
+      const outline = patch ? Math.max(1, Math.round(size * OUTLINE_RATIO * settings2.outlineScale)) : 0;
       const outlineColor = patch ? argbToCss(line.bgColor) : null;
       const grow = size / Math.max(1, fitted);
       const drawW = grow > 1 ? boxW * grow : boxW;
@@ -1296,7 +1299,8 @@
     supersample: 2,
     cacheBytes: 32 * 1024 * 1024,
     mangaMode: false,
-    mangaBoxGrowth: 1.45
+    mangaBoxGrowth: 1.45,
+    outlineScale: 1
   };
   const FIELDS = [
     { key: "enabled", label: "Translation enabled", type: "checkbox" },
@@ -1346,6 +1350,15 @@
       hint: "how far past the detected text box to lay out; 1 = exactly the box"
     },
     { key: "drawBackground", label: "Erase the original text", type: "checkbox" },
+    {
+      key: "outlineScale",
+      label: "Text outline",
+      type: "range",
+      min: "0",
+      max: "4",
+      step: "0.1",
+      hint: "thickens the outline behind translated text; 0 removes it"
+    },
     { key: "fontFamily", label: "Font family", type: "text", hint: "blank = the page font" },
     { key: "showButton", label: "Show the hover button", type: "checkbox" },
     {
@@ -1424,7 +1437,7 @@
       return value >= 1 && value <= 3 ? value : DEFAULTS.supersample;
     }
     if (field.type === "checkbox") return Boolean(raw);
-    if (field.type === "number") {
+    if (field.type === "number" || field.type === "range") {
       const value = Number(raw);
       return Number.isFinite(value) ? value : DEFAULTS[field.key];
     }
@@ -1517,6 +1530,7 @@
       settings2.supersample,
       settings2.mangaMode ? 1 : 0,
       settings2.mangaBoxGrowth,
+      settings2.outlineScale,
       Math.round(displayedWidth / 50)
     ].join("");
   }
@@ -1563,6 +1577,45 @@
     bytes: totalBytes + renderBytes
   });
   let panel = null;
+  function drawOutlinePreview(canvas, scale) {
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    const { width, height } = canvas;
+    const size = 22;
+    ctx.clearRect(0, 0, width, height);
+    ctx.fillStyle = "#f2f0ea";
+    ctx.fillRect(0, 0, width, height);
+    ctx.strokeStyle = "rgba(40, 40, 40, 0.38)";
+    ctx.lineWidth = 1;
+    for (let i = 0; i < 26; i += 1) {
+      const x2 = 8 + i * 37 % (width - 16);
+      const y2 = 10 + i * 23 % (height - 20);
+      ctx.strokeRect(x2, y2, 9, 13);
+      ctx.beginPath();
+      ctx.moveTo(x2 + 2, y2 + 4);
+      ctx.lineTo(x2 + 7, y2 + 10);
+      ctx.stroke();
+    }
+    ctx.font = `${size}px system-ui, -apple-system, sans-serif`;
+    ctx.textBaseline = "middle";
+    const sample = "Пример текста / sample";
+    const x = (width - ctx.measureText(sample).width) / 2;
+    const y = height / 2;
+    const outline = Math.round(size * OUTLINE_RATIO * 2 * scale);
+    if (outline > 0) {
+      ctx.fillStyle = "#f2f0ea";
+      for (const [dx, dy] of [
+        [-outline, outline],
+        [outline, outline],
+        [outline, -outline],
+        [-outline, -outline]
+      ]) {
+        ctx.fillText(sample, x + dx, y + dy);
+      }
+    }
+    ctx.fillStyle = "#1a1a1a";
+    ctx.fillText(sample, x, y);
+  }
   function buildField(field, settings2) {
     const row = document.createElement("label");
     row.className = "lt-row";
@@ -1571,6 +1624,40 @@
     label.textContent = field.label;
     row.appendChild(label);
     let input;
+    if (field.type === "range") {
+      const slider = document.createElement("input");
+      slider.type = "range";
+      if (field.min) slider.min = field.min;
+      if (field.max) slider.max = field.max;
+      if (field.step) slider.step = field.step;
+      slider.value = String(settings2[field.key]);
+      const readout = document.createElement("span");
+      readout.className = "lt-readout";
+      const preview = document.createElement("canvas");
+      preview.className = "lt-preview";
+      preview.width = 460;
+      preview.height = 64;
+      const refresh = () => {
+        readout.textContent = `${Number(slider.value).toFixed(1)}x`;
+        drawOutlinePreview(preview, Number(slider.value));
+      };
+      slider.addEventListener("input", refresh);
+      refresh();
+      const holder = document.createElement("span");
+      holder.className = "lt-slider";
+      holder.append(slider, readout);
+      slider.className = "lt-input";
+      slider.dataset["key"] = field.key;
+      row.appendChild(holder);
+      row.appendChild(preview);
+      if (field.hint) {
+        const hint = document.createElement("span");
+        hint.className = "lt-hint";
+        hint.textContent = field.hint;
+        row.appendChild(hint);
+      }
+      return row;
+    }
     if (field.type === "select") {
       const select = document.createElement("select");
       for (const [value, text2] of field.options ?? []) {

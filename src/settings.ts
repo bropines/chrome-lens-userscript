@@ -30,9 +30,10 @@ export const DEFAULTS: Settings = {
   cacheBytes: 32 * 1024 * 1024,
   mangaMode: false,
   mangaBoxGrowth: 1.45,
+  outlineScale: 1,
 };
 
-type FieldKind = 'text' | 'number' | 'checkbox' | 'select';
+type FieldKind = 'text' | 'number' | 'checkbox' | 'select' | 'range';
 
 export interface Field<K extends keyof Settings = keyof Settings> {
   key: K;
@@ -40,6 +41,8 @@ export interface Field<K extends keyof Settings = keyof Settings> {
   type: FieldKind;
   hint?: string;
   step?: string;
+  min?: string;
+  max?: string;
   options?: ReadonlyArray<readonly [string, string]>;
 }
 
@@ -91,6 +94,15 @@ export const FIELDS: ReadonlyArray<Field> = [
     hint: 'how far past the detected text box to lay out; 1 = exactly the box',
   },
   { key: 'drawBackground', label: 'Erase the original text', type: 'checkbox' },
+  {
+    key: 'outlineScale',
+    label: 'Text outline',
+    type: 'range',
+    min: '0',
+    max: '4',
+    step: '0.1',
+    hint: 'thickens the outline behind translated text; 0 removes it',
+  },
   { key: 'fontFamily', label: 'Font family', type: 'text', hint: 'blank = the page font' },
   { key: 'showButton', label: 'Show the hover button', type: 'checkbox' },
   {
@@ -179,7 +191,7 @@ export function coerce(field: Field, raw: string | boolean): Settings[keyof Sett
     return (value >= 1 && value <= 3 ? value : DEFAULTS.supersample) as Settings[keyof Settings];
   }
   if (field.type === 'checkbox') return Boolean(raw) as Settings[keyof Settings];
-  if (field.type === 'number') {
+  if (field.type === 'number' || field.type === 'range') {
     const value = Number(raw);
     return (Number.isFinite(value) ? value : DEFAULTS[field.key]) as Settings[keyof Settings];
   }

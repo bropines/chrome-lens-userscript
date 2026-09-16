@@ -81,6 +81,10 @@ A preset for pages of vertical Japanese, off by default:
 - **Raises the size floor** to at least 14 px and gives reflowed text the
   four-offset outline that per-line text already had.
 
+The outline itself has its own slider, with a live sample drawn over simulated
+residue — the number alone tells you nothing, since the whole point of the
+outline is legibility over what the inpainting leaves behind. 0 removes it.
+
 ## Text that would be too small to read
 
 Lens sizes translated text to fit the *original* line box. On a 2400px page shown 600px wide, fine print measured here fitted at 9–13px, which is 2–3px on screen — no more readable than the original was, and that is the complaint.

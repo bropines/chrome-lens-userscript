@@ -143,6 +143,12 @@ export interface Settings {
   mangaMode: boolean;
   /** How much wider than the detected paragraph box to lay text out, in manga mode. */
   mangaBoxGrowth: number;
+  /**
+   * Multiplier on the outline Chromium draws behind translated text
+   * (fontSize * 0.02 per offset). 0 removes it; higher values help when the
+   * inpainting leaves a lot of the source showing through.
+   */
+  outlineScale: number;
 }
 
 /** An image encoded and sized the way Chromium would send it. */
