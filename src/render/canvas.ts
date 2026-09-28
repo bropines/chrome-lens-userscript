@@ -153,6 +153,42 @@ function drawVertical(
  * the translation is not itself going to be set vertically, the paragraph box
  * becomes one text area and the text is re-wrapped into it.
  */
+/**
+ * Bring a box inside the image, by the cheapest means that works.
+ *
+ * The bound is the picture itself: nothing may be drawn where the canvas will
+ * only clip it. There are two ways back in and they are not equal - moving the
+ * box changes nothing about the text, while shrinking it costs a smaller font.
+ * So shrink only by what no amount of moving could fix, then move.
+ *
+ * For a rotated box the bound is its axis-aligned extent, because that is the
+ * shape the canvas actually clips against: `w * |cos| + h * |sin|` is how far a
+ * rotated rectangle really reaches.
+ */
+function fitInside(
+  box: { cx: number; cy: number; w: number; h: number; angle: number },
+  width: number,
+  height: number
+): { cx: number; cy: number; w: number; h: number } {
+  const radians = box.angle * DEG;
+  const cos = Math.abs(Math.cos(radians));
+  const sin = Math.abs(Math.sin(radians));
+
+  const spanX = box.w * cos + box.h * sin;
+  const spanY = box.w * sin + box.h * cos;
+  // Only as far as it takes to fit at all; a box that already fits is untouched.
+  const scale = Math.min(1, width / spanX, height / spanY);
+  const w = box.w * scale;
+  const h = box.h * scale;
+
+  const halfX = (w * cos + h * sin) / 2;
+  const halfY = (w * sin + h * cos) / 2;
+  const place = (centre: number, half: number, limit: number): number =>
+    half * 2 >= limit ? limit / 2 : Math.min(Math.max(centre, half), limit - half);
+
+  return { cx: place(box.cx, halfX, width), cy: place(box.cy, halfY, height), w, h };
+}
+
 function drawReflowedParagraph(
   draw: DrawContext,
   block: TranslationBlock,
@@ -166,8 +202,21 @@ function drawReflowedParagraph(
   // around them, so manga mode lays out wider than the box and lets the text
   // use it - otherwise a bubble's worth of Russian wraps into a thin column.
   const growth = settings.mangaMode ? Math.max(1, settings.mangaBoxGrowth) : 1;
-  const boxW = geometry.w * width * growth;
-  const boxH = geometry.h * height * Math.min(growth, 1.2);
+  // Growing the box is exactly what pushes a bubble near an edge off the
+  // picture, so the grown box is the one that has to be brought back.
+  const box = fitInside(
+    {
+      cx: geometry.cx * width,
+      cy: geometry.cy * height,
+      w: geometry.w * width * growth,
+      h: geometry.h * height * Math.min(growth, 1.2),
+      angle: geometry.angle,
+    },
+    width,
+    height
+  );
+  const boxW = box.w;
+  const boxH = box.h;
   const style = block.lines[0];
   if (!style) return;
 
@@ -175,7 +224,7 @@ function drawReflowedParagraph(
   if (!text) return;
 
   ctx.save();
-  ctx.translate(geometry.cx * width, geometry.cy * height);
+  ctx.translate(box.cx, box.cy);
   ctx.rotate(geometry.angle * DEG);
 
   // The same multiple has to reach both the fit and the draw: choosing a size

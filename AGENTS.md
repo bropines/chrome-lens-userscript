@@ -343,6 +343,28 @@ painted the bars: a vertical column fitted at 3px and floored at 24px grows
 eightfold, turning a 27x264 box into a 216x2112 rectangle on a 760x560 image.
 Measure the text and size the fill to that; a ratio has nothing bounding it.
 
+### Nothing may be drawn where the canvas will only clip it
+
+The picture is a hard bound, and there are exactly two ways back inside it.
+They are not equal: **moving** a box changes nothing about the text, while
+**shrinking** it costs a smaller font. So `fitInside` shrinks only by what no
+amount of moving could fix - `scale = min(1, W / spanX, H / spanY)` - and then
+clamps the centre. A box that already fits comes back untouched.
+
+For a rotated box the bound is its axis-aligned extent, `w * |cos| + h * |sin|`,
+because that is the shape the canvas clips against.
+
+The order matters for the reflow path in particular: the box is corrected
+*before* `fitTextBlock` runs, so the text is laid out for the room that actually
+exists rather than being wrapped for a box half of which is off the picture.
+Growing the box by `mangaBoxGrowth` is exactly what pushes a bubble near an edge
+over the edge, so it is the grown box that gets corrected.
+
+A test that only checks the ink is inside the image will pass on a rendering
+that lost half its words. Count the ink too: every edge case must produce the
+same pixel count as the same paragraph drawn with room to spare, because it was
+moved rather than cut.
+
 ### A widened line must be nudged back inside the image
 
 The readable-size floor grows a line past its box, and the line is drawn centred

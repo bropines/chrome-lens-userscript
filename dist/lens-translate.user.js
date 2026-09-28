@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Lens Translate
 // @namespace    https://github.com/bropines/chrome-lens-userscript
-// @version      2.8.0
+// @version      2.8.1
 // @author       bropines
 // @description  Hover any image, click the button, and its text is translated in place - rendered the way Chromium's own Lens overlay does it.
 // @license      MIT
@@ -1819,19 +1819,44 @@
       }
     }
   }
+  function fitInside(box, width, height) {
+    const radians = box.angle * DEG;
+    const cos = Math.abs(Math.cos(radians));
+    const sin = Math.abs(Math.sin(radians));
+    const spanX = box.w * cos + box.h * sin;
+    const spanY = box.w * sin + box.h * cos;
+    const scale = Math.min(1, width / spanX, height / spanY);
+    const w = box.w * scale;
+    const h = box.h * scale;
+    const halfX = (w * cos + h * sin) / 2;
+    const halfY = (w * sin + h * cos) / 2;
+    const place2 = (centre, half, limit) => half * 2 >= limit ? limit / 2 : Math.min(Math.max(centre, half), limit - half);
+    return { cx: place2(box.cx, halfX, width), cy: place2(box.cy, halfY, height), w, h };
+  }
   function drawReflowedParagraph(draw, block, settings2) {
     const geometry = block.geometry;
     if (!geometry || geometry.w <= 0 || geometry.h <= 0) return;
     const { ctx, width, height, fontFamily } = draw;
     const growth = settings2.mangaMode ? Math.max(1, settings2.mangaBoxGrowth) : 1;
-    const boxW = geometry.w * width * growth;
-    const boxH = geometry.h * height * Math.min(growth, 1.2);
+    const box = fitInside(
+      {
+        cx: geometry.cx * width,
+        cy: geometry.cy * height,
+        w: geometry.w * width * growth,
+        h: geometry.h * height * Math.min(growth, 1.2),
+        angle: geometry.angle
+      },
+      width,
+      height
+    );
+    const boxW = box.w;
+    const boxH = box.h;
     const style = block.lines[0];
     if (!style) return;
     const text2 = block.translation.trim();
     if (!text2) return;
     ctx.save();
-    ctx.translate(geometry.cx * width, geometry.cy * height);
+    ctx.translate(box.cx, box.cy);
     ctx.rotate(geometry.angle * DEG);
     const spacing = settings2.lineSpacing > 0 ? settings2.lineSpacing : 1.25;
     const { size, lines } = fitTextBlock(
