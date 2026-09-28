@@ -1,3 +1,4 @@
+import { panelCommands } from '../gm.js';
 import { FIELDS, GROUPS, coerce, getSettings, resetSettings, saveSettings } from '../settings.js';
 import type { Field } from '../settings.js';
 import type { Settings } from '../types.js';
@@ -174,6 +175,48 @@ function buildField(field: Field, settings: Settings): HTMLLabelElement {
   return row;
 }
 
+/**
+ * The menu commands, drawn where a host with no menu can still reach them.
+ *
+ * AdGuard's userscript engine has no menu at all, so clearing the cache and
+ * undoing a page would otherwise be unreachable there. Hosts that do have one
+ * get them in both places, which costs nothing and saves a trip to the toolbar.
+ */
+function buildActions(): DocumentFragment | null {
+  const commands = panelCommands();
+  if (!commands.length) return null;
+
+  const fragment = document.createDocumentFragment();
+  const heading = document.createElement('div');
+  heading.className = 'lt-group';
+  heading.textContent = 'Actions';
+  fragment.appendChild(heading);
+
+  const row = document.createElement('div');
+  row.className = 'lt-actions';
+  for (const command of commands) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'lt-btn lt-ghost';
+    button.textContent = command.label;
+    button.addEventListener('click', () => {
+      // Undoing a page is invisible from behind the panel, and toggling the
+      // script off while its settings are open reads as a bug. Close first.
+      closeSettings();
+      command.run();
+    });
+    row.appendChild(button);
+  }
+  fragment.appendChild(row);
+
+  const note = document.createElement('div');
+  note.className = 'lt-note';
+  note.textContent = 'These run at once, and discard anything unsaved above.';
+  fragment.appendChild(note);
+
+  return fragment;
+}
+
 function collect(root: HTMLElement): Partial<Settings> {
   const patch: Record<string, unknown> = {};
   for (const field of FIELDS) {
@@ -229,6 +272,8 @@ export function openSettings(onSaved?: SavedHandler): void {
       body.appendChild(heading);
       for (const field of fields) body.appendChild(buildField(field, settings));
     }
+    const actions = buildActions();
+    if (actions) body.appendChild(actions);
   }
 
   backdrop.addEventListener('click', (event) => {

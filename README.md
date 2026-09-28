@@ -6,14 +6,113 @@ No server, no extension, no account. TypeScript, built with Vite.
 
 ## Install
 
-[**Install the userscript**](https://github.com/bropines/chrome-lens-userscript/raw/main/dist/lens-translate.user.js) — Tampermonkey picks it up straight from the repo. Or build it yourself:
+[**Install the userscript**](https://github.com/bropines/chrome-lens-userscript/raw/main/dist/lens-translate.user.js) — Tampermonkey and Violentmonkey pick it up straight from the repo.
+
+**AdGuard** (Windows, Mac, Android) runs userscripts too: **Settings → Extensions → Add extension**, then paste that same raw URL. Nothing else differs, with one exception noted below.
+
+Or build it yourself:
 
 ```bash
 bun install
 bun run build
 ```
 
-Alt+click an image, or use the button that appears when you hover one. Click again to undo. Settings live in the Tampermonkey menu under **Lens Translate: settings**.
+Alt+click an image, or use the button that appears when you hover one. Click again to undo. **On a touch screen there is no hover**, and the tap that would summon the button is the same tap a reader uses to turn the page - so there the button is pinned instead, sitting over whichever image fills most of the viewport and following the scroll. **When to show it** in settings forces either behaviour. Settings live in the userscript manager's menu under **Lens Translate: settings** — or, since AdGuard has no such menu, behind the gear that appears next to the hover button. Clearing the cache, undoing a page and switching the script off are in that panel under **Actions** as well as in the menu, so every host can reach all four.
+
+### What differs between hosts
+
+Only two things, and both are handled by the script rather than by the reader:
+
+- **The userscript menu may not exist.** `GM_registerMenuCommand` is absent from [AdGuard's documented API](https://adguard.com/kb/general/userscripts/) and missing from some builds, though 1.2.7 does have it. Nothing here name-checks a version: the commands are registered with the host when it takes them and drawn in the settings panel regardless.
+- **Binary bodies are not portable.** Every host implements `GM_xmlhttpRequest`, but none documents which shapes of request body it marshals, and AdGuard has [been loose about `responseType`](https://github.com/AdguardTeam/CoreLibs/issues/1983). The request is sent as a typed array first; a `400`, which is exactly what a mangled protobuf produces, buys one retry as a binary string, and whichever shape returns `200` is used from then on. Responses are read as an ArrayBuffer, a Blob, or `charset=x-user-defined` text, whichever the host produced.
+- **A host's transport can fail outright.** On AdGuard for Android it did: `GM_xmlhttpRequest` reported a network error without the request ever leaving the device. So under the two rungs above there is a third — a plain `fetch`. The Lens endpoint answers a CORS preflight (`POST`, `content-type`, `x-goog-api-key`, any origin), so a page-context request reaches it. It is last rather than first because it is the leakier path: the browser attaches an `Origin` header that cannot be removed, telling Google which site the image came from, where `GM_xmlhttpRequest` sends none. Whichever rung answers is remembered, so the dead ones are tried once per page and not again.
+
+An image host is different: there `fetch` is blocked by the very CORS that `GM_xmlhttpRequest` exists to dodge, so that path never remembers a transport and always tries the host's own first.
+
+Settings are stored with `GM_setValue`. A host without it falls back to `localStorage`, which on AdGuard is the *page's* — so settings would then be per-site. Every host worth naming has `GM_setValue`; the fallback is there so a missing one degrades to forgetful rather than broken.
+
+## When it does not work
+
+A userscript on a phone fails quietly. There is no console to open, the host
+reports one word for every kind of network failure, and "network error" covers a
+transport that never sent the request, a domain the device is blocking, and a
+phone that is simply offline. Four things, cheapest first.
+
+### 1. Run the diagnostics
+
+**Settings → Actions → Run diagnostics**, or the same entry in the userscript
+menu. It reports what host is running the script and what it grants, then probes
+the Lens endpoint and a control host through both transports:
+
+```
+host: AdGuard 4.9.16
+script: 2.2.0
+context: page (AdGuard-style)
+xmlhttpRequest: yes, getValue: yes, setValue: yes, registerMenuCommand: NO
+page: https://example.com
+
+gm -> lens       via AdGuard: network error, 12 ms
+fetch -> lens    HTTP 404, 210 ms
+gm -> control    HTTP 204, 180 ms
+fetch -> control HTTP 204, 160 ms
+```
+
+A `HTTP` of any kind means the request left the device and came back. That is
+exactly what "network error" cannot tell you, and two things had to be right
+before it could be trusted:
+
+- **The probe sends the real request**, not a convenient `GET`. A `GET` to the
+  Lens endpoint is answered `404` with no CORS headers at all, so a page `fetch`
+  cannot read it and reports the same `Failed to fetch` a blocked domain would.
+  The real `POST` comes back with `Access-Control-Allow-Origin` set.
+- **A status is an answer wherever it arrives.** AdGuard routes every non-2xx
+  through `onerror` rather than `onload`, so a plain `404` looks like a network
+  failure unless the status is read off it.
+
+The last line reads the four results:
+
+- **Lens answers one way but not the other** — that host's transport is broken,
+  and the script is already working around it.
+- **Lens answers neither way, the control does** — this device is blocking
+  `lensfrontend-pa.googleapis.com`. Search the AdGuard activity log for
+  `googleapis`, and check DNS filtering and the HTTPS filtering exclusions.
+- **Nothing answers** — no working connection from this page.
+
+**Copy** puts the whole report on the clipboard, which is the useful thing to
+attach to a bug report.
+
+### 2. Real DevTools, over USB
+
+Anything past the transport needs the browser's own console, and on Android it
+is one cable away:
+
+1. On the phone: **Settings → About phone**, tap **Build number** seven times,
+   then **Developer options → USB debugging**.
+2. Plug it into a computer and accept the prompt.
+3. In desktop Chrome open `chrome://inspect/#devices`, find the tab, press
+   **inspect**. That is a full DevTools — Console, Network, the lot — attached
+   to the page on the phone.
+
+Which context the errors land in depends on the host, and the diagnostics report
+says which: `context: page` means the ordinary console has them, `sandbox` means
+the console's context dropdown does. AdGuard has shipped both.
+
+The Network tab settles the question the diagnostics can only infer: whether the
+`POST` to `crupload` left at all, and what it came back with.
+
+### 3. A console on the page itself
+
+No cable, when a report is not enough: install a second, three-line userscript
+that loads [eruda](https://github.com/liriliri/eruda) and gives the page a
+console, a network log and a DOM inspector as a floating button. Any host that
+runs this script runs that one.
+
+### 4. What the host thinks it did
+
+AdGuard's **Recent activity** is a DNS log, so a domain missing from it means no
+lookup happened, which means nothing was sent — that is how the AdGuard
+transport failure here was found. It is not an HTTP log, so a domain *present*
+in it does not prove the request succeeded.
 
 ## How it talks to Lens
 
@@ -61,7 +160,7 @@ Reading the pixels has three ways in, cheapest first:
 2. **The same URL re-requested with `crossOrigin`.** A plain `<img>` is not *requested* with CORS, so drawing it taints the canvas even when the host would have allowed it — and most image hosts, `pbs.twimg.com` included, send `Access-Control-Allow-Origin: *`. Asking again with CORS usually comes straight out of the HTTP cache.
 3. **`GM_xmlhttpRequest`.** Only for hosts that send no CORS headers at all. This is the one that needs `@connect *`, and it is rarely reached.
 
-If step 3 does get reached and fails with "permanently blocked by the user", clear the domain under Tampermonkey → Settings → Security → Blocked domains.
+If step 3 does get reached and fails, the message names the host: Tampermonkey blocks a domain permanently once refused, and it is cleared under Tampermonkey → Settings → Security → Blocked domains.
 
 Uploads use Chromium's own budget: JPEG quality 40, and a resize only when the image is both over 1.5 MP and over 1600px on a side.
 
@@ -155,7 +254,7 @@ hugely between a two-word sign and a page of manga.
 
 ## Turning it off
 
-Three menu commands: **settings**, **undo all on this page**, and **toggle on/off**. There is also an `enabled` checkbox in settings; with it off, the hover button does nothing and says so.
+Four commands: **settings**, **clear cache**, **undo all on this page**, and **toggle on/off**. They sit in the host's userscript menu where there is one, and in the settings panel under **Actions** either way — which is how they are reached on AdGuard, which has no menu. There is also an `enabled` checkbox in settings; with it off, the hover button does nothing and says so.
 
 Hovering an image shows the translate button, and holding the cursor there for another half second brings up a settings button next to it.
 

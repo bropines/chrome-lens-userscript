@@ -288,3 +288,38 @@
     color: #8c8c96;
   }
 }
+
+/* Menu commands, for a host that has no menu of its own. */
+.lt-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 4px 0 0;
+}
+.lt-note {
+  color: #808080;
+  font-size: 12px;
+  padding-top: 8px;
+}
+@media (prefers-color-scheme: dark) {
+  .lt-note {
+    color: #9a9a9a;
+  }
+}
+
+/* The diagnostics report: fixed width, so columns line up as written. */
+.lt-panel-report {
+  max-width: 560px;
+}
+.lt-report {
+  margin: 0;
+  padding: 14px 18px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  user-select: text;
+  -webkit-user-select: text;
+}

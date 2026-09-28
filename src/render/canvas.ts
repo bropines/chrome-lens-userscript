@@ -251,6 +251,52 @@ function eraseTextArea(draw: DrawContext, block: TranslationBlock, settings: Set
   fillHull(ctx, convexHull(points), argbToCss(style.bgColor), pad);
 }
 
+/**
+ * Nudge a line back inside the image.
+ *
+ * Text is drawn centred on its own box, so a line the readable-size floor has
+ * widened near an edge runs off the canvas and is simply clipped - half a
+ * sentence gone, which is what it looks like on a phone, where the image is
+ * displayed narrow and the floor therefore multiplies hardest. Shifting it back
+ * in is not where the source sat, but a whole sentence a few pixels off its
+ * bubble beats half a sentence in exactly the right place.
+ *
+ * The bounds are in canvas space and the context is in the line's rotated
+ * frame, so the shift is worked out in the first and rotated into the second.
+ * A box too big to fit at all is aligned to the start of the line rather than
+ * centred, because the half that survives should be the half you read first.
+ */
+function nudgeInside(draw: DrawContext, box: { w: number; h: number }, line: LineFrame): void {
+  const radians = line.angle * DEG;
+  const cos = Math.abs(Math.cos(radians));
+  const sin = Math.abs(Math.sin(radians));
+  // Half-extents of the rotated box, measured along the canvas axes.
+  const halfW = (box.w * cos + box.h * sin) / 2;
+  const halfH = (box.w * sin + box.h * cos) / 2;
+
+  const shift = (centre: number, half: number, limit: number, fromEnd: boolean): number => {
+    if (half * 2 >= limit) return fromEnd ? limit - half - centre : half - centre;
+    if (centre - half < 0) return half - centre;
+    if (centre + half > limit) return limit - half - centre;
+    return 0;
+  };
+
+  const dx = shift(line.cx, halfW, draw.width, line.rtl);
+  const dy = shift(line.cy, halfH, draw.height, false);
+  if (dx === 0 && dy === 0) return;
+
+  const c = Math.cos(radians);
+  const sn = Math.sin(radians);
+  draw.ctx.translate(dx * c + dy * sn, dy * c - dx * sn);
+}
+
+interface LineFrame {
+  cx: number;
+  cy: number;
+  angle: number;
+  rtl: boolean;
+}
+
 async function drawLine(
   draw: DrawContext,
   block: TranslationBlock,
@@ -327,6 +373,10 @@ async function drawLine(
     const advance = ctx.measureText(text).width;
     const drawW = enlarged ? Math.min(Math.max(boxW, advance + size * 0.4), width) : boxW;
     const drawH = enlarged ? Math.min(Math.max(boxH, size * 1.35), height) : boxH;
+    // Before anything is painted, so the enlarged background travels with the
+    // text it belongs to. The inpainted patch above stays put: it erases the
+    // original, which has not moved.
+    nudgeInside(draw, { w: drawW, h: drawH }, { cx, cy, angle: geometry.angle, rtl: isRtl(block) });
     if (enlarged && settings.drawBackground && !skipBackground) {
       ctx.fillStyle = argbToCss(line.bgColor);
       ctx.fillRect(-drawW / 2, -drawH / 2, drawW, drawH);

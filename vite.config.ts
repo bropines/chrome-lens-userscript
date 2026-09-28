@@ -25,12 +25,19 @@ export default defineConfig({
         // taints the canvas and has to be re-fetched from wherever it lives,
         // which cannot be known ahead of time.
         connect: ['lensfrontend-pa.googleapis.com', '*'],
+        // GM.xmlHttpRequest is the same call under its GM4 name, for a host
+        // that publishes only that one; GM_registerMenuCommand is requested
+        // even though AdGuard has no menu to put it in, because asking for a
+        // grant a host does not implement is free and the script feature-tests
+        // it anyway.
         grant: [
           'GM_xmlhttpRequest',
-          'GM_addStyle',
+          'GM.xmlHttpRequest',
           'GM_getValue',
           'GM_setValue',
           'GM_registerMenuCommand',
+          'GM_info',
+          'unsafeWindow',
         ],
         'run-at': 'document-idle',
         icon: 'https://lens.google.com/favicon.ico',

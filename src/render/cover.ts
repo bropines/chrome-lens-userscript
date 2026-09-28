@@ -28,6 +28,22 @@ const live = new Set<WeakRef<HTMLImageElement>>();
 export const isCovered = (img: HTMLImageElement): boolean => covers.has(img);
 
 /**
+ * The marker on a cover element.
+ *
+ * A cover is an `<img>` that lives in the page, so everything that looks for
+ * images finds it - `document.images` included. It sits on the image's own box,
+ * which ought to make it a harmless tie, except that `place` copies the box
+ * through `offsetWidth`, an integer, while the contest measures
+ * `getBoundingClientRect`, which is not: one measured 375.333 wide against the
+ * other's 375. Whichever way that rounds decides the winner, which is why a
+ * translated image intermittently reported itself untranslated and a second
+ * press sent the rendering back to Lens.
+ */
+export const COVER_MARK = 'data-lens-translate';
+
+export const isCover = (node: Element): boolean => node.hasAttribute(COVER_MARK);
+
+/**
  * Match the image's box.
  *
  * offsetLeft/offsetTop are measured against the same offsetParent an absolutely
@@ -49,7 +65,7 @@ export function coverImage(img: HTMLImageElement, blobUrl: string): boolean {
 
   const element = document.createElement('img');
   element.src = blobUrl;
-  element.setAttribute('data-lens-translate', '');
+  element.setAttribute(COVER_MARK, '');
   element.setAttribute(
     'style',
     [

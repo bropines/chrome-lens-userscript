@@ -1,4 +1,4 @@
-import { GM_getValue, GM_setValue } from '$';
+import { readStored, writeStored } from './gm.js';
 import { languageOptions } from './languages.js';
 import type { Settings } from './types.js';
 
@@ -19,6 +19,7 @@ export const DEFAULTS: Settings = {
   maxSide: 1600,
   jpegQuality: 0.4,
   showButton: true,
+  buttonMode: 'auto',
   hotkey: 'alt',
   fontFamily: '',
   drawBackground: true,
@@ -187,6 +188,17 @@ export const FIELDS: ReadonlyArray<Field> = [
     step: '4',
     hint: 'remembers what Lens said, so re-translating costs nothing; 0 disables',
   },
+  {
+    key: 'buttonMode', group: 'Behaviour',
+    label: 'When to show it',
+    type: 'select',
+    options: [
+      ['auto', 'auto - pinned on a touch screen, on hover otherwise'],
+      ['hover', 'on hover only'],
+      ['pinned', 'always, over the image in view'],
+    ],
+    hint: 'a touch screen has no hover, and tapping the image is how you turn the page',
+  },
   { key: 'minImageSize', group: 'Behaviour', label: 'Ignore images under (px)', type: 'number' },
   { key: 'jpegQuality', group: 'Advanced', label: 'Upload quality (0..1)', type: 'number', step: '0.05' },
   { key: 'timeoutMs', group: 'Advanced', label: 'Request timeout (ms)', type: 'number', step: '1000' },
@@ -201,7 +213,7 @@ export function getSettings(): Settings {
   if (!cache) {
     let stored: Partial<Settings> = {};
     try {
-      const raw = GM_getValue<unknown>(STORAGE_KEY, null);
+      const raw = readStored(STORAGE_KEY);
       if (typeof raw === 'string') stored = JSON.parse(raw) as Partial<Settings>;
       else if (raw && typeof raw === 'object') stored = raw as Partial<Settings>;
     } catch {
@@ -216,13 +228,13 @@ export function getSettings(): Settings {
 
 export function saveSettings(patch: Partial<Settings>): Settings {
   cache = { ...getSettings(), ...patch };
-  GM_setValue(STORAGE_KEY, cache);
+  writeStored(STORAGE_KEY, cache);
   return cache;
 }
 
 export function resetSettings(): Settings {
   cache = { ...DEFAULTS };
-  GM_setValue(STORAGE_KEY, cache);
+  writeStored(STORAGE_KEY, cache);
   return cache;
 }
 

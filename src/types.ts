@@ -101,6 +101,7 @@ export type Alignment = (typeof Alignment)[keyof typeof Alignment];
 
 export type VerticalTextMode = 'auto' | 'keep' | 'horizontal';
 export type HotkeyModifier = 'alt' | 'ctrl' | 'shift' | 'none';
+export type ButtonMode = 'auto' | 'hover' | 'pinned';
 
 export interface Settings {
   targetLang: string;
@@ -115,6 +116,13 @@ export interface Settings {
   maxSide: number;
   jpegQuality: number;
   showButton: boolean;
+  /**
+   * When the translate button is on screen.
+   *   'auto'   - pinned on a touch screen, on hover everywhere else.
+   *   'hover'  - only while the cursor is over an image.
+   *   'pinned' - always, over whichever image fills most of the viewport.
+   */
+  buttonMode: ButtonMode;
   hotkey: HotkeyModifier;
   fontFamily: string;
   drawBackground: boolean;

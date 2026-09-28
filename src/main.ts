@@ -1,4 +1,5 @@
-import { GM_registerMenuCommand } from '$';
+import { registerCommand } from './gm.js';
+import { diagnose } from './diagnose.js';
 
 import { callLens } from './lens/client.js';
 import { acquireSource, encodeForUpload } from './image.js';
@@ -10,7 +11,7 @@ import {
   repositionOverlays,
 } from './render/overlay.js';
 import { renderToBlob } from './render/canvas.js';
-import { coverImage, isCovered, uncoverAll, uncoverImage } from './render/cover.js';
+import { coverImage, isCover, isCovered, uncoverAll, uncoverImage } from './render/cover.js';
 import { getSettings, saveSettings } from './settings.js';
 import {
   cacheKey,
@@ -23,6 +24,7 @@ import {
   renderKey,
 } from './cache.js';
 import { openSettings } from './ui/settings-panel.js';
+import { openReport } from './ui/report.js';
 import { isOurs, uiRoot } from './ui/root.js';
 import type { Settings } from './types.js';
 
@@ -156,8 +158,20 @@ let gearTimer: number | undefined;
 /** How long the cursor has to linger before the settings button joins in. */
 const GEAR_DELAY_MS = 550;
 
-function showGear(img: HTMLImageElement): void {
-  const rect = img.getBoundingClientRect();
+/**
+ * Where a control sits. Usually the image's own box, but a pinned button
+ * anchors to the part of it that is on screen: scroll a tall page halfway and
+ * the image's top edge - and with it the button - is above the viewport.
+ */
+interface Anchor {
+  top: number;
+  left: number;
+  width: number;
+  height: number;
+}
+
+function showGear(img: HTMLImageElement, anchor?: Anchor): void {
+  const rect = anchor ?? img.getBoundingClientRect();
   gear.style.top = `${rect.top + 8}px`;
   gear.style.left = `${rect.left + rect.width - 69}px`;
   gear.style.opacity = '1';
@@ -175,6 +189,9 @@ function hideGear(): void {
 function isCandidate(node: unknown): node is HTMLImageElement {
   const img = node as HTMLImageElement | null;
   if (!img || img.tagName !== 'IMG') return false;
+  // Our own rendering is an <img> in the page, and offering to translate it is
+  // how a translated image came to look untranslated.
+  if (isCover(img)) return false;
   // Rendered size, not natural size: a 4000px image scaled to a 20px icon is
   // still an icon.
   const rect = img.getBoundingClientRect();
@@ -196,11 +213,11 @@ function imageFromEvent(event: Event): HTMLImageElement | null {
   return null;
 }
 
-function showButton(img: HTMLImageElement): void {
+function showButton(img: HTMLImageElement, anchor?: Anchor): void {
   if (!settings.showButton) return;
   currentImage = img;
   // Viewport coordinates: the shadow host is fixed and covers the viewport.
-  const rect = img.getBoundingClientRect();
+  const rect = anchor ?? img.getBoundingClientRect();
   button.style.top = `${rect.top + 5}px`;
   button.style.left = `${rect.left + rect.width - 37}px`;
   button.style.opacity = '1';
@@ -221,9 +238,97 @@ function hideButton(): void {
   currentImage = null;
 }
 
+/**
+ * Keeping the button on screen, for a device that cannot hover.
+ *
+ * A touch screen has no hover at all, so nothing would ever bring the button
+ * out - and the tap that would summon it is exactly the tap a reader uses to
+ * turn the page. Pinned mode puts it over whichever image fills most of the
+ * viewport instead, and leaves it there.
+ *
+ * This is a scan rather than an IntersectionObserver on purpose. The observer
+ * version was written first and is the obvious answer, but it only reports
+ * while the document is being rendered: in a tab that is never painted it
+ * simply never fires, and the button never appears with no error to say why.
+ * A scan of `document.images` answers from layout, which is always there.
+ * Reading a few hundred rects once per frame costs nothing next to that.
+ *
+ * Its one limit is that `document.images` does not reach into a site's own
+ * shadow roots, where the hover path does via composedPath.
+ */
+let pinned = false;
+let pinnedFrame = 0;
+
+/** The part of an image that is actually on screen. */
+function visiblePart(img: HTMLImageElement): Anchor {
+  const rect = img.getBoundingClientRect();
+  const left = Math.max(rect.left, 0);
+  const top = Math.max(rect.top, 0);
+  const width = Math.min(rect.right, window.innerWidth) - left;
+  const height = Math.min(rect.bottom, window.innerHeight) - top;
+  return { top, left, width: Math.max(0, width), height: Math.max(0, height) };
+}
+
+/** The image the reader is looking at: the most viewport area wins. */
+function mostVisible(): (Anchor & { img: HTMLImageElement }) | null {
+  let best: (Anchor & { img: HTMLImageElement }) | null = null;
+  let bestArea = 0;
+
+  for (const img of document.images) {
+    if (!isCandidate(img)) continue;
+    const part = visiblePart(img);
+    const area = part.width * part.height;
+    if (area > bestArea) {
+      bestArea = area;
+      best = { ...part, img };
+    }
+  }
+  return best;
+}
+
+function updatePinned(): void {
+  // Scrolling fires far faster than the screen refreshes, and the answer only
+  // has to be right once per frame.
+  if (!pinned || pinnedFrame) return;
+  pinnedFrame = window.requestAnimationFrame(() => {
+    pinnedFrame = 0;
+    if (!pinned) return;
+    const found = settings.showButton ? mostVisible() : null;
+    if (!found) {
+      hideButton();
+      return;
+    }
+    showButton(found.img, found);
+    // No cursor to linger, so the delay before the settings button would only
+    // ever be a delay.
+    showGear(found.img, found);
+  });
+}
+
+/** An image with no size yet fails isCandidate, so it is reconsidered on load. */
+function onImageLoad(event: Event): void {
+  if ((event.target as Element | null)?.tagName === 'IMG') updatePinned();
+}
+
+function applyButtonMode(): void {
+  const wanted =
+    settings.buttonMode === 'pinned' ||
+    (settings.buttonMode === 'auto' && window.matchMedia('(hover: none)').matches);
+  if (wanted === pinned) return;
+  pinned = wanted;
+  if (pinned) {
+    document.addEventListener('load', onImageLoad, true);
+    updatePinned();
+  } else {
+    document.removeEventListener('load', onImageLoad, true);
+    hideButton();
+  }
+}
+
 document.addEventListener(
   'mouseover',
   (event) => {
+    if (pinned) return;
     const img = imageFromEvent(event);
     if (!img) return;
     window.clearTimeout(hideTimer);
@@ -235,6 +340,7 @@ document.addEventListener(
 document.addEventListener(
   'mouseout',
   (event) => {
+    if (pinned) return;
     if (imageFromEvent(event)) hideTimer = window.setTimeout(hideButton, 300);
   },
   true
@@ -243,8 +349,15 @@ document.addEventListener(
 for (const control of [button, gear]) {
   control.addEventListener('mouseover', () => window.clearTimeout(hideTimer));
   control.addEventListener('mouseout', () => {
+    if (pinned) return;
     hideTimer = window.setTimeout(hideButton, 300);
   });
+}
+
+function onSaved(saved: Settings): void {
+  settings = saved;
+  applyButtonMode();
+  toast('Settings saved');
 }
 
 gear.addEventListener(
@@ -252,10 +365,7 @@ gear.addEventListener(
   (event) => {
     event.preventDefault();
     event.stopPropagation();
-    openSettings((saved) => {
-      settings = saved;
-      toast('Settings saved');
-    });
+    openSettings(onSaved);
   },
   true
 );
@@ -294,7 +404,12 @@ document.addEventListener(
 function reposition(): void {
   repositionOverlays();
   // The button is placed in viewport coordinates too, so it drifts if the page
-  // scrolls while it is showing.
+  // scrolls while it is showing - and when it is pinned, scrolling is also
+  // what moves it to the next image.
+  if (pinned) {
+    updatePinned();
+    return;
+  }
   if (currentImage?.isConnected) {
     showButton(currentImage);
     if (gear.style.opacity === '1') showGear(currentImage);
@@ -304,34 +419,57 @@ function reposition(): void {
 window.addEventListener('resize', reposition);
 window.addEventListener('scroll', reposition, true);
 
-GM_registerMenuCommand('Lens Translate: settings', () =>
-  openSettings((saved) => {
-    settings = saved;
-    toast('Settings saved');
-  })
-);
-
-GM_registerMenuCommand('Lens Translate: clear cache', () => {
-  const { entries, bytes } = cacheStats();
-  clearCache();
-  toast(
-    entries
-      ? `Cleared ${entries} cached result${entries === 1 ? '' : 's'} (${(bytes / 1048576).toFixed(1)} MB)`
-      : 'The cache was already empty'
-  );
+registerCommand({
+  menuLabel: 'Lens Translate: settings',
+  // The panel is where these are drawn, so it does not offer to open itself.
+  label: null,
+  run: () => openSettings(onSaved),
 });
 
-GM_registerMenuCommand('Lens Translate: undo all on this page', () => {
-  const restored = uncoverAll() + clearAllOverlays();
-  toast(restored ? `Restored ${restored} image${restored === 1 ? '' : 's'}` : 'Nothing to restore');
+registerCommand({
+  menuLabel: 'Lens Translate: clear cache',
+  label: 'Clear cache',
+  run: () => {
+    const { entries, bytes } = cacheStats();
+    clearCache();
+    toast(
+      entries
+        ? `Cleared ${entries} cached result${entries === 1 ? '' : 's'} (${(bytes / 1048576).toFixed(1)} MB)`
+        : 'The cache was already empty'
+    );
+  },
 });
 
-GM_registerMenuCommand('Lens Translate: toggle on/off', () => {
-  settings = saveSettings({ enabled: !settings.enabled });
-  if (!settings.enabled) {
-    uncoverAll();
-    clearAllOverlays();
-    hideButton();
-  }
-  toast(settings.enabled ? 'Translation enabled' : 'Translation disabled');
+registerCommand({
+  menuLabel: 'Lens Translate: undo all on this page',
+  label: 'Undo all on this page',
+  run: () => {
+    const restored = uncoverAll() + clearAllOverlays();
+    toast(restored ? `Restored ${restored} image${restored === 1 ? '' : 's'}` : 'Nothing to restore');
+  },
 });
+
+registerCommand({
+  menuLabel: 'Lens Translate: diagnostics',
+  label: 'Run diagnostics',
+  run: () => {
+    openReport('Probing...');
+    void diagnose().then(openReport, (error: Error) => openReport(`Diagnostics failed: ${error.message}`));
+  },
+});
+
+registerCommand({
+  menuLabel: 'Lens Translate: toggle on/off',
+  label: 'Toggle on/off',
+  run: () => {
+    settings = saveSettings({ enabled: !settings.enabled });
+    if (!settings.enabled) {
+      uncoverAll();
+      clearAllOverlays();
+      hideButton();
+    }
+    toast(settings.enabled ? 'Translation enabled' : 'Translation disabled');
+  },
+});
+
+applyButtonMode();

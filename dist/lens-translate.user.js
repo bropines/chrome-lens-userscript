@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Lens Translate
 // @namespace    https://github.com/bropines/chrome-lens-userscript
-// @version      2.0.0
+// @version      2.4.0
 // @author       bropines
 // @description  Hover any image, click the button, and its text is translated in place - rendered the way Chromium's own Lens overlay does it.
 // @license      MIT
@@ -15,21 +15,575 @@
 // @match        *://*/*
 // @connect      lensfrontend-pa.googleapis.com
 // @connect      *
-// @grant        GM_addStyle
+// @grant        GM.xmlHttpRequest
 // @grant        GM_getValue
+// @grant        GM_info
 // @grant        GM_registerMenuCommand
 // @grant        GM_setValue
 // @grant        GM_xmlhttpRequest
+// @grant        unsafeWindow
 // @run-at       document-idle
 // ==/UserScript==
 
 (function () {
   'use strict';
 
+  var _GM = /* @__PURE__ */ (() => typeof GM != "undefined" ? GM : void 0)();
   var _GM_getValue = /* @__PURE__ */ (() => typeof GM_getValue != "undefined" ? GM_getValue : void 0)();
+  var _GM_info = /* @__PURE__ */ (() => typeof GM_info != "undefined" ? GM_info : void 0)();
   var _GM_registerMenuCommand = /* @__PURE__ */ (() => typeof GM_registerMenuCommand != "undefined" ? GM_registerMenuCommand : void 0)();
   var _GM_setValue = /* @__PURE__ */ (() => typeof GM_setValue != "undefined" ? GM_setValue : void 0)();
   var _GM_xmlhttpRequest = /* @__PURE__ */ (() => typeof GM_xmlhttpRequest != "undefined" ? GM_xmlhttpRequest : void 0)();
+  var _unsafeWindow = /* @__PURE__ */ (() => typeof unsafeWindow != "undefined" ? unsafeWindow : void 0)();
+  function hostName() {
+    return _GM_info?.scriptHandler ?? "The userscript host";
+  }
+  const LOCAL_PREFIX = "lens-translate:";
+  function readStored(key) {
+    if (typeof _GM_getValue === "function") return _GM_getValue(key, null);
+    try {
+      return window.localStorage.getItem(LOCAL_PREFIX + key);
+    } catch {
+      return null;
+    }
+  }
+  function writeStored(key, value) {
+    if (typeof _GM_setValue === "function") {
+      _GM_setValue(key, value);
+      return;
+    }
+    try {
+      window.localStorage.setItem(LOCAL_PREFIX + key, JSON.stringify(value));
+    } catch {
+    }
+  }
+  const commands = [];
+  function registerCommand(command) {
+    commands.push(command);
+    if (typeof _GM_registerMenuCommand === "function") {
+      _GM_registerMenuCommand(command.menuLabel, command.run);
+    }
+  }
+  function panelCommands() {
+    const out = [];
+    for (const command of commands) {
+      if (command.label !== null) out.push({ label: command.label, run: command.run });
+    }
+    return out;
+  }
+  const request = typeof _GM_xmlhttpRequest === "function" ? _GM_xmlhttpRequest : _GM?.xmlHttpRequest;
+  const BINARY_MIME = "text/plain; charset=x-user-defined";
+  function fromLatin1(text2) {
+    const bytes2 = new Uint8Array(text2.length);
+    for (let i = 0; i < text2.length; i += 1) bytes2[i] = text2.charCodeAt(i) & 255;
+    return bytes2;
+  }
+  function toLatin1(bytes2) {
+    const CHUNK = 32768;
+    let text2 = "";
+    for (let i = 0; i < bytes2.length; i += CHUNK) {
+      text2 += String.fromCharCode(...bytes2.subarray(i, i + CHUNK));
+    }
+    return text2;
+  }
+  async function toBytes(response, responseText) {
+    if (response instanceof ArrayBuffer) return new Uint8Array(response);
+    if (response instanceof Blob) return new Uint8Array(await response.arrayBuffer());
+    if (ArrayBuffer.isView(response)) {
+      const { buffer, byteOffset, byteLength } = response;
+      return new Uint8Array(buffer.slice(byteOffset, byteOffset + byteLength));
+    }
+    if (typeof response === "string") return fromLatin1(response);
+    if (typeof responseText === "string") return fromLatin1(responseText);
+    return null;
+  }
+  function contentTypeOf(headers) {
+    const match = /^content-type:\s*(.+)$/im.exec(headers ?? "");
+    return match?.[1]?.trim() ?? "";
+  }
+  function timedOut() {
+    const error = new Error("Timed out");
+    error.name = "TimeoutError";
+    return error;
+  }
+  function sendViaGm(attempt) {
+    return new Promise((resolve, reject) => {
+      if (!request) {
+        reject(new Error(`${hostName()} has no GM_xmlhttpRequest`));
+        return;
+      }
+      const deliver = (response) => {
+        void (async () => {
+          const bytes2 = await toBytes(response.response, response.responseText);
+          if (!bytes2) {
+            reject(new Error(`${hostName()} returned a response this script cannot read`));
+            return;
+          }
+          resolve({
+            status: response.status,
+            bytes: bytes2,
+            contentType: contentTypeOf(response.responseHeaders)
+          });
+        })();
+      };
+      const data = attempt.body === null ? void 0 : attempt.encoding === "typed" ? attempt.body : toLatin1(attempt.body);
+      request({
+        method: attempt.method,
+        url: attempt.url,
+        headers: attempt.headers,
+        ...data === void 0 ? {} : { data, binary: true },
+        responseType: "arraybuffer",
+        overrideMimeType: BINARY_MIME,
+        timeout: attempt.timeoutMs,
+        onload: deliver,
+        onerror: (response) => {
+          if (response.status > 0) {
+            deliver(response);
+            return;
+          }
+          const detail = response.error || response.statusText || "network error";
+          reject(new Error(`via ${hostName()}: ${detail}`));
+        },
+        ontimeout: () => reject(timedOut())
+      });
+    });
+  }
+  async function sendViaFetch(attempt) {
+    let response;
+    try {
+      response = await fetch(attempt.url, {
+        method: attempt.method,
+        headers: attempt.headers,
+        ...attempt.body === null ? {} : { body: attempt.body },
+        credentials: "omit",
+        referrerPolicy: "no-referrer",
+        signal: AbortSignal.timeout(attempt.timeoutMs)
+      });
+    } catch (error) {
+      if (error.name === "TimeoutError") throw timedOut();
+      throw new Error(`via fetch: ${error.message}`);
+    }
+    return {
+      status: response.status,
+      bytes: new Uint8Array(await response.arrayBuffer()),
+      contentType: response.headers.get("content-type") ?? ""
+    };
+  }
+  let workingTransport = null;
+  let workingEncoding = null;
+  function ladder(hasBody, remember) {
+    const latchedEncoding = remember ? workingEncoding : null;
+    const encodings = !hasBody ? ["typed"] : latchedEncoding ? [latchedEncoding] : ["typed", "binary-string"];
+    const rungs = encodings.map((encoding) => ({ transport: "gm", encoding }));
+    rungs.push({ transport: "fetch", encoding: "typed" });
+    const latchedTransport = remember ? workingTransport : null;
+    return latchedTransport ? rungs.filter((rung) => rung.transport === latchedTransport) : rungs;
+  }
+  const BAD_REQUEST = 400;
+  async function climb(attempt, remember) {
+    const failures = [];
+    for (const rung of ladder(attempt.body !== null, remember)) {
+      const next = { ...attempt, encoding: rung.encoding };
+      let response;
+      try {
+        response = rung.transport === "fetch" ? await sendViaFetch(next) : await sendViaGm(next);
+      } catch (error) {
+        failures.push(error.message);
+        if (error.name === "TimeoutError") break;
+        continue;
+      }
+      if (response.status < 400) {
+        if (remember) {
+          workingTransport = rung.transport;
+          if (rung.transport === "gm") workingEncoding = rung.encoding;
+        }
+        return response;
+      }
+      failures.push(`HTTP ${response.status}`);
+      if (response.status !== BAD_REQUEST) break;
+    }
+    throw new Error(failures.join("; ") || "the request was never sent");
+  }
+  function postBinary(options) {
+    return climb({ ...options, method: "POST", encoding: "typed" }, true);
+  }
+  function getBinary(url, timeoutMs) {
+    return climb(
+      { method: "GET", url, headers: {}, body: null, encoding: "typed", timeoutMs },
+      false
+    );
+  }
+  function hostFacts() {
+    const has = (name, value) => `${name}: ${typeof value === "function" ? "yes" : "NO"}`;
+    return [
+      `host: ${_GM_info?.scriptHandler ?? "unknown"} ${_GM_info?.version ?? ""}`.trim(),
+      `script: ${_GM_info?.script?.version ?? "unknown"}`,
+      // A host that grants no unsafeWindow says nothing either way, which is not
+      // the same as saying the script is sandboxed.
+      `context: ${_unsafeWindow === void 0 ? "unknown" : _unsafeWindow === window ? "page (AdGuard-style)" : "sandbox"}`,
+      [
+        has("xmlhttpRequest", request),
+        has("getValue", _GM_getValue),
+        has("setValue", _GM_setValue),
+        has("registerMenuCommand", _GM_registerMenuCommand)
+      ].join(", ")
+    ];
+  }
+  async function probe(transport, target, timeoutMs) {
+    const started = Date.now();
+    const attempt = {
+      method: target.method,
+      url: target.url,
+      headers: target.headers,
+      body: target.method === "POST" ? new Uint8Array(0) : null,
+      encoding: "typed",
+      timeoutMs
+    };
+    try {
+      const response = transport === "fetch" ? await sendViaFetch(attempt) : await sendViaGm(attempt);
+      return `HTTP ${response.status}, ${Date.now() - started} ms`;
+    } catch (error) {
+      return `${error.message}, ${Date.now() - started} ms`;
+    }
+  }
+  const LANGUAGES = [
+    "af",
+    "ar",
+    "az",
+    "be",
+    "bg",
+    "bn",
+    "bs",
+    "ca",
+    "cs",
+    "cy",
+    "da",
+    "de",
+    "el",
+    "en",
+    "eo",
+    "es",
+    "et",
+    "eu",
+    "fa",
+    "fi",
+    "fil",
+    "fr",
+    "ga",
+    "gl",
+    "gu",
+    "he",
+    "hi",
+    "hr",
+    "hu",
+    "hy",
+    "id",
+    "is",
+    "it",
+    "ja",
+    "jv",
+    "ka",
+    "kk",
+    "km",
+    "kn",
+    "ko",
+    "ky",
+    "lo",
+    "lt",
+    "lv",
+    "mk",
+    "ml",
+    "mn",
+    "mr",
+    "ms",
+    "my",
+    "ne",
+    "nl",
+    "no",
+    "pa",
+    "pl",
+    "ps",
+    "pt",
+    "ro",
+    "ru",
+    "si",
+    "sk",
+    "sl",
+    "sq",
+    "sr",
+    "sv",
+    "sw",
+    "ta",
+    "te",
+    "th",
+    "tr",
+    "uk",
+    "ur",
+    "uz",
+    "vi",
+    "zh-CN",
+    "zh-TW",
+    "zu"
+  ];
+  let displayNames = null;
+  function labeller() {
+    if (displayNames) return displayNames;
+    try {
+      displayNames = new Intl.DisplayNames([navigator.language, "en"], { type: "language" });
+    } catch {
+      displayNames = null;
+    }
+    return displayNames;
+  }
+  function languageLabel(code) {
+    const name = labeller()?.of(code);
+    return name && name !== code ? `${name} (${code})` : code;
+  }
+  function languageOptions(blankLabel) {
+    const options = LANGUAGES.map((code) => [code, languageLabel(code)]).sort(
+      (a, b) => a[1].localeCompare(b[1])
+    );
+    return blankLabel ? [["", blankLabel], ...options] : [...options];
+  }
+  const STORAGE_KEY = "lens-translate:settings";
+  const DEFAULTS = {
+    targetLang: "ru",
+    sourceLang: "",
+    ocrLang: "",
+    region: "US",
+    timeZone: "America/New_York",
+    // The key Chromium ships with; also used by owocr and chrome-lens-ocr.
+    apiKey: "AIzaSyDr2UxVnv_U85AbhhY8XSHSIavUW0DC-sY",
+    timeoutMs: 6e4,
+    minImageSize: 50,
+    // Chromium's image budget: components/lens/lens_features.cc
+    maxArea: 15e5,
+    maxSide: 1600,
+    jpegQuality: 0.4,
+    showButton: true,
+    buttonMode: "auto",
+    hotkey: "alt",
+    fontFamily: "",
+    drawBackground: true,
+    verticalText: "auto",
+    renderMode: "canvas",
+    enabled: true,
+    minReadablePx: 12,
+    supersample: 2,
+    cacheBytes: 32 * 1024 * 1024,
+    mangaMode: false,
+    mangaBoxGrowth: 1.45,
+    outlineScale: 1,
+    eraseMode: "patch",
+    hullPadding: 0.45,
+    textAlign: "auto"
+  };
+  const GROUPS = [
+    "Languages",
+    "Layout",
+    "Erasing the original",
+    "Legibility",
+    "Behaviour",
+    "Advanced"
+  ];
+  const FIELDS = [
+    { key: "enabled", group: "Behaviour", label: "Translation enabled", type: "checkbox" },
+    {
+      key: "renderMode",
+      group: "Behaviour",
+      label: "Render as",
+      type: "select",
+      options: [
+        ["canvas", "canvas - a picture laid over the image (default)"],
+        ["overlay", "overlay - crisp text, can drift on dynamic pages"]
+      ]
+    },
+    { key: "targetLang", group: "Languages", label: "Translate to", type: "select", options: languageOptions() },
+    {
+      key: "sourceLang",
+      group: "Languages",
+      label: "Translate from",
+      type: "select",
+      options: languageOptions("Detect automatically")
+    },
+    {
+      key: "ocrLang",
+      group: "Languages",
+      label: "OCR language hint",
+      type: "select",
+      options: languageOptions("Follow the target")
+    },
+    {
+      key: "verticalText",
+      group: "Layout",
+      label: "Vertical CJK text",
+      type: "select",
+      options: [
+        ["auto", "auto - vertical only for CJK targets"],
+        ["keep", "keep - always vertical, like Chromium"],
+        ["horizontal", "horizontal - always reflow"]
+      ]
+    },
+    {
+      key: "textAlign",
+      group: "Layout",
+      label: "Text alignment",
+      type: "select",
+      options: [
+        ["auto", "auto - follow the source, like Chromium"],
+        ["left", "left"],
+        ["center", "center"],
+        ["right", "right"]
+      ]
+    },
+    {
+      key: "mangaMode",
+      group: "Layout",
+      label: "Manga mode",
+      type: "checkbox",
+      hint: "always reflow vertical text, widen the layout area, bigger minimum size"
+    },
+    {
+      key: "mangaBoxGrowth",
+      group: "Layout",
+      label: "Bubble fill (manga mode)",
+      type: "number",
+      step: "0.05",
+      hint: "how far past the detected text box to lay out; 1 = exactly the box"
+    },
+    { key: "drawBackground", group: "Erasing the original", label: "Erase the original text", type: "checkbox" },
+    {
+      key: "eraseMode",
+      group: "Erasing the original",
+      label: "How to erase",
+      type: "select",
+      options: [
+        ["patch", "patch - the server's inpainting, like Chromium"],
+        ["hull", "hull - cover the whole text area with its background colour"]
+      ]
+    },
+    {
+      key: "hullPadding",
+      group: "Erasing the original",
+      label: "Cover margin",
+      type: "range",
+      min: "0",
+      max: "2",
+      step: "0.05",
+      unit: "%",
+      hint: "how far past the text the cover extends, relative to line height"
+    },
+    {
+      key: "outlineScale",
+      group: "Legibility",
+      label: "Text outline",
+      type: "range",
+      min: "0",
+      max: "8",
+      step: "0.1",
+      unit: "x",
+      hint: "thickens the outline behind translated text; 0 removes it"
+    },
+    { key: "fontFamily", group: "Layout", label: "Font family", type: "text", hint: "blank = the page font" },
+    { key: "showButton", group: "Behaviour", label: "Show the hover button", type: "checkbox" },
+    {
+      key: "hotkey",
+      group: "Behaviour",
+      label: "Modifier + click",
+      type: "select",
+      options: [
+        ["alt", "Alt + click"],
+        ["ctrl", "Ctrl + click"],
+        ["shift", "Shift + click"],
+        ["none", "off"]
+      ]
+    },
+    {
+      key: "minReadablePx",
+      group: "Legibility",
+      label: "Minimum text size (px)",
+      type: "number",
+      hint: "enlarges text that would render too small to read; 0 disables"
+    },
+    {
+      key: "supersample",
+      group: "Legibility",
+      label: "Render sharpness",
+      type: "select",
+      options: [
+        ["1", "1x - smallest images"],
+        ["2", "2x - sharper when zoomed (default)"],
+        ["3", "3x - sharpest, heaviest"]
+      ]
+    },
+    {
+      key: "cacheBytes",
+      group: "Behaviour",
+      label: "Cache size (MB)",
+      type: "number",
+      step: "4",
+      hint: "remembers what Lens said, so re-translating costs nothing; 0 disables"
+    },
+    {
+      key: "buttonMode",
+      group: "Behaviour",
+      label: "When to show it",
+      type: "select",
+      options: [
+        ["auto", "auto - pinned on a touch screen, on hover otherwise"],
+        ["hover", "on hover only"],
+        ["pinned", "always, over the image in view"]
+      ],
+      hint: "a touch screen has no hover, and tapping the image is how you turn the page"
+    },
+    { key: "minImageSize", group: "Behaviour", label: "Ignore images under (px)", type: "number" },
+    { key: "jpegQuality", group: "Advanced", label: "Upload quality (0..1)", type: "number", step: "0.05" },
+    { key: "timeoutMs", group: "Advanced", label: "Request timeout (ms)", type: "number", step: "1000" },
+    { key: "region", group: "Advanced", label: "Client region", type: "text" },
+    { key: "timeZone", group: "Advanced", label: "Client time zone", type: "text" },
+    { key: "apiKey", group: "Advanced", label: "API key", type: "text", hint: "only change if you have your own" }
+  ];
+  let cache = null;
+  function getSettings() {
+    if (!cache) {
+      let stored = {};
+      try {
+        const raw = readStored(STORAGE_KEY);
+        if (typeof raw === "string") stored = JSON.parse(raw);
+        else if (raw && typeof raw === "object") stored = raw;
+      } catch {
+        stored = {};
+      }
+      cache = { ...DEFAULTS, ...stored };
+    }
+    return cache;
+  }
+  function saveSettings(patch) {
+    cache = { ...getSettings(), ...patch };
+    writeStored(STORAGE_KEY, cache);
+    return cache;
+  }
+  function resetSettings() {
+    cache = { ...DEFAULTS };
+    writeStored(STORAGE_KEY, cache);
+    return cache;
+  }
+  function coerce(field, raw) {
+    if (field.key === "cacheBytes") {
+      const megabytes = Number(raw);
+      return Number.isFinite(megabytes) && megabytes >= 0 ? Math.round(megabytes * 1024 * 1024) : DEFAULTS.cacheBytes;
+    }
+    if (field.key === "supersample") {
+      const value = Number(raw);
+      return value >= 1 && value <= 3 ? value : DEFAULTS.supersample;
+    }
+    if (field.type === "checkbox") return Boolean(raw);
+    if (field.type === "number" || field.type === "range") {
+      const value = Number(raw);
+      return Number.isFinite(value) ? value : DEFAULTS[field.key];
+    }
+    return String(raw).trim();
+  }
   const F = {
     AppliedFilter: {
       filterType: 1,
@@ -459,55 +1013,85 @@
     };
   }
   const LENS_ENDPOINT = "https://lensfrontend-pa.googleapis.com/v1/crupload";
-  function callLens(image, settings2) {
-    return new Promise((resolve, reject) => {
-      _GM_xmlhttpRequest({
-        method: "POST",
-        url: LENS_ENDPOINT,
-        headers: {
-          "Content-Type": "application/x-protobuf",
-          "X-Goog-Api-Key": settings2.apiKey
-        },
-        data: buildRequest(image, settings2),
-        binary: true,
-        responseType: "arraybuffer",
-        timeout: settings2.timeoutMs,
-        onload: (response) => {
-          if (response.status !== 200) {
-            reject(new Error(`Lens returned HTTP ${response.status}`));
-            return;
-          }
-          try {
-            resolve(parseResponse(new Uint8Array(response.response)));
-          } catch (e) {
-            reject(new Error(`Could not parse the Lens response: ${e.message}`));
-          }
-        },
-        onerror: () => reject(new Error("Network error talking to Lens")),
-        ontimeout: () => reject(new Error("Lens timed out"))
-      });
+  const IMAGE_TIMEOUT_MS = 3e4;
+  async function callLens(image, settings2) {
+    const response = await postBinary({
+      url: LENS_ENDPOINT,
+      headers: {
+        "Content-Type": "application/x-protobuf",
+        "X-Goog-Api-Key": settings2.apiKey
+      },
+      body: buildRequest(image, settings2),
+      timeoutMs: settings2.timeoutMs
     });
+    try {
+      return parseResponse(response.bytes);
+    } catch (e) {
+      throw new Error(`Could not parse the Lens response: ${e.message}`);
+    }
   }
-  function fetchImageBlob(url) {
-    return new Promise((resolve, reject) => {
-      _GM_xmlhttpRequest({
-        method: "GET",
-        url,
-        responseType: "blob",
-        onload: (response) => {
-          if (response.status && response.status >= 400) {
-            reject(new Error(`Image fetch returned HTTP ${response.status}`));
-            return;
+  async function fetchImageBlob(url) {
+    let response;
+    try {
+      response = await getBinary(url, IMAGE_TIMEOUT_MS);
+    } catch (error) {
+      const hint = hostName() === "Tampermonkey" ? " If Tampermonkey blocked this domain, clear it under Settings > Security > Blocked domains." : "";
+      throw new Error(`Could not fetch the image (${error.message}).${hint}`);
+    }
+    return new Blob([response.bytes], { type: response.contentType });
+  }
+  const CONTROL_URL = "https://fonts.googleapis.com/css?family=Roboto";
+  const PROBE_TIMEOUT_MS = 12e3;
+  const TRANSPORTS = ["gm", "fetch"];
+  function targets() {
+    const settings2 = getSettings();
+    return [
+      [
+        "lens",
+        {
+          url: LENS_ENDPOINT,
+          method: "POST",
+          headers: {
+            "Content-Type": "application/x-protobuf",
+            "X-Goog-Api-Key": settings2.apiKey
           }
-          resolve(response.response);
-        },
-        onerror: () => reject(
-          new Error(
-            "Could not fetch the image. If Tampermonkey blocked this domain, clear it under Settings > Security > Blocked domains."
-          )
-        )
-      });
-    });
+        }
+      ],
+      ["control", { url: CONTROL_URL, method: "GET", headers: {} }]
+    ];
+  }
+  const answered = (result) => result.startsWith("HTTP");
+  function verdict(results) {
+    const gmLens = answered(results.get("gm -> lens") ?? "");
+    const fetchLens = answered(results.get("fetch -> lens") ?? "");
+    const anyControl = answered(results.get("gm -> control") ?? "") || answered(results.get("fetch -> control") ?? "");
+    if (gmLens && fetchLens) {
+      return "Lens is reachable both ways. If translating still fails, the problem is past the transport - send this report with the exact error the toast shows.";
+    }
+    if (fetchLens) {
+      return "Lens is reachable, but this host's own transport is not. That is handled: the script falls back to fetch, which costs one failed attempt per page and sends an Origin header GM_xmlhttpRequest would not.";
+    }
+    if (gmLens) {
+      return "Lens is reachable through the host's transport, which is the path the script prefers anyway.";
+    }
+    if (anyControl) {
+      return 'Nothing reaches Lens, but the control host answers. Something on this device is blocking lensfrontend-pa.googleapis.com specifically - check the DNS filtering and the HTTPS filtering exclusions, and search the activity log for "googleapis".';
+    }
+    return "Nothing reaches anything, the control host included. The device has no working connection from this page.";
+  }
+  async function diagnose() {
+    const lines = [...hostFacts(), `page: ${window.location.origin}`, ""];
+    const results = /* @__PURE__ */ new Map();
+    for (const [label, target] of targets()) {
+      for (const transport of TRANSPORTS) {
+        const key = `${transport} -> ${label}`;
+        const result = await probe(transport, target, PROBE_TIMEOUT_MS);
+        results.set(key, result);
+        lines.push(`${key.padEnd(16)} ${result}`);
+      }
+    }
+    lines.push("", verdict(results));
+    return lines.join("\n");
   }
   function targetSize(width, height, { maxArea, maxSide }) {
     if (width * height <= maxArea || width <= maxSide && height <= maxSide) {
@@ -554,21 +1138,21 @@
   }
   function loadWithCors(url) {
     return new Promise((resolve, reject) => {
-      const probe = new Image();
-      probe.crossOrigin = "anonymous";
-      probe.decoding = "sync";
-      probe.onload = () => resolve(probe);
-      probe.onerror = () => reject(new Error("CORS load failed"));
-      probe.src = url;
+      const probe2 = new Image();
+      probe2.crossOrigin = "anonymous";
+      probe2.decoding = "sync";
+      probe2.onload = () => resolve(probe2);
+      probe2.onerror = () => reject(new Error("CORS load failed"));
+      probe2.src = url;
     });
   }
   async function acquireSource(img) {
-    const probe = document.createElement("canvas");
-    probe.width = 1;
-    probe.height = 1;
+    const probe2 = document.createElement("canvas");
+    probe2.width = 1;
+    probe2.height = 1;
     const readable = (candidate) => {
       try {
-        const ctx = probe.getContext("2d");
+        const ctx = probe2.getContext("2d");
         if (!ctx) return false;
         ctx.drawImage(candidate, 0, 0, 1, 1);
         ctx.getImageData(0, 0, 1, 1);
@@ -730,7 +1314,7 @@
     const value = map[alignment] ?? "center";
     return rtl && value === "flex-start" ? "flex-end" : value;
   }
-  const styles = "/* Lives inside a shadow root, so these selectors compete with nothing. The\r\n   :host is a fixed, click-through, full-viewport layer; everything here is\r\n   positioned in viewport coordinates. */\r\n\r\n:host {\r\n  font: 14px/1.45 system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;\r\n  color: #1a1a1a;\r\n}\r\n\r\n#lt-button,\r\n#lt-gear {\r\n  position: absolute;\r\n  width: 32px;\r\n  height: 32px;\r\n  background: rgba(0, 0, 0, 0.6);\r\n  border-radius: 50%;\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  opacity: 0;\r\n  pointer-events: none;\r\n  cursor: pointer;\r\n  transition: opacity 0.2s ease-in-out, transform 0.15s ease-in-out, background 0.2s;\r\n  transform: scale(0.9);\r\n  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);\r\n  border: 1px solid rgba(255, 255, 255, 0.2);\r\n}\r\n#lt-button:hover,\r\n#lt-gear:hover {\r\n  background: rgba(0, 0, 0, 0.85);\r\n  transform: scale(1.05);\r\n}\r\n\r\n/* Appears a beat after the main button, so a passing cursor does not summon\r\n   two controls at once. */\r\n#lt-gear {\r\n  width: 26px;\r\n  height: 26px;\r\n}\r\n#lt-button.lt-busy svg {\r\n  animation: lt-spin 1s linear infinite;\r\n}\r\n#lt-button.lt-active {\r\n  background: rgba(20, 110, 60, 0.9);\r\n}\r\n#lt-button.lt-error {\r\n  background: rgba(170, 30, 30, 0.9);\r\n}\r\n@keyframes lt-spin {\r\n  to {\r\n    transform: rotate(360deg);\r\n  }\r\n}\r\n\r\n.lt-layer {\r\n  position: absolute;\r\n  overflow: hidden;\r\n  pointer-events: none;\r\n}\r\n.lt-bg {\r\n  position: absolute;\r\n  max-width: none;\r\n}\r\n.lt-line {\r\n  position: absolute;\r\n  display: flex;\r\n  align-items: center;\r\n  white-space: pre;\r\n  line-height: 1;\r\n  transform-origin: center center;\r\n  margin: 0;\r\n  padding: 0;\r\n}\r\n\r\n#lt-toast {\r\n  position: absolute;\r\n  bottom: 16px;\r\n  left: 50%;\r\n  transform: translateX(-50%);\r\n  background: rgba(0, 0, 0, 0.88);\r\n  color: #fff;\r\n  padding: 8px 16px;\r\n  border-radius: 8px;\r\n  font-size: 13px;\r\n  pointer-events: none;\r\n  opacity: 0;\r\n  transition: opacity 0.2s;\r\n  max-width: 70vw;\r\n}\r\n#lt-toast.lt-show {\r\n  opacity: 1;\r\n}\r\n\r\n/* ------------------------------------------------------------- settings */\r\n\r\n.lt-panel-backdrop {\r\n  position: absolute;\r\n  inset: 0;\r\n  background: rgba(0, 0, 0, 0.5);\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  pointer-events: auto;\r\n}\r\n.lt-panel {\r\n  background: #fff;\r\n  width: min(560px, 92vw);\r\n  max-height: 86vh;\r\n  display: flex;\r\n  flex-direction: column;\r\n  border-radius: 12px;\r\n  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.4);\r\n  overflow: hidden;\r\n}\r\n.lt-panel-head,\r\n.lt-panel-foot {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: 8px;\r\n  padding: 12px 18px;\r\n  flex: none;\r\n}\r\n.lt-panel-head {\r\n  border-bottom: 1px solid #e6e6e6;\r\n  justify-content: space-between;\r\n  font-size: 15px;\r\n  font-weight: 600;\r\n}\r\n.lt-panel-foot {\r\n  border-top: 1px solid #e6e6e6;\r\n}\r\n.lt-spacer {\r\n  flex: 1;\r\n}\r\n.lt-panel-body {\r\n  padding: 10px 18px 16px;\r\n  overflow-y: auto;\r\n}\r\n\r\n.lt-row {\r\n  display: grid;\r\n  grid-template-columns: 190px minmax(0, 1fr);\r\n  align-items: center;\r\n  gap: 2px 14px;\r\n  padding: 7px 0;\r\n}\r\n.lt-label {\r\n  color: #333;\r\n}\r\n.lt-hint {\r\n  grid-column: 2;\r\n  color: #808080;\r\n  font-size: 12px;\r\n}\r\n.lt-input {\r\n  font: inherit;\r\n  padding: 7px 9px;\r\n  border: 1px solid #ccc;\r\n  border-radius: 6px;\r\n  background: #fff;\r\n  color: #1a1a1a;\r\n  min-width: 0;\r\n  width: 100%;\r\n  box-sizing: border-box;\r\n}\r\n.lt-input[type='checkbox'] {\r\n  justify-self: start;\r\n  width: 17px;\r\n  height: 17px;\r\n  padding: 0;\r\n}\r\n.lt-x {\r\n  border: 0;\r\n  background: transparent;\r\n  font-size: 22px;\r\n  line-height: 1;\r\n  cursor: pointer;\r\n  color: #666;\r\n  padding: 0 4px;\r\n}\r\n.lt-btn {\r\n  font: inherit;\r\n  padding: 7px 15px;\r\n  border-radius: 7px;\r\n  cursor: pointer;\r\n  border: 1px solid #ccc;\r\n  background: #f5f5f5;\r\n  color: #1a1a1a;\r\n}\r\n.lt-btn.lt-primary {\r\n  background: #1a73e8;\r\n  border-color: #1a73e8;\r\n  color: #fff;\r\n}\r\n.lt-btn.lt-ghost:hover {\r\n  background: #eaeaea;\r\n}\r\n\r\n@media (prefers-color-scheme: dark) {\r\n  .lt-panel {\r\n    background: #1f1f22;\r\n    color: #ececec;\r\n  }\r\n  .lt-panel-head,\r\n  .lt-panel-foot {\r\n    border-color: #35353a;\r\n  }\r\n  .lt-label {\r\n    color: #d6d6d6;\r\n  }\r\n  .lt-hint {\r\n    color: #9a9a9a;\r\n  }\r\n  .lt-input {\r\n    background: #2a2a2e;\r\n    border-color: #45454c;\r\n    color: #ececec;\r\n  }\r\n  .lt-btn {\r\n    background: #2e2e33;\r\n    border-color: #45454c;\r\n    color: #ececec;\r\n  }\r\n  .lt-btn.lt-ghost:hover {\r\n    background: #3a3a40;\r\n  }\r\n  .lt-x {\r\n    color: #bbb;\r\n  }\r\n}\r\n\n/* Outline slider with its live sample. */\n.lt-slider {\n  display: flex;\n  align-items: center;\n  gap: 10px;\n  min-width: 0;\n}\n.lt-slider input[type='range'] {\n  flex: 1;\n  width: auto;\n  padding: 0;\n  border: 0;\n  background: transparent;\n  accent-color: #1a73e8;\n}\n.lt-readout {\n  min-width: 42px;\n  text-align: right;\n  font-variant-numeric: tabular-nums;\n  color: #666;\n}\n.lt-preview {\n  grid-column: 2;\n  width: 100%;\n  height: auto;\n  border-radius: 6px;\n  border: 1px solid #ddd;\n  margin-top: 6px;\n}\n@media (prefers-color-scheme: dark) {\n  .lt-readout {\n    color: #aaa;\n  }\n  .lt-preview {\n    border-color: #45454c;\n  }\n}\n\n/* Section headings. */\n.lt-group {\n  grid-column: 1 / -1;\n  margin: 16px 0 4px;\n  padding-bottom: 5px;\n  border-bottom: 1px solid #e6e6e6;\n  font-size: 11px;\n  font-weight: 600;\n  letter-spacing: 0.07em;\n  text-transform: uppercase;\n  color: #888;\n}\n.lt-group:first-child {\n  margin-top: 4px;\n}\n@media (prefers-color-scheme: dark) {\n  .lt-group {\n    border-color: #35353a;\n    color: #8c8c96;\n  }\n}\n";
+  const styles = "/* Lives inside a shadow root, so these selectors compete with nothing. The\n   :host is a fixed, click-through, full-viewport layer; everything here is\n   positioned in viewport coordinates. */\n\n:host {\n  font: 14px/1.45 system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;\n  color: #1a1a1a;\n}\n\n#lt-button,\n#lt-gear {\n  position: absolute;\n  width: 32px;\n  height: 32px;\n  background: rgba(0, 0, 0, 0.6);\n  border-radius: 50%;\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  opacity: 0;\n  pointer-events: none;\n  cursor: pointer;\n  transition: opacity 0.2s ease-in-out, transform 0.15s ease-in-out, background 0.2s;\n  transform: scale(0.9);\n  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);\n  border: 1px solid rgba(255, 255, 255, 0.2);\n}\n#lt-button:hover,\n#lt-gear:hover {\n  background: rgba(0, 0, 0, 0.85);\n  transform: scale(1.05);\n}\n\n/* Appears a beat after the main button, so a passing cursor does not summon\n   two controls at once. */\n#lt-gear {\n  width: 26px;\n  height: 26px;\n}\n#lt-button.lt-busy svg {\n  animation: lt-spin 1s linear infinite;\n}\n#lt-button.lt-active {\n  background: rgba(20, 110, 60, 0.9);\n}\n#lt-button.lt-error {\n  background: rgba(170, 30, 30, 0.9);\n}\n@keyframes lt-spin {\n  to {\n    transform: rotate(360deg);\n  }\n}\n\n.lt-layer {\n  position: absolute;\n  overflow: hidden;\n  pointer-events: none;\n}\n.lt-bg {\n  position: absolute;\n  max-width: none;\n}\n.lt-line {\n  position: absolute;\n  display: flex;\n  align-items: center;\n  white-space: pre;\n  line-height: 1;\n  transform-origin: center center;\n  margin: 0;\n  padding: 0;\n}\n\n#lt-toast {\n  position: absolute;\n  bottom: 16px;\n  left: 50%;\n  transform: translateX(-50%);\n  background: rgba(0, 0, 0, 0.88);\n  color: #fff;\n  padding: 8px 16px;\n  border-radius: 8px;\n  font-size: 13px;\n  pointer-events: none;\n  opacity: 0;\n  transition: opacity 0.2s;\n  max-width: 70vw;\n}\n#lt-toast.lt-show {\n  opacity: 1;\n}\n\n/* ------------------------------------------------------------- settings */\n\n.lt-panel-backdrop {\n  position: absolute;\n  inset: 0;\n  background: rgba(0, 0, 0, 0.5);\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  pointer-events: auto;\n}\n.lt-panel {\n  background: #fff;\n  width: min(560px, 92vw);\n  max-height: 86vh;\n  display: flex;\n  flex-direction: column;\n  border-radius: 12px;\n  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.4);\n  overflow: hidden;\n}\n.lt-panel-head,\n.lt-panel-foot {\n  display: flex;\n  align-items: center;\n  gap: 8px;\n  padding: 12px 18px;\n  flex: none;\n}\n.lt-panel-head {\n  border-bottom: 1px solid #e6e6e6;\n  justify-content: space-between;\n  font-size: 15px;\n  font-weight: 600;\n}\n.lt-panel-foot {\n  border-top: 1px solid #e6e6e6;\n}\n.lt-spacer {\n  flex: 1;\n}\n.lt-panel-body {\n  padding: 10px 18px 16px;\n  overflow-y: auto;\n}\n\n.lt-row {\n  display: grid;\n  grid-template-columns: 190px minmax(0, 1fr);\n  align-items: center;\n  gap: 2px 14px;\n  padding: 7px 0;\n}\n.lt-label {\n  color: #333;\n}\n.lt-hint {\n  grid-column: 2;\n  color: #808080;\n  font-size: 12px;\n}\n.lt-input {\n  font: inherit;\n  padding: 7px 9px;\n  border: 1px solid #ccc;\n  border-radius: 6px;\n  background: #fff;\n  color: #1a1a1a;\n  min-width: 0;\n  width: 100%;\n  box-sizing: border-box;\n}\n.lt-input[type='checkbox'] {\n  justify-self: start;\n  width: 17px;\n  height: 17px;\n  padding: 0;\n}\n.lt-x {\n  border: 0;\n  background: transparent;\n  font-size: 22px;\n  line-height: 1;\n  cursor: pointer;\n  color: #666;\n  padding: 0 4px;\n}\n.lt-btn {\n  font: inherit;\n  padding: 7px 15px;\n  border-radius: 7px;\n  cursor: pointer;\n  border: 1px solid #ccc;\n  background: #f5f5f5;\n  color: #1a1a1a;\n}\n.lt-btn.lt-primary {\n  background: #1a73e8;\n  border-color: #1a73e8;\n  color: #fff;\n}\n.lt-btn.lt-ghost:hover {\n  background: #eaeaea;\n}\n\n@media (prefers-color-scheme: dark) {\n  .lt-panel {\n    background: #1f1f22;\n    color: #ececec;\n  }\n  .lt-panel-head,\n  .lt-panel-foot {\n    border-color: #35353a;\n  }\n  .lt-label {\n    color: #d6d6d6;\n  }\n  .lt-hint {\n    color: #9a9a9a;\n  }\n  .lt-input {\n    background: #2a2a2e;\n    border-color: #45454c;\n    color: #ececec;\n  }\n  .lt-btn {\n    background: #2e2e33;\n    border-color: #45454c;\n    color: #ececec;\n  }\n  .lt-btn.lt-ghost:hover {\n    background: #3a3a40;\n  }\n  .lt-x {\n    color: #bbb;\n  }\n}\n\n/* Outline slider with its live sample. */\n.lt-slider {\n  display: flex;\n  align-items: center;\n  gap: 10px;\n  min-width: 0;\n}\n.lt-slider input[type='range'] {\n  flex: 1;\n  width: auto;\n  padding: 0;\n  border: 0;\n  background: transparent;\n  accent-color: #1a73e8;\n}\n.lt-readout {\n  min-width: 42px;\n  text-align: right;\n  font-variant-numeric: tabular-nums;\n  color: #666;\n}\n.lt-preview {\n  grid-column: 2;\n  width: 100%;\n  height: auto;\n  border-radius: 6px;\n  border: 1px solid #ddd;\n  margin-top: 6px;\n}\n@media (prefers-color-scheme: dark) {\n  .lt-readout {\n    color: #aaa;\n  }\n  .lt-preview {\n    border-color: #45454c;\n  }\n}\n\n/* Section headings. */\n.lt-group {\n  grid-column: 1 / -1;\n  margin: 16px 0 4px;\n  padding-bottom: 5px;\n  border-bottom: 1px solid #e6e6e6;\n  font-size: 11px;\n  font-weight: 600;\n  letter-spacing: 0.07em;\n  text-transform: uppercase;\n  color: #888;\n}\n.lt-group:first-child {\n  margin-top: 4px;\n}\n@media (prefers-color-scheme: dark) {\n  .lt-group {\n    border-color: #35353a;\n    color: #8c8c96;\n  }\n}\n\n/* Menu commands, for a host that has no menu of its own. */\n.lt-actions {\n  display: flex;\n  flex-wrap: wrap;\n  gap: 8px;\n  padding: 4px 0 0;\n}\n.lt-note {\n  color: #808080;\n  font-size: 12px;\n  padding-top: 8px;\n}\n@media (prefers-color-scheme: dark) {\n  .lt-note {\n    color: #9a9a9a;\n  }\n}\n\n/* The diagnostics report: fixed width, so columns line up as written. */\n.lt-panel-report {\n  max-width: 560px;\n}\n.lt-report {\n  margin: 0;\n  padding: 14px 18px;\n  overflow: auto;\n  white-space: pre-wrap;\n  word-break: break-word;\n  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;\n  font-size: 12px;\n  line-height: 1.5;\n  user-select: text;\n  -webkit-user-select: text;\n}\n";
   const HOST_ID = "lens-translate-root";
   let shadow = null;
   function uiRoot() {
@@ -1084,6 +1668,25 @@
     const pad = Number.isFinite(thinnest) ? thinnest * settings2.hullPadding : 0;
     fillHull(ctx, convexHull(points), argbToCss(style.bgColor), pad);
   }
+  function nudgeInside(draw, box, line) {
+    const radians = line.angle * DEG;
+    const cos = Math.abs(Math.cos(radians));
+    const sin = Math.abs(Math.sin(radians));
+    const halfW = (box.w * cos + box.h * sin) / 2;
+    const halfH = (box.w * sin + box.h * cos) / 2;
+    const shift = (centre, half, limit, fromEnd) => {
+      if (half * 2 >= limit) return fromEnd ? limit - half - centre : half - centre;
+      if (centre - half < 0) return half - centre;
+      if (centre + half > limit) return limit - half - centre;
+      return 0;
+    };
+    const dx = shift(line.cx, halfW, draw.width, line.rtl);
+    const dy = shift(line.cy, halfH, draw.height, false);
+    if (dx === 0 && dy === 0) return;
+    const c = Math.cos(radians);
+    const sn = Math.sin(radians);
+    draw.ctx.translate(dx * c + dy * sn, dy * c - dx * sn);
+  }
   async function drawLine(draw, block, line, nextLine, settings2, backgroundOnly = false, skipBackground = false) {
     const geometry = line.geometry;
     if (!geometry || geometry.w <= 0 || geometry.h <= 0) return;
@@ -1125,6 +1728,7 @@
       const advance = ctx.measureText(text2).width;
       const drawW = enlarged ? Math.min(Math.max(boxW, advance + size * 0.4), width) : boxW;
       const drawH = enlarged ? Math.min(Math.max(boxH, size * 1.35), height) : boxH;
+      nudgeInside(draw, { w: drawW, h: drawH }, { cx, cy, angle: geometry.angle, rtl: isRtl(block) });
       if (enlarged && settings2.drawBackground && !skipBackground) {
         ctx.fillStyle = argbToCss(line.bgColor);
         ctx.fillRect(-drawW / 2, -drawH / 2, drawW, drawH);
@@ -1191,6 +1795,8 @@
   const covers = /* @__PURE__ */ new WeakMap();
   const live = /* @__PURE__ */ new Set();
   const isCovered = (img) => covers.has(img);
+  const COVER_MARK = "data-lens-translate";
+  const isCover = (node) => node.hasAttribute(COVER_MARK);
   function place(cover, img) {
     cover.style.left = `${img.offsetLeft}px`;
     cover.style.top = `${img.offsetTop}px`;
@@ -1203,7 +1809,7 @@
     if (!parent) return false;
     const element = document.createElement("img");
     element.src = blobUrl;
-    element.setAttribute("data-lens-translate", "");
+    element.setAttribute(COVER_MARK, "");
     element.setAttribute(
       "style",
       [
@@ -1258,331 +1864,6 @@
       count += 1;
     }
     return count;
-  }
-  const LANGUAGES = [
-    "af",
-    "ar",
-    "az",
-    "be",
-    "bg",
-    "bn",
-    "bs",
-    "ca",
-    "cs",
-    "cy",
-    "da",
-    "de",
-    "el",
-    "en",
-    "eo",
-    "es",
-    "et",
-    "eu",
-    "fa",
-    "fi",
-    "fil",
-    "fr",
-    "ga",
-    "gl",
-    "gu",
-    "he",
-    "hi",
-    "hr",
-    "hu",
-    "hy",
-    "id",
-    "is",
-    "it",
-    "ja",
-    "jv",
-    "ka",
-    "kk",
-    "km",
-    "kn",
-    "ko",
-    "ky",
-    "lo",
-    "lt",
-    "lv",
-    "mk",
-    "ml",
-    "mn",
-    "mr",
-    "ms",
-    "my",
-    "ne",
-    "nl",
-    "no",
-    "pa",
-    "pl",
-    "ps",
-    "pt",
-    "ro",
-    "ru",
-    "si",
-    "sk",
-    "sl",
-    "sq",
-    "sr",
-    "sv",
-    "sw",
-    "ta",
-    "te",
-    "th",
-    "tr",
-    "uk",
-    "ur",
-    "uz",
-    "vi",
-    "zh-CN",
-    "zh-TW",
-    "zu"
-  ];
-  let displayNames = null;
-  function labeller() {
-    if (displayNames) return displayNames;
-    try {
-      displayNames = new Intl.DisplayNames([navigator.language, "en"], { type: "language" });
-    } catch {
-      displayNames = null;
-    }
-    return displayNames;
-  }
-  function languageLabel(code) {
-    const name = labeller()?.of(code);
-    return name && name !== code ? `${name} (${code})` : code;
-  }
-  function languageOptions(blankLabel) {
-    const options = LANGUAGES.map((code) => [code, languageLabel(code)]).sort(
-      (a, b) => a[1].localeCompare(b[1])
-    );
-    return blankLabel ? [["", blankLabel], ...options] : [...options];
-  }
-  const STORAGE_KEY = "lens-translate:settings";
-  const DEFAULTS = {
-    targetLang: "ru",
-    sourceLang: "",
-    ocrLang: "",
-    region: "US",
-    timeZone: "America/New_York",
-    // The key Chromium ships with; also used by owocr and chrome-lens-ocr.
-    apiKey: "AIzaSyDr2UxVnv_U85AbhhY8XSHSIavUW0DC-sY",
-    timeoutMs: 6e4,
-    minImageSize: 50,
-    // Chromium's image budget: components/lens/lens_features.cc
-    maxArea: 15e5,
-    maxSide: 1600,
-    jpegQuality: 0.4,
-    showButton: true,
-    hotkey: "alt",
-    fontFamily: "",
-    drawBackground: true,
-    verticalText: "auto",
-    renderMode: "canvas",
-    enabled: true,
-    minReadablePx: 12,
-    supersample: 2,
-    cacheBytes: 32 * 1024 * 1024,
-    mangaMode: false,
-    mangaBoxGrowth: 1.45,
-    outlineScale: 1,
-    eraseMode: "patch",
-    hullPadding: 0.45,
-    textAlign: "auto"
-  };
-  const GROUPS = [
-    "Languages",
-    "Layout",
-    "Erasing the original",
-    "Legibility",
-    "Behaviour",
-    "Advanced"
-  ];
-  const FIELDS = [
-    { key: "enabled", group: "Behaviour", label: "Translation enabled", type: "checkbox" },
-    {
-      key: "renderMode",
-      group: "Behaviour",
-      label: "Render as",
-      type: "select",
-      options: [
-        ["canvas", "canvas - a picture laid over the image (default)"],
-        ["overlay", "overlay - crisp text, can drift on dynamic pages"]
-      ]
-    },
-    { key: "targetLang", group: "Languages", label: "Translate to", type: "select", options: languageOptions() },
-    {
-      key: "sourceLang",
-      group: "Languages",
-      label: "Translate from",
-      type: "select",
-      options: languageOptions("Detect automatically")
-    },
-    {
-      key: "ocrLang",
-      group: "Languages",
-      label: "OCR language hint",
-      type: "select",
-      options: languageOptions("Follow the target")
-    },
-    {
-      key: "verticalText",
-      group: "Layout",
-      label: "Vertical CJK text",
-      type: "select",
-      options: [
-        ["auto", "auto - vertical only for CJK targets"],
-        ["keep", "keep - always vertical, like Chromium"],
-        ["horizontal", "horizontal - always reflow"]
-      ]
-    },
-    {
-      key: "textAlign",
-      group: "Layout",
-      label: "Text alignment",
-      type: "select",
-      options: [
-        ["auto", "auto - follow the source, like Chromium"],
-        ["left", "left"],
-        ["center", "center"],
-        ["right", "right"]
-      ]
-    },
-    {
-      key: "mangaMode",
-      group: "Layout",
-      label: "Manga mode",
-      type: "checkbox",
-      hint: "always reflow vertical text, widen the layout area, bigger minimum size"
-    },
-    {
-      key: "mangaBoxGrowth",
-      group: "Layout",
-      label: "Bubble fill (manga mode)",
-      type: "number",
-      step: "0.05",
-      hint: "how far past the detected text box to lay out; 1 = exactly the box"
-    },
-    { key: "drawBackground", group: "Erasing the original", label: "Erase the original text", type: "checkbox" },
-    {
-      key: "eraseMode",
-      group: "Erasing the original",
-      label: "How to erase",
-      type: "select",
-      options: [
-        ["patch", "patch - the server's inpainting, like Chromium"],
-        ["hull", "hull - cover the whole text area with its background colour"]
-      ]
-    },
-    {
-      key: "hullPadding",
-      group: "Erasing the original",
-      label: "Cover margin",
-      type: "range",
-      min: "0",
-      max: "2",
-      step: "0.05",
-      unit: "%",
-      hint: "how far past the text the cover extends, relative to line height"
-    },
-    {
-      key: "outlineScale",
-      group: "Legibility",
-      label: "Text outline",
-      type: "range",
-      min: "0",
-      max: "8",
-      step: "0.1",
-      unit: "x",
-      hint: "thickens the outline behind translated text; 0 removes it"
-    },
-    { key: "fontFamily", group: "Layout", label: "Font family", type: "text", hint: "blank = the page font" },
-    { key: "showButton", group: "Behaviour", label: "Show the hover button", type: "checkbox" },
-    {
-      key: "hotkey",
-      group: "Behaviour",
-      label: "Modifier + click",
-      type: "select",
-      options: [
-        ["alt", "Alt + click"],
-        ["ctrl", "Ctrl + click"],
-        ["shift", "Shift + click"],
-        ["none", "off"]
-      ]
-    },
-    {
-      key: "minReadablePx",
-      group: "Legibility",
-      label: "Minimum text size (px)",
-      type: "number",
-      hint: "enlarges text that would render too small to read; 0 disables"
-    },
-    {
-      key: "supersample",
-      group: "Legibility",
-      label: "Render sharpness",
-      type: "select",
-      options: [
-        ["1", "1x - smallest images"],
-        ["2", "2x - sharper when zoomed (default)"],
-        ["3", "3x - sharpest, heaviest"]
-      ]
-    },
-    {
-      key: "cacheBytes",
-      group: "Behaviour",
-      label: "Cache size (MB)",
-      type: "number",
-      step: "4",
-      hint: "remembers what Lens said, so re-translating costs nothing; 0 disables"
-    },
-    { key: "minImageSize", group: "Behaviour", label: "Ignore images under (px)", type: "number" },
-    { key: "jpegQuality", group: "Advanced", label: "Upload quality (0..1)", type: "number", step: "0.05" },
-    { key: "timeoutMs", group: "Advanced", label: "Request timeout (ms)", type: "number", step: "1000" },
-    { key: "region", group: "Advanced", label: "Client region", type: "text" },
-    { key: "timeZone", group: "Advanced", label: "Client time zone", type: "text" },
-    { key: "apiKey", group: "Advanced", label: "API key", type: "text", hint: "only change if you have your own" }
-  ];
-  let cache = null;
-  function getSettings() {
-    if (!cache) {
-      let stored = {};
-      try {
-        const raw = _GM_getValue(STORAGE_KEY, null);
-        if (typeof raw === "string") stored = JSON.parse(raw);
-        else if (raw && typeof raw === "object") stored = raw;
-      } catch {
-        stored = {};
-      }
-      cache = { ...DEFAULTS, ...stored };
-    }
-    return cache;
-  }
-  function saveSettings(patch) {
-    cache = { ...getSettings(), ...patch };
-    _GM_setValue(STORAGE_KEY, cache);
-    return cache;
-  }
-  function resetSettings() {
-    cache = { ...DEFAULTS };
-    _GM_setValue(STORAGE_KEY, cache);
-    return cache;
-  }
-  function coerce(field, raw) {
-    if (field.key === "cacheBytes") {
-      const megabytes = Number(raw);
-      return Number.isFinite(megabytes) && megabytes >= 0 ? Math.round(megabytes * 1024 * 1024) : DEFAULTS.cacheBytes;
-    }
-    if (field.key === "supersample") {
-      const value = Number(raw);
-      return value >= 1 && value <= 3 ? value : DEFAULTS.supersample;
-    }
-    if (field.type === "checkbox") return Boolean(raw);
-    if (field.type === "number" || field.type === "range") {
-      const value = Number(raw);
-      return Number.isFinite(value) ? value : DEFAULTS[field.key];
-    }
-    return String(raw).trim();
   }
   function weigh(blocks) {
     let bytes2 = 0;
@@ -1720,7 +2001,7 @@
     entries: entries.size + renders.size,
     bytes: totalBytes + renderBytes
   });
-  let panel = null;
+  let panel$1 = null;
   function drawOutlinePreview(canvas, scale) {
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
@@ -1853,6 +2134,34 @@
     }
     return row;
   }
+  function buildActions() {
+    const commands2 = panelCommands();
+    if (!commands2.length) return null;
+    const fragment = document.createDocumentFragment();
+    const heading = document.createElement("div");
+    heading.className = "lt-group";
+    heading.textContent = "Actions";
+    fragment.appendChild(heading);
+    const row = document.createElement("div");
+    row.className = "lt-actions";
+    for (const command of commands2) {
+      const button2 = document.createElement("button");
+      button2.type = "button";
+      button2.className = "lt-btn lt-ghost";
+      button2.textContent = command.label;
+      button2.addEventListener("click", () => {
+        closeSettings();
+        command.run();
+      });
+      row.appendChild(button2);
+    }
+    fragment.appendChild(row);
+    const note = document.createElement("div");
+    note.className = "lt-note";
+    note.textContent = "These run at once, and discard anything unsaved above.";
+    fragment.appendChild(note);
+    return fragment;
+  }
   function collect(root2) {
     const patch = {};
     for (const field of FIELDS) {
@@ -1866,11 +2175,11 @@
     return patch;
   }
   function closeSettings() {
-    panel?.remove();
-    panel = null;
+    panel$1?.remove();
+    panel$1 = null;
   }
-  function openSettings(onSaved) {
-    if (panel) {
+  function openSettings(onSaved2) {
+    if (panel$1) {
       closeSettings();
       return;
     }
@@ -1891,18 +2200,20 @@
         <button class="lt-btn lt-primary" type="button" data-act="save">Save</button>
       </footer>
     </div>`;
-    panel = backdrop;
-    const body = backdrop.querySelector(".lt-panel-body");
-    if (body) {
+    panel$1 = backdrop;
+    const body2 = backdrop.querySelector(".lt-panel-body");
+    if (body2) {
       for (const group of GROUPS) {
         const fields = FIELDS.filter((field) => field.group === group);
         if (!fields.length) continue;
         const heading = document.createElement("div");
         heading.className = "lt-group";
         heading.textContent = group;
-        body.appendChild(heading);
-        for (const field of fields) body.appendChild(buildField(field, settings2));
+        body2.appendChild(heading);
+        for (const field of fields) body2.appendChild(buildField(field, settings2));
       }
+      const actions = buildActions();
+      if (actions) body2.appendChild(actions);
     }
     backdrop.addEventListener("click", (event) => {
       const target = event.target;
@@ -1913,17 +2224,17 @@
       if (action === "save") {
         const saved = saveSettings(collect(backdrop));
         closeSettings();
-        onSaved?.(saved);
+        onSaved2?.(saved);
       } else if (action === "reset") {
         const fresh = resetSettings();
         closeSettings();
-        onSaved?.(fresh);
-        openSettings(onSaved);
+        onSaved2?.(fresh);
+        openSettings(onSaved2);
       }
       return void 0;
     });
     const onKey = (event) => {
-      if (!panel) {
+      if (!panel$1) {
         document.removeEventListener("keydown", onKey, true);
         return;
       }
@@ -1936,6 +2247,62 @@
     document.addEventListener("keydown", onKey, true);
     uiRoot().appendChild(backdrop);
     backdrop.querySelector(".lt-input")?.focus();
+  }
+  let panel = null;
+  let body = null;
+  function closeReport() {
+    panel?.remove();
+    panel = null;
+    body = null;
+  }
+  function openReport(text2) {
+    if (body) {
+      body.textContent = text2;
+      return;
+    }
+    const backdrop = document.createElement("div");
+    backdrop.className = "lt-panel-backdrop";
+    backdrop.innerHTML = `
+    <div class="lt-panel lt-panel-report" role="dialog" aria-label="Lens Translate diagnostics">
+      <header class="lt-panel-head">
+        <strong>Diagnostics</strong>
+        <button class="lt-x" type="button" aria-label="Close">&times;</button>
+      </header>
+      <pre class="lt-report"></pre>
+      <footer class="lt-panel-foot">
+        <span class="lt-spacer"></span>
+        <button class="lt-btn lt-ghost" type="button" data-act="copy">Copy</button>
+        <button class="lt-btn lt-primary" type="button" data-act="close">Close</button>
+      </footer>
+    </div>`;
+    panel = backdrop;
+    body = backdrop.querySelector(".lt-report");
+    if (body) body.textContent = text2;
+    backdrop.addEventListener("click", (event) => {
+      const target = event.target;
+      if (target === backdrop || target.classList.contains("lt-x")) return closeReport();
+      const action = target.dataset["act"];
+      if (action === "close") return closeReport();
+      if (action === "copy" && body) {
+        const report = body.textContent ?? "";
+        void navigator.clipboard?.writeText(report).then(
+          () => {
+            target.textContent = "Copied";
+            window.setTimeout(() => target.textContent = "Copy", 1500);
+          },
+          () => {
+            const range = document.createRange();
+            range.selectNodeContents(body);
+            const selection = window.getSelection();
+            selection?.removeAllRanges();
+            selection?.addRange(range);
+            target.textContent = "Selected - copy it";
+          }
+        );
+      }
+      return void 0;
+    });
+    uiRoot().appendChild(backdrop);
   }
   const ICON = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="white" width="20" height="20"><path d="M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M12,4A8,8 0 0,1 20,12H18A6,6 0 0,0 12,6V4M12,8A4,4 0 0,1 16,12A4,4 0 0,1 12,16A4,4 0 0,1 8,12A4,4 0 0,1 12,8Z"/></svg>`;
   const GEAR = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="white" width="15" height="15"><path d="M12,15.5A3.5,3.5 0 0,1 8.5,12A3.5,3.5 0 0,1 12,8.5A3.5,3.5 0 0,1 15.5,12A3.5,3.5 0 0,1 12,15.5M19.43,12.97C19.47,12.65 19.5,12.33 19.5,12C19.5,11.67 19.47,11.34 19.43,11L21.54,9.37C21.73,9.22 21.78,8.95 21.66,8.73L19.66,5.27C19.54,5.05 19.27,4.96 19.05,5.05L16.56,6.05C16.04,5.66 15.5,5.32 14.87,5.07L14.5,2.42C14.46,2.18 14.25,2 14,2H10C9.75,2 9.54,2.18 9.5,2.42L9.13,5.07C8.5,5.32 7.96,5.66 7.44,6.05L4.95,5.05C4.73,4.96 4.46,5.05 4.34,5.27L2.34,8.73C2.21,8.95 2.27,9.22 2.46,9.37L4.57,11C4.53,11.34 4.5,11.67 4.5,12C4.5,12.33 4.53,12.65 4.57,12.97L2.46,14.63C2.27,14.78 2.21,15.05 2.34,15.27L4.34,18.73C4.46,18.95 4.73,19.03 4.95,18.95L7.44,17.94C7.96,18.34 8.5,18.68 9.13,18.93L9.5,21.58C9.54,21.82 9.75,22 10,22H14C14.25,22 14.46,21.82 14.5,21.58L14.87,18.93C15.5,18.67 16.04,18.34 16.56,17.94L19.05,18.95C19.27,19.03 19.54,18.95 19.66,18.73L21.66,15.27C21.78,15.05 21.73,14.78 21.54,14.63L19.43,12.97Z"/></svg>`;
@@ -2041,8 +2408,8 @@
   let hideTimer;
   let gearTimer;
   const GEAR_DELAY_MS = 550;
-  function showGear(img) {
-    const rect = img.getBoundingClientRect();
+  function showGear(img, anchor) {
+    const rect = anchor ?? img.getBoundingClientRect();
     gear.style.top = `${rect.top + 8}px`;
     gear.style.left = `${rect.left + rect.width - 69}px`;
     gear.style.opacity = "1";
@@ -2058,6 +2425,7 @@
   function isCandidate(node) {
     const img = node;
     if (!img || img.tagName !== "IMG") return false;
+    if (isCover(img)) return false;
     const rect = img.getBoundingClientRect();
     return rect.width >= settings.minImageSize && rect.height >= settings.minImageSize;
   }
@@ -2068,10 +2436,10 @@
     }
     return null;
   }
-  function showButton(img) {
+  function showButton(img, anchor) {
     if (!settings.showButton) return;
     currentImage = img;
-    const rect = img.getBoundingClientRect();
+    const rect = anchor ?? img.getBoundingClientRect();
     button.style.top = `${rect.top + 5}px`;
     button.style.left = `${rect.left + rect.width - 37}px`;
     button.style.opacity = "1";
@@ -2089,9 +2457,63 @@
     hideGear();
     currentImage = null;
   }
+  let pinned = false;
+  let pinnedFrame = 0;
+  function visiblePart(img) {
+    const rect = img.getBoundingClientRect();
+    const left = Math.max(rect.left, 0);
+    const top = Math.max(rect.top, 0);
+    const width = Math.min(rect.right, window.innerWidth) - left;
+    const height = Math.min(rect.bottom, window.innerHeight) - top;
+    return { top, left, width: Math.max(0, width), height: Math.max(0, height) };
+  }
+  function mostVisible() {
+    let best = null;
+    let bestArea = 0;
+    for (const img of document.images) {
+      if (!isCandidate(img)) continue;
+      const part = visiblePart(img);
+      const area = part.width * part.height;
+      if (area > bestArea) {
+        bestArea = area;
+        best = { ...part, img };
+      }
+    }
+    return best;
+  }
+  function updatePinned() {
+    if (!pinned || pinnedFrame) return;
+    pinnedFrame = window.requestAnimationFrame(() => {
+      pinnedFrame = 0;
+      if (!pinned) return;
+      const found = settings.showButton ? mostVisible() : null;
+      if (!found) {
+        hideButton();
+        return;
+      }
+      showButton(found.img, found);
+      showGear(found.img, found);
+    });
+  }
+  function onImageLoad(event) {
+    if (event.target?.tagName === "IMG") updatePinned();
+  }
+  function applyButtonMode() {
+    const wanted = settings.buttonMode === "pinned" || settings.buttonMode === "auto" && window.matchMedia("(hover: none)").matches;
+    if (wanted === pinned) return;
+    pinned = wanted;
+    if (pinned) {
+      document.addEventListener("load", onImageLoad, true);
+      updatePinned();
+    } else {
+      document.removeEventListener("load", onImageLoad, true);
+      hideButton();
+    }
+  }
   document.addEventListener(
     "mouseover",
     (event) => {
+      if (pinned) return;
       const img = imageFromEvent(event);
       if (!img) return;
       window.clearTimeout(hideTimer);
@@ -2102,6 +2524,7 @@
   document.addEventListener(
     "mouseout",
     (event) => {
+      if (pinned) return;
       if (imageFromEvent(event)) hideTimer = window.setTimeout(hideButton, 300);
     },
     true
@@ -2109,18 +2532,21 @@
   for (const control of [button, gear]) {
     control.addEventListener("mouseover", () => window.clearTimeout(hideTimer));
     control.addEventListener("mouseout", () => {
+      if (pinned) return;
       hideTimer = window.setTimeout(hideButton, 300);
     });
+  }
+  function onSaved(saved) {
+    settings = saved;
+    applyButtonMode();
+    toast("Settings saved");
   }
   gear.addEventListener(
     "click",
     (event) => {
       event.preventDefault();
       event.stopPropagation();
-      openSettings((saved) => {
-        settings = saved;
-        toast("Settings saved");
-      });
+      openSettings(onSaved);
     },
     true
   );
@@ -2150,6 +2576,10 @@
   );
   function reposition() {
     repositionOverlays();
+    if (pinned) {
+      updatePinned();
+      return;
+    }
     if (currentImage?.isConnected) {
       showButton(currentImage);
       if (gear.style.opacity === "1") showGear(currentImage);
@@ -2157,32 +2587,52 @@
   }
   window.addEventListener("resize", reposition);
   window.addEventListener("scroll", reposition, true);
-  _GM_registerMenuCommand(
-    "Lens Translate: settings",
-    () => openSettings((saved) => {
-      settings = saved;
-      toast("Settings saved");
-    })
-  );
-  _GM_registerMenuCommand("Lens Translate: clear cache", () => {
-    const { entries: entries2, bytes: bytes2 } = cacheStats();
-    clearCache();
-    toast(
-      entries2 ? `Cleared ${entries2} cached result${entries2 === 1 ? "" : "s"} (${(bytes2 / 1048576).toFixed(1)} MB)` : "The cache was already empty"
-    );
+  registerCommand({
+    menuLabel: "Lens Translate: settings",
+    // The panel is where these are drawn, so it does not offer to open itself.
+    label: null,
+    run: () => openSettings(onSaved)
   });
-  _GM_registerMenuCommand("Lens Translate: undo all on this page", () => {
-    const restored = uncoverAll() + clearAllOverlays();
-    toast(restored ? `Restored ${restored} image${restored === 1 ? "" : "s"}` : "Nothing to restore");
-  });
-  _GM_registerMenuCommand("Lens Translate: toggle on/off", () => {
-    settings = saveSettings({ enabled: !settings.enabled });
-    if (!settings.enabled) {
-      uncoverAll();
-      clearAllOverlays();
-      hideButton();
+  registerCommand({
+    menuLabel: "Lens Translate: clear cache",
+    label: "Clear cache",
+    run: () => {
+      const { entries: entries2, bytes: bytes2 } = cacheStats();
+      clearCache();
+      toast(
+        entries2 ? `Cleared ${entries2} cached result${entries2 === 1 ? "" : "s"} (${(bytes2 / 1048576).toFixed(1)} MB)` : "The cache was already empty"
+      );
     }
-    toast(settings.enabled ? "Translation enabled" : "Translation disabled");
   });
+  registerCommand({
+    menuLabel: "Lens Translate: undo all on this page",
+    label: "Undo all on this page",
+    run: () => {
+      const restored = uncoverAll() + clearAllOverlays();
+      toast(restored ? `Restored ${restored} image${restored === 1 ? "" : "s"}` : "Nothing to restore");
+    }
+  });
+  registerCommand({
+    menuLabel: "Lens Translate: diagnostics",
+    label: "Run diagnostics",
+    run: () => {
+      openReport("Probing...");
+      void diagnose().then(openReport, (error) => openReport(`Diagnostics failed: ${error.message}`));
+    }
+  });
+  registerCommand({
+    menuLabel: "Lens Translate: toggle on/off",
+    label: "Toggle on/off",
+    run: () => {
+      settings = saveSettings({ enabled: !settings.enabled });
+      if (!settings.enabled) {
+        uncoverAll();
+        clearAllOverlays();
+        hideButton();
+      }
+      toast(settings.enabled ? "Translation enabled" : "Translation disabled");
+    }
+  });
+  applyButtonMode();
 
 })();
