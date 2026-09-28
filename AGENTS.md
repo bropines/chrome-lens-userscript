@@ -244,6 +244,17 @@ box, so an empty result schedules a bounded retry - unbounded it would be a
 walk of the whole tree every quarter second on a page that has no pictures at
 all. A mutation or a scroll resets the budget.
 
+**A pointer that cannot reach it does not get the button.** The walk crosses
+shadow boundaries, and so it finds whatever a devtools overlay put there: eruda
+keeps a `luna-dom-highlighter` canvas the size of the viewport, which beat the
+actual page on area and sent the button to the top corner. `pointer-events:
+none` is what every such layer is made of, so it lowers the ranking - and only
+lowers it, because a reader that sets it on its page image to stop dragging is a
+real thing and there the picture is all there is. What it settles is a
+disagreement: the hover path can never select an unpointable element, so the
+pinned one must not prefer one. The walk also refuses to enter our own host,
+whose settings panel has a canvas of its own.
+
 Enumerating tags is free; deciding a background is not, because it costs a
 computed style per element. The sweep is capped, and the hover path never
 depends on it - it classifies whatever is under the cursor directly, so a

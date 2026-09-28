@@ -1,4 +1,5 @@
 import { isCover } from './render/cover.js';
+import { HOST_ID } from './ui/root.js';
 
 /**
  * Finding the pictures on a page.
@@ -27,6 +28,21 @@ export interface Target {
    * Empty for a canvas or a video, which have no address at all.
    */
   url: string;
+  /**
+   * Whether a pointer can reach it at all.
+   *
+   * `pointer-events: none` is what an overlay is made of - a devtools
+   * highlighter, a scrim, our own cover. eruda's DOM highlighter is a canvas
+   * the size of the viewport, and it beat the actual page on area, which is how
+   * the button ended up in the top corner.
+   *
+   * It only lowers the ranking rather than disqualifying, because a reader that
+   * sets `pointer-events: none` on its page image to stop dragging is a real
+   * thing, and there the picture is all there is. What it does fix is the
+   * disagreement: the hover path can never select an unpointable element, so
+   * the pinned one should not prefer it.
+   */
+  pointable: boolean;
 }
 
 /** The first `url()` in a computed background, if it is an image at all. */
@@ -56,18 +72,20 @@ export function classify(node: unknown): Target | null {
   // a translated image came to look untranslated.
   if (isCover(element)) return null;
 
+  const pointable = window.getComputedStyle(element).pointerEvents !== 'none';
+
   switch (element.tagName) {
     case 'IMG': {
       const img = element as HTMLImageElement;
-      return { element, kind: 'img', url: img.currentSrc || img.src || '' };
+      return { element, kind: 'img', url: img.currentSrc || img.src || '', pointable };
     }
     case 'CANVAS':
-      return { element, kind: 'canvas', url: '' };
+      return { element, kind: 'canvas', url: '', pointable };
     case 'VIDEO':
-      return { element, kind: 'video', url: '' };
+      return { element, kind: 'video', url: '', pointable };
     default: {
       const url = backgroundUrl(element);
-      return url ? { element, kind: 'background', url } : null;
+      return url ? { element, kind: 'background', url, pointable } : null;
     }
   }
 }
@@ -87,6 +105,10 @@ export function isBigEnough(target: Target, minSize: number): boolean {
  */
 function* walk(root: ParentNode): Generator<Element> {
   for (const element of root.querySelectorAll('*')) {
+    // Our own UI is a shadow root like any other, and the settings panel has a
+    // canvas in it. Walking into ourselves would offer to translate our own
+    // preview.
+    if (element.id === HOST_ID) continue;
     yield element;
     const shadow = (element as Element & { shadowRoot: ShadowRoot | null }).shadowRoot;
     if (shadow) yield* walk(shadow);

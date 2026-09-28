@@ -14,7 +14,7 @@ import styles from './styles.css?raw';
  * offset arithmetic.
  */
 
-const HOST_ID = 'lens-translate-root';
+export const HOST_ID = 'lens-translate-root';
 
 let shadow: ShadowRoot | null = null;
 

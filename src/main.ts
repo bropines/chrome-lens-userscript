@@ -304,12 +304,18 @@ function mostVisible(): (Anchor & { target: Target }) | null {
   let best: (Anchor & { target: Target }) | null = null;
   let bestArea = 0;
 
+  let bestRank = -1;
+
   for (const target of known) {
     if (!target.element.isConnected) continue;
     if (!isBigEnough(target, settings.minImageSize)) continue;
     const part = visiblePart(target.element);
     const area = part.width * part.height;
-    if (area > bestArea) {
+    // Area decides among equals, but anything a pointer can reach outranks
+    // anything it cannot: a full-viewport overlay always wins on area alone.
+    const rank = target.pointable ? 1 : 0;
+    if (rank > bestRank || (rank === bestRank && area > bestArea)) {
+      bestRank = rank;
       bestArea = area;
       best = { ...part, target };
     }
