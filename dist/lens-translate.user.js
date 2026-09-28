@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Lens Translate
 // @namespace    https://github.com/bropines/chrome-lens-userscript
-// @version      2.6.0
+// @version      2.6.1
 // @author       bropines
 // @description  Hover any image, click the button, and its text is translated in place - rendered the way Chromium's own Lens overlay does it.
 // @license      MIT
@@ -246,6 +246,139 @@
     } catch (error) {
       return `${error.message}, ${Date.now() - started} ms`;
     }
+  }
+  const covers = /* @__PURE__ */ new WeakMap();
+  const live$1 = /* @__PURE__ */ new Set();
+  const isCovered = (img) => covers.has(img);
+  const COVER_MARK = "data-lens-translate";
+  const isCover = (node) => node.hasAttribute(COVER_MARK);
+  function place(cover, img) {
+    cover.style.left = `${img.offsetLeft}px`;
+    cover.style.top = `${img.offsetTop}px`;
+    cover.style.width = `${img.offsetWidth}px`;
+    cover.style.height = `${img.offsetHeight}px`;
+  }
+  function coverImage(img, blobUrl) {
+    uncoverImage(img);
+    const parent = img.parentElement;
+    if (!parent) return false;
+    const element = document.createElement("img");
+    element.src = blobUrl;
+    element.setAttribute(COVER_MARK, "");
+    element.setAttribute(
+      "style",
+      [
+        "position: absolute",
+        "margin: 0",
+        "padding: 0",
+        "border: 0",
+        "max-width: none",
+        "max-height: none",
+        "min-width: 0",
+        "min-height: 0",
+        "pointer-events: none",
+        // Above the image, below anything the page floats on top of it.
+        "z-index: 1",
+        // Inherit the shape so rounded media does not get square corners.
+        `border-radius: ${getComputedStyle(img).borderRadius}`,
+        `object-fit: ${getComputedStyle(img).objectFit || "fill"}`
+      ].map((rule) => `${rule} !important`).join(";")
+    );
+    if (getComputedStyle(parent).position === "static") {
+      parent.style.setProperty("position", "relative", "important");
+    }
+    img.insertAdjacentElement("afterend", element);
+    place(element, img);
+    const resize = new ResizeObserver(() => place(element, img));
+    resize.observe(img);
+    covers.set(img, { element, blobUrl, resize });
+    live$1.add(new WeakRef(img));
+    return true;
+  }
+  function uncoverImage(img) {
+    const cover = covers.get(img);
+    if (!cover) return false;
+    cover.resize.disconnect();
+    cover.element.remove();
+    URL.revokeObjectURL(cover.blobUrl);
+    covers.delete(img);
+    return true;
+  }
+  function uncoverAll() {
+    let count = 0;
+    for (const ref of live$1) {
+      const img = ref.deref();
+      if (!img) {
+        live$1.delete(ref);
+        continue;
+      }
+      if (uncoverImage(img)) count += 1;
+    }
+    for (const stray of Array.from(document.querySelectorAll("img[data-lens-translate]"))) {
+      stray.remove();
+      count += 1;
+    }
+    return count;
+  }
+  function backgroundUrl(element) {
+    const value = window.getComputedStyle(element).backgroundImage;
+    if (!value || value === "none") return "";
+    const match = /url\((['"]?)(.*?)\1\)/.exec(value);
+    const url = match?.[2] ?? "";
+    return url && !url.startsWith("#") ? url : "";
+  }
+  function classify(node) {
+    if (!node || typeof node !== "object") return null;
+    const element = node;
+    if (element.nodeType !== 1 || typeof element.tagName !== "string") return null;
+    if (isCover(element)) return null;
+    switch (element.tagName) {
+      case "IMG": {
+        const img = element;
+        return { element, kind: "img", url: img.currentSrc || img.src || "" };
+      }
+      case "CANVAS":
+        return { element, kind: "canvas", url: "" };
+      case "VIDEO":
+        return { element, kind: "video", url: "" };
+      default: {
+        const url = backgroundUrl(element);
+        return url ? { element, kind: "background", url } : null;
+      }
+    }
+  }
+  function isBigEnough(target, minSize) {
+    const rect = target.element.getBoundingClientRect();
+    return rect.width >= minSize && rect.height >= minSize;
+  }
+  function* walk(root2) {
+    for (const element of root2.querySelectorAll("*")) {
+      yield element;
+      const shadow2 = element.shadowRoot;
+      if (shadow2) yield* walk(shadow2);
+    }
+  }
+  const BACKGROUND_SWEEP_LIMIT = 4e3;
+  function collect$1(minSize) {
+    const found = [];
+    let seen = 0;
+    for (const element of walk(document)) {
+      seen += 1;
+      const tag = element.tagName;
+      const tagged = tag === "IMG" || tag === "CANVAS" || tag === "VIDEO";
+      if (!tagged && seen > BACKGROUND_SWEEP_LIMIT) continue;
+      const target = classify(element);
+      if (target && isBigEnough(target, minSize)) found.push(target);
+    }
+    return found;
+  }
+  function targetFromEvent(event, minSize, ours) {
+    for (const node of event.composedPath()) {
+      if (ours(node)) return null;
+      const target = classify(node);
+      if (target && isBigEnough(target, minSize)) return target;
+    }
+    return null;
   }
   const LANGUAGES = [
     "af",
@@ -1092,8 +1225,32 @@
     }
     return "Nothing reaches anything, the control host included. The device has no working connection from this page.";
   }
-  async function diagnose() {
-    const lines = [...hostFacts(), `page: ${window.location.origin}`, ""];
+  function pageFacts(context) {
+    const minSize = getSettings().minImageSize;
+    const found = collect$1(minSize);
+    const counts = /* @__PURE__ */ new Map();
+    let biggest = "";
+    let biggestArea = 0;
+    for (const target of found) {
+      counts.set(target.kind, (counts.get(target.kind) ?? 0) + 1);
+      const rect = target.element.getBoundingClientRect();
+      const area = rect.width * rect.height;
+      if (area > biggestArea) {
+        biggestArea = area;
+        biggest = `${target.kind} ${Math.round(rect.width)}x${Math.round(rect.height)}`;
+      }
+    }
+    const tally = [...counts].map(([kind, n]) => `${n} ${kind}`).join(", ") || "nothing";
+    return [
+      `page: ${window.location.href.slice(0, 80)}`,
+      `button: ${context.pinned ? "pinned" : "on hover"}, minimum size ${minSize}px`,
+      `found: ${tally}`,
+      `biggest: ${biggest || "-"}`,
+      `images in document: ${document.images.length}`
+    ];
+  }
+  async function diagnose(context) {
+    const lines = [...hostFacts(), ...pageFacts(context), ""];
     const results = /* @__PURE__ */ new Map();
     for (const [label, target] of targets()) {
       for (const transport of TRANSPORTS) {
@@ -1221,139 +1378,6 @@
       height: bitmap.height,
       release: () => bitmap.close()
     };
-  }
-  const covers = /* @__PURE__ */ new WeakMap();
-  const live$1 = /* @__PURE__ */ new Set();
-  const isCovered = (img) => covers.has(img);
-  const COVER_MARK = "data-lens-translate";
-  const isCover = (node) => node.hasAttribute(COVER_MARK);
-  function place(cover, img) {
-    cover.style.left = `${img.offsetLeft}px`;
-    cover.style.top = `${img.offsetTop}px`;
-    cover.style.width = `${img.offsetWidth}px`;
-    cover.style.height = `${img.offsetHeight}px`;
-  }
-  function coverImage(img, blobUrl) {
-    uncoverImage(img);
-    const parent = img.parentElement;
-    if (!parent) return false;
-    const element = document.createElement("img");
-    element.src = blobUrl;
-    element.setAttribute(COVER_MARK, "");
-    element.setAttribute(
-      "style",
-      [
-        "position: absolute",
-        "margin: 0",
-        "padding: 0",
-        "border: 0",
-        "max-width: none",
-        "max-height: none",
-        "min-width: 0",
-        "min-height: 0",
-        "pointer-events: none",
-        // Above the image, below anything the page floats on top of it.
-        "z-index: 1",
-        // Inherit the shape so rounded media does not get square corners.
-        `border-radius: ${getComputedStyle(img).borderRadius}`,
-        `object-fit: ${getComputedStyle(img).objectFit || "fill"}`
-      ].map((rule) => `${rule} !important`).join(";")
-    );
-    if (getComputedStyle(parent).position === "static") {
-      parent.style.setProperty("position", "relative", "important");
-    }
-    img.insertAdjacentElement("afterend", element);
-    place(element, img);
-    const resize = new ResizeObserver(() => place(element, img));
-    resize.observe(img);
-    covers.set(img, { element, blobUrl, resize });
-    live$1.add(new WeakRef(img));
-    return true;
-  }
-  function uncoverImage(img) {
-    const cover = covers.get(img);
-    if (!cover) return false;
-    cover.resize.disconnect();
-    cover.element.remove();
-    URL.revokeObjectURL(cover.blobUrl);
-    covers.delete(img);
-    return true;
-  }
-  function uncoverAll() {
-    let count = 0;
-    for (const ref of live$1) {
-      const img = ref.deref();
-      if (!img) {
-        live$1.delete(ref);
-        continue;
-      }
-      if (uncoverImage(img)) count += 1;
-    }
-    for (const stray of Array.from(document.querySelectorAll("img[data-lens-translate]"))) {
-      stray.remove();
-      count += 1;
-    }
-    return count;
-  }
-  function backgroundUrl(element) {
-    const value = window.getComputedStyle(element).backgroundImage;
-    if (!value || value === "none") return "";
-    const match = /url\((['"]?)(.*?)\1\)/.exec(value);
-    const url = match?.[2] ?? "";
-    return url && !url.startsWith("#") ? url : "";
-  }
-  function classify(node) {
-    if (!node || typeof node !== "object") return null;
-    const element = node;
-    if (element.nodeType !== 1 || typeof element.tagName !== "string") return null;
-    if (isCover(element)) return null;
-    switch (element.tagName) {
-      case "IMG": {
-        const img = element;
-        return { element, kind: "img", url: img.currentSrc || img.src || "" };
-      }
-      case "CANVAS":
-        return { element, kind: "canvas", url: "" };
-      case "VIDEO":
-        return { element, kind: "video", url: "" };
-      default: {
-        const url = backgroundUrl(element);
-        return url ? { element, kind: "background", url } : null;
-      }
-    }
-  }
-  function isBigEnough(target, minSize) {
-    const rect = target.element.getBoundingClientRect();
-    return rect.width >= minSize && rect.height >= minSize;
-  }
-  function* walk(root2) {
-    for (const element of root2.querySelectorAll("*")) {
-      yield element;
-      const shadow2 = element.shadowRoot;
-      if (shadow2) yield* walk(shadow2);
-    }
-  }
-  const BACKGROUND_SWEEP_LIMIT = 4e3;
-  function collect$1(minSize) {
-    const found = [];
-    let seen = 0;
-    for (const element of walk(document)) {
-      seen += 1;
-      const tag = element.tagName;
-      const tagged = tag === "IMG" || tag === "CANVAS" || tag === "VIDEO";
-      if (!tagged && seen > BACKGROUND_SWEEP_LIMIT) continue;
-      const target = classify(element);
-      if (target && isBigEnough(target, minSize)) found.push(target);
-    }
-    return found;
-  }
-  function targetFromEvent(event, minSize, ours) {
-    for (const node of event.composedPath()) {
-      if (ours(node)) return null;
-      const target = classify(node);
-      if (target && isBigEnough(target, minSize)) return target;
-    }
-    return null;
   }
   const WritingDirection = {
     RightToLeft: 1,
@@ -2561,10 +2585,16 @@
   let known = [];
   let refreshTimer = 0;
   let tree = null;
+  const EMPTY_RETRIES = 8;
+  let emptyRetries = 0;
   const REFRESH_DELAY_MS = 250;
   function refresh() {
     known = collect$1(settings.minImageSize);
     updatePinned();
+  }
+  function somethingChanged() {
+    emptyRetries = 0;
+    scheduleRefresh();
   }
   function scheduleRefresh() {
     if (refreshTimer) return;
@@ -2604,14 +2634,19 @@
       const found = settings.showButton ? mostVisible() : null;
       if (!found) {
         hideButton();
+        if (emptyRetries < EMPTY_RETRIES) {
+          emptyRetries += 1;
+          scheduleRefresh();
+        }
         return;
       }
+      emptyRetries = 0;
       showButton(found.target, found);
       showGear(found.target, found);
     });
   }
   function onImageLoad(event) {
-    if (event.target?.tagName === "IMG") scheduleRefresh();
+    if (event.target?.tagName === "IMG") somethingChanged();
   }
   const TOUCH_QUERY = "(hover: none), (pointer: coarse)";
   function applyButtonMode() {
@@ -2620,7 +2655,7 @@
     pinned = wanted;
     if (pinned) {
       document.addEventListener("load", onImageLoad, true);
-      tree = new MutationObserver(scheduleRefresh);
+      tree = new MutationObserver(somethingChanged);
       tree.observe(document.documentElement, {
         childList: true,
         subtree: true,
@@ -2706,6 +2741,7 @@
   function reposition() {
     repositionOverlays();
     if (pinned) {
+      emptyRetries = 0;
       updatePinned();
       return;
     }
@@ -2746,7 +2782,7 @@
     label: "Run diagnostics",
     run: () => {
       openReport("Probing...");
-      void diagnose().then(openReport, (error) => openReport(`Diagnostics failed: ${error.message}`));
+      void diagnose({ pinned }).then(openReport, (error) => openReport(`Diagnostics failed: ${error.message}`));
     }
   });
   registerCommand({

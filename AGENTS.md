@@ -229,6 +229,14 @@ everything downstream works on a `Target` (element, kind, url) rather than an
   never cached, and a tainted one cannot be recovered by re-fetching because
   there is no URL to fetch. That is the one dead end in the ladder.
 
+**A lazily-loaded image has no box until it loads, and does not load until it
+has one.** Real pages break that circle with an `aspect-ratio` or a placeholder
+size; until something does, the image is 0 tall, fails the size test and is not
+a picture. Nothing this listens for necessarily fires when it finally gets a
+box, so an empty result schedules a bounded retry - unbounded it would be a
+walk of the whole tree every quarter second on a page that has no pictures at
+all. A mutation or a scroll resets the budget.
+
 Enumerating tags is free; deciding a background is not, because it costs a
 computed style per element. The sweep is capped, and the hover path never
 depends on it - it classifies whatever is under the cursor directly, so a

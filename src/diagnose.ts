@@ -1,3 +1,4 @@
+import { collect } from './detect.js';
 import { hostFacts, probe } from './gm.js';
 import { getSettings } from './settings.js';
 import { LENS_ENDPOINT } from './lens/client.js';
@@ -76,8 +77,47 @@ function verdict(results: Map<string, string>): string {
   return 'Nothing reaches anything, the control host included. The device has no working connection from this page.';
 }
 
-export async function diagnose(): Promise<string> {
-  const lines = [...hostFacts(), `page: ${window.location.origin}`, ''];
+/**
+ * What the detector sees here, which is the question a missing button asks.
+ *
+ * Whether the script runs on this page at all, whether it found anything, and
+ * whether what it found is big enough - three answers that cannot be had from
+ * a device with no console, and that between them explain every button that
+ * failed to appear.
+ */
+function pageFacts(context: DiagnoseContext): string[] {
+  const minSize = getSettings().minImageSize;
+  const found = collect(minSize);
+
+  const counts = new Map<string, number>();
+  let biggest = '';
+  let biggestArea = 0;
+  for (const target of found) {
+    counts.set(target.kind, (counts.get(target.kind) ?? 0) + 1);
+    const rect = target.element.getBoundingClientRect();
+    const area = rect.width * rect.height;
+    if (area > biggestArea) {
+      biggestArea = area;
+      biggest = `${target.kind} ${Math.round(rect.width)}x${Math.round(rect.height)}`;
+    }
+  }
+
+  const tally = [...counts].map(([kind, n]) => `${n} ${kind}`).join(', ') || 'nothing';
+  return [
+    `page: ${window.location.href.slice(0, 80)}`,
+    `button: ${context.pinned ? 'pinned' : 'on hover'}, minimum size ${minSize}px`,
+    `found: ${tally}`,
+    `biggest: ${biggest || '-'}`,
+    `images in document: ${document.images.length}`,
+  ];
+}
+
+export interface DiagnoseContext {
+  pinned: boolean;
+}
+
+export async function diagnose(context: DiagnoseContext): Promise<string> {
+  const lines = [...hostFacts(), ...pageFacts(context), ''];
   const results = new Map<string, string>();
 
   for (const [label, target] of targets()) {

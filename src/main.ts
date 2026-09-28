@@ -256,12 +256,29 @@ let known: Target[] = [];
 let refreshTimer = 0;
 let tree: MutationObserver | null = null;
 
+/**
+ * How many times an empty page is asked again before the script gives up.
+ *
+ * A lazily-loaded image has no box until it loads and does not load until it
+ * has one, so a page can materialise its pictures without firing anything this
+ * listens for. A bounded retry covers that; unbounded, it would be a walk of
+ * the whole tree every quarter second on a page that simply has no pictures.
+ * Anything that says the page changed - a mutation, a scroll - resets it.
+ */
+const EMPTY_RETRIES = 8;
+let emptyRetries = 0;
+
 /** Long enough that a chatty page does not pay for every mutation. */
 const REFRESH_DELAY_MS = 250;
 
 function refresh(): void {
   known = collect(settings.minImageSize);
   updatePinned();
+}
+
+function somethingChanged(): void {
+  emptyRetries = 0;
+  scheduleRefresh();
 }
 
 function scheduleRefresh(): void {
@@ -310,8 +327,13 @@ function updatePinned(): void {
     const found = settings.showButton ? mostVisible() : null;
     if (!found) {
       hideButton();
+      if (emptyRetries < EMPTY_RETRIES) {
+        emptyRetries += 1;
+        scheduleRefresh();
+      }
       return;
     }
+    emptyRetries = 0;
     showButton(found.target, found);
     // No cursor to linger, so the delay before the settings button would only
     // ever be a delay.
@@ -323,7 +345,7 @@ function updatePinned(): void {
 function onImageLoad(event: Event): void {
   // An image with no size yet is not a candidate, so the list has to be taken
   // again once it has one - and its address may only now be its real one.
-  if ((event.target as Element | null)?.tagName === 'IMG') scheduleRefresh();
+  if ((event.target as Element | null)?.tagName === 'IMG') somethingChanged();
 }
 
 /**
@@ -344,7 +366,7 @@ function applyButtonMode(): void {
   pinned = wanted;
   if (pinned) {
     document.addEventListener('load', onImageLoad, true);
-    tree = new MutationObserver(scheduleRefresh);
+    tree = new MutationObserver(somethingChanged);
     tree.observe(document.documentElement, {
       childList: true,
       subtree: true,
@@ -449,6 +471,9 @@ function reposition(): void {
   // scrolls while it is showing - and when it is pinned, scrolling is also
   // what moves it to the next image.
   if (pinned) {
+    // A scroll is the page saying something is different; a list that came up
+    // empty deserves another look.
+    emptyRetries = 0;
     updatePinned();
     return;
   }
@@ -496,7 +521,7 @@ registerCommand({
   label: 'Run diagnostics',
   run: () => {
     openReport('Probing...');
-    void diagnose().then(openReport, (error: Error) => openReport(`Diagnostics failed: ${error.message}`));
+    void diagnose({ pinned }).then(openReport, (error: Error) => openReport(`Diagnostics failed: ${error.message}`));
   },
 });
 
