@@ -218,6 +218,17 @@ It anchors to the **visible part** of that image, not its box: scroll a tall
 page halfway and the image's top edge, and with it the button, is above the
 viewport.
 
+**Pinning may only stop the button going away, never stop it arriving.** It
+used to switch the hover listeners off, so a device that pinned but found no
+image - `document.images` does not reach a site's shadow roots - was left with
+no button at all and no way to summon one. Hover stays live in both modes now;
+only the hide-on-mouseout is suppressed while pinned.
+
+And the touch test is `(hover: none), (pointer: coarse)`, re-read from a
+`change` listener rather than snapshotted at document-idle. `hover: none` alone
+misses a phone with a stylus or a mouse attached, and the answer is not always
+settled by the time the script runs.
+
 The obvious implementation is an IntersectionObserver over the candidates, and
 it was written that way first. It only reports while the document is being
 rendered: in a tab that is never painted it never fires at all, and the button

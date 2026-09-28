@@ -310,10 +310,20 @@ function onImageLoad(event: Event): void {
   if ((event.target as Element | null)?.tagName === 'IMG') updatePinned();
 }
 
+/**
+ * A pointer that cannot hover, or one too coarse to aim with.
+ *
+ * `hover: none` alone is the textbook test and it is not enough: a phone with a
+ * stylus or a mouse attached reports `hover: hover`, and the answer also is not
+ * always settled at document-idle. Both were enough to leave a phone with no
+ * button at all, back when pinning took the hover path away with it.
+ */
+const TOUCH_QUERY = '(hover: none), (pointer: coarse)';
+
 function applyButtonMode(): void {
   const wanted =
     settings.buttonMode === 'pinned' ||
-    (settings.buttonMode === 'auto' && window.matchMedia('(hover: none)').matches);
+    (settings.buttonMode === 'auto' && window.matchMedia(TOUCH_QUERY).matches);
   if (wanted === pinned) return;
   pinned = wanted;
   if (pinned) {
@@ -328,7 +338,6 @@ function applyButtonMode(): void {
 document.addEventListener(
   'mouseover',
   (event) => {
-    if (pinned) return;
     const img = imageFromEvent(event);
     if (!img) return;
     window.clearTimeout(hideTimer);
@@ -357,6 +366,10 @@ for (const control of [button, gear]) {
 function onSaved(saved: Settings): void {
   settings = saved;
   applyButtonMode();
+// Asked once at document-idle is a snapshot, and the answer can arrive late or
+// change under you - a mouse plugged into a tablet, a window moved between
+// screens. Cheaper to be told than to re-ask on a timer.
+window.matchMedia(TOUCH_QUERY).addEventListener('change', applyButtonMode);
   toast('Settings saved');
 }
 

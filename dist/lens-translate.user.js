@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Lens Translate
 // @namespace    https://github.com/bropines/chrome-lens-userscript
-// @version      2.5.0
+// @version      2.5.1
 // @author       bropines
 // @description  Hover any image, click the button, and its text is translated in place - rendered the way Chromium's own Lens overlay does it.
 // @license      MIT
@@ -2512,8 +2512,9 @@
   function onImageLoad(event) {
     if (event.target?.tagName === "IMG") updatePinned();
   }
+  const TOUCH_QUERY = "(hover: none), (pointer: coarse)";
   function applyButtonMode() {
-    const wanted = settings.buttonMode === "pinned" || settings.buttonMode === "auto" && window.matchMedia("(hover: none)").matches;
+    const wanted = settings.buttonMode === "pinned" || settings.buttonMode === "auto" && window.matchMedia(TOUCH_QUERY).matches;
     if (wanted === pinned) return;
     pinned = wanted;
     if (pinned) {
@@ -2527,7 +2528,6 @@
   document.addEventListener(
     "mouseover",
     (event) => {
-      if (pinned) return;
       const img = imageFromEvent(event);
       if (!img) return;
       window.clearTimeout(hideTimer);
@@ -2553,6 +2553,7 @@
   function onSaved(saved) {
     settings = saved;
     applyButtonMode();
+    window.matchMedia(TOUCH_QUERY).addEventListener("change", applyButtonMode);
     toast("Settings saved");
   }
   gear.addEventListener(
