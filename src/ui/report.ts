@@ -9,6 +9,19 @@ import { uiRoot } from './root.js';
 
 let panel: HTMLDivElement | null = null;
 let body: HTMLPreElement | null = null;
+let onSettings: (() => void) | null = null;
+
+/**
+ * What the report's Settings button does.
+ *
+ * Registered rather than imported so this module stays a panel and not a menu.
+ * It matters because the report is reachable when nothing else is: if the
+ * button never appeared, the gear did not either, and settings would otherwise
+ * be out of reach on the one device where that happens.
+ */
+export function onReportSettings(open: () => void): void {
+  onSettings = open;
+}
 
 export function closeReport(): void {
   panel?.remove();
@@ -32,6 +45,7 @@ export function openReport(text: string): void {
       </header>
       <pre class="lt-report"></pre>
       <footer class="lt-panel-foot">
+        <button class="lt-btn lt-ghost" type="button" data-act="settings">Settings</button>
         <span class="lt-spacer"></span>
         <button class="lt-btn lt-ghost" type="button" data-act="copy">Copy</button>
         <button class="lt-btn lt-primary" type="button" data-act="close">Close</button>
@@ -47,6 +61,11 @@ export function openReport(text: string): void {
 
     const action = target.dataset['act'];
     if (action === 'close') return closeReport();
+    if (action === 'settings') {
+      closeReport();
+      onSettings?.();
+      return undefined;
+    }
     if (action === 'copy' && body) {
       const report = body.textContent ?? '';
       // The clipboard API needs a secure context and a permission the page may

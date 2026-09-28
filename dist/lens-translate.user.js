@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Lens Translate
 // @namespace    https://github.com/bropines/chrome-lens-userscript
-// @version      2.6.1
+// @version      2.7.0
 // @author       bropines
 // @description  Hover any image, click the button, and its text is translated in place - rendered the way Chromium's own Lens overlay does it.
 // @license      MIT
@@ -2382,6 +2382,10 @@
   }
   let panel = null;
   let body = null;
+  let onSettings = null;
+  function onReportSettings(open) {
+    onSettings = open;
+  }
   function closeReport() {
     panel?.remove();
     panel = null;
@@ -2402,6 +2406,7 @@
       </header>
       <pre class="lt-report"></pre>
       <footer class="lt-panel-foot">
+        <button class="lt-btn lt-ghost" type="button" data-act="settings">Settings</button>
         <span class="lt-spacer"></span>
         <button class="lt-btn lt-ghost" type="button" data-act="copy">Copy</button>
         <button class="lt-btn lt-primary" type="button" data-act="close">Close</button>
@@ -2415,6 +2420,11 @@
       if (target === backdrop || target.classList.contains("lt-x")) return closeReport();
       const action = target.dataset["act"];
       if (action === "close") return closeReport();
+      if (action === "settings") {
+        closeReport();
+        onSettings?.();
+        return void 0;
+      }
       if (action === "copy" && body) {
         const report = body.textContent ?? "";
         void navigator.clipboard?.writeText(report).then(
@@ -2702,7 +2712,6 @@
   function onSaved(saved) {
     settings = saved;
     applyButtonMode();
-    window.matchMedia(TOUCH_QUERY).addEventListener("change", applyButtonMode);
     toast("Settings saved");
   }
   gear.addEventListener(
@@ -2780,10 +2789,7 @@
   registerCommand({
     menuLabel: "Lens Translate: diagnostics",
     label: "Run diagnostics",
-    run: () => {
-      openReport("Probing...");
-      void diagnose({ pinned }).then(openReport, (error) => openReport(`Diagnostics failed: ${error.message}`));
-    }
+    run: openDiagnostics
   });
   registerCommand({
     menuLabel: "Lens Translate: toggle on/off",
@@ -2798,6 +2804,21 @@
       toast(settings.enabled ? "Translation enabled" : "Translation disabled");
     }
   });
+  const DEBUG_HASH = "#lens-debug";
+  function openDiagnostics() {
+    openReport("Probing...");
+    void diagnose({ pinned }).then(
+      openReport,
+      (error) => openReport(`Diagnostics failed: ${error.message}`)
+    );
+  }
+  function checkDebugHash() {
+    if (window.location.hash === DEBUG_HASH) openDiagnostics();
+  }
+  onReportSettings(() => openSettings(onSaved));
+  window.addEventListener("hashchange", checkDebugHash);
   applyButtonMode();
+  checkDebugHash();
+  window.matchMedia(TOUCH_QUERY).addEventListener("change", applyButtonMode);
 
 })();

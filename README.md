@@ -44,8 +44,15 @@ phone that is simply offline. Four things, cheapest first.
 
 ### 1. Run the diagnostics
 
-**Settings → Actions → Run diagnostics**, or the same entry in the userscript
-menu. It reports what host is running the script and what it grants, then probes
+**Put `#lens-debug` on the end of the URL** and the report opens. It needs no
+button and no menu, which is the point: the hover button is exactly what is
+missing when something is wrong, and `GM_registerMenuCommand` has nowhere to
+appear on a phone at all - no mobile browser has a userscript menu, whatever
+the host reports. The report carries a **Settings** button too, so the panel is
+reachable when the gear is not.
+
+It is also in **Settings → Actions → Run diagnostics**, and in the userscript
+menu on a host that has one. It reports what host is running the script and what it grants, then probes
 the Lens endpoint and a control host through both transports:
 
 ```
@@ -106,10 +113,14 @@ The Network tab settles the question the diagnostics can only infer: whether the
 
 ### 3. A console on the page itself
 
-No cable, when a report is not enough: install a second, three-line userscript
-that loads [eruda](https://github.com/liriliri/eruda) and gives the page a
-console, a network log and a DOM inspector as a floating button. Any host that
-runs this script runs that one.
+No cable, when a report is not enough. AdGuard documents no debugging of its
+own - `GM_log` and nothing else - so what people do on Android is install a
+second userscript that loads [eruda](https://github.com/liriliri/eruda) and
+gives the page a real console, network log and DOM inspector as a floating
+button. There is [a gist written for exactly this](https://gist.github.com/jasonsyoung/2661ab375efda4301fc6c1016abfdaaa),
+and [Andure](https://github.com/leohku/andure) does the same through AdGuard's
+HTTPS filtering, opening on a shake of the phone. Any host that runs this
+script runs those.
 
 ### 4. What the host thinks it did
 

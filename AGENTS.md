@@ -205,6 +205,13 @@ made a working setup look broken:
   network failure. `sendViaGm` now delivers any `onerror` carrying a status,
   which is also what lets the `400` encoding retry work on that host.
 
+It has to be reachable without the UI. `GM_registerMenuCommand` is not a way
+in: some hosts do not have it, and the ones that do have nowhere to show it on
+a phone - no mobile browser has a userscript menu. The settings button is not a
+way in either, because it is the thing that is missing whenever anything is
+wrong. `#lens-debug` on the end of any URL opens the report, and the report
+carries a Settings button so the panel is reachable when the gear is not.
+
 Past that, `chrome://inspect` over USB gives real DevTools against the phone's
 page. AdGuard runs scripts in the page context, so its errors are in the
 ordinary console; Tampermonkey's are behind its own context in the dropdown.

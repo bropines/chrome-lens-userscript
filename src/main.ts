@@ -26,7 +26,7 @@ import {
   renderKey,
 } from './cache.js';
 import { openSettings } from './ui/settings-panel.js';
-import { openReport } from './ui/report.js';
+import { onReportSettings, openReport } from './ui/report.js';
 import { isOurs, uiRoot } from './ui/root.js';
 import type { Settings } from './types.js';
 
@@ -417,10 +417,6 @@ for (const control of [button, gear]) {
 function onSaved(saved: Settings): void {
   settings = saved;
   applyButtonMode();
-// Asked once at document-idle is a snapshot, and the answer can arrive late or
-// change under you - a mouse plugged into a tablet, a window moved between
-// screens. Cheaper to be told than to re-ask on a timer.
-window.matchMedia(TOUCH_QUERY).addEventListener('change', applyButtonMode);
   toast('Settings saved');
 }
 
@@ -519,10 +515,7 @@ registerCommand({
 registerCommand({
   menuLabel: 'Lens Translate: diagnostics',
   label: 'Run diagnostics',
-  run: () => {
-    openReport('Probing...');
-    void diagnose({ pinned }).then(openReport, (error: Error) => openReport(`Diagnostics failed: ${error.message}`));
-  },
+  run: openDiagnostics,
 });
 
 registerCommand({
@@ -539,4 +532,34 @@ registerCommand({
   },
 });
 
+/**
+ * A way in that needs neither the button nor a menu.
+ *
+ * `GM_registerMenuCommand` exists on some hosts and has nowhere to appear on a
+ * phone - mobile browsers have no userscript menu at all - and the settings
+ * button is exactly what is missing whenever something is wrong. A fragment
+ * needs no chrome of any kind: put `#lens-debug` on the end of any URL and the
+ * report opens, which is the only way to ask a phone what the script is seeing.
+ */
+const DEBUG_HASH = '#lens-debug';
+
+function openDiagnostics(): void {
+  openReport('Probing...');
+  void diagnose({ pinned }).then(openReport, (error: Error) =>
+    openReport(`Diagnostics failed: ${error.message}`)
+  );
+}
+
+function checkDebugHash(): void {
+  if (window.location.hash === DEBUG_HASH) openDiagnostics();
+}
+
+onReportSettings(() => openSettings(onSaved));
+window.addEventListener('hashchange', checkDebugHash);
+
 applyButtonMode();
+checkDebugHash();
+// Asked once at document-idle is a snapshot, and the answer can arrive late or
+// change under you - a mouse plugged into a tablet, a window moved between
+// screens. Cheaper to be told than to re-ask on a timer.
+window.matchMedia(TOUCH_QUERY).addEventListener('change', applyButtonMode);
