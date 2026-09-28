@@ -156,7 +156,12 @@ Vertical CJK gets a fifth rule of its own: setting a Russian translation vertica
 
 Detection is `<img>` elements only, found by walking `event.composedPath()` so images inside a site's own shadow DOM are caught too. An image qualifies when its **rendered** size — not its natural size — is at least `minImageSize` on both axes, so a 4000px asset scaled down to a 20px icon is correctly ignored.
 
-Not covered: CSS `background-image`, `<canvas>`, `<svg>`, and video frames. Images inside a cross-origin `<iframe>` work only if the script runs in that frame too, which `@match *://*/*` arranges.
+Also covered: CSS `background-image`, `<canvas>` and `<video>` frames, images
+inside a site's own shadow root, and anything a page inserts long after it has
+finished loading - which on a lot of sites is every picture on it. A canvas and
+a video are the one limited case: they have no address, so they are never
+cached, and if the page drew them from another origin they cannot be read at
+all. Not covered: `<svg>` drawn as markup rather than an image. Images inside a cross-origin `<iframe>` work only if the script runs in that frame too, which `@match *://*/*` arranges.
 
 Reading the pixels has three ways in, cheapest first:
 

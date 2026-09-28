@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Lens Translate
 // @namespace    https://github.com/bropines/chrome-lens-userscript
-// @version      2.5.1
+// @version      2.6.0
 // @author       bropines
 // @description  Hover any image, click the button, and its text is translated in place - rendered the way Chromium's own Lens overlay does it.
 // @license      MIT
@@ -1117,7 +1117,25 @@
     };
   }
   function sourceSize(source) {
-    return source instanceof HTMLImageElement ? { width: source.naturalWidth, height: source.naturalHeight } : { width: source.width, height: source.height };
+    if (source instanceof HTMLImageElement) {
+      return { width: source.naturalWidth, height: source.naturalHeight };
+    }
+    if (source instanceof HTMLVideoElement) {
+      return { width: source.videoWidth, height: source.videoHeight };
+    }
+    return { width: source.width, height: source.height };
+  }
+  function ownPixels(target) {
+    if (target.kind === "canvas") return target.element;
+    if (target.kind === "video") {
+      const video = target.element;
+      return video.videoWidth && video.videoHeight ? video : null;
+    }
+    if (target.kind === "img") {
+      const img = target.element;
+      return img.naturalWidth && img.naturalHeight ? img : null;
+    }
+    return null;
   }
   async function encodeForUpload(source, settings2, release = () => {
   }) {
@@ -1159,7 +1177,7 @@
       probe2.src = url;
     });
   }
-  async function acquireSource(img) {
+  async function acquireSource(target) {
     const probe2 = document.createElement("canvas");
     probe2.width = 1;
     probe2.height = 1;
@@ -1174,13 +1192,18 @@
         return false;
       }
     };
-    if (img.naturalWidth && img.naturalHeight && readable(img)) {
-      const size = sourceSize(img);
-      return { source: img, ...size, release: () => {
+    const own = ownPixels(target);
+    if (own && readable(own)) {
+      const size = sourceSize(own);
+      return { source: own, ...size, release: () => {
       } };
     }
-    const url = img.currentSrc || img.src;
-    if (!url) throw new Error("This image has no source to read");
+    const url = target.url;
+    if (!url) {
+      throw new Error(
+        own ? "This element is drawn from another origin and cannot be read" : "There is nothing to read from this element"
+      );
+    }
     try {
       const cors = await loadWithCors(url);
       if (readable(cors)) {
@@ -1198,6 +1221,139 @@
       height: bitmap.height,
       release: () => bitmap.close()
     };
+  }
+  const covers = /* @__PURE__ */ new WeakMap();
+  const live$1 = /* @__PURE__ */ new Set();
+  const isCovered = (img) => covers.has(img);
+  const COVER_MARK = "data-lens-translate";
+  const isCover = (node) => node.hasAttribute(COVER_MARK);
+  function place(cover, img) {
+    cover.style.left = `${img.offsetLeft}px`;
+    cover.style.top = `${img.offsetTop}px`;
+    cover.style.width = `${img.offsetWidth}px`;
+    cover.style.height = `${img.offsetHeight}px`;
+  }
+  function coverImage(img, blobUrl) {
+    uncoverImage(img);
+    const parent = img.parentElement;
+    if (!parent) return false;
+    const element = document.createElement("img");
+    element.src = blobUrl;
+    element.setAttribute(COVER_MARK, "");
+    element.setAttribute(
+      "style",
+      [
+        "position: absolute",
+        "margin: 0",
+        "padding: 0",
+        "border: 0",
+        "max-width: none",
+        "max-height: none",
+        "min-width: 0",
+        "min-height: 0",
+        "pointer-events: none",
+        // Above the image, below anything the page floats on top of it.
+        "z-index: 1",
+        // Inherit the shape so rounded media does not get square corners.
+        `border-radius: ${getComputedStyle(img).borderRadius}`,
+        `object-fit: ${getComputedStyle(img).objectFit || "fill"}`
+      ].map((rule) => `${rule} !important`).join(";")
+    );
+    if (getComputedStyle(parent).position === "static") {
+      parent.style.setProperty("position", "relative", "important");
+    }
+    img.insertAdjacentElement("afterend", element);
+    place(element, img);
+    const resize = new ResizeObserver(() => place(element, img));
+    resize.observe(img);
+    covers.set(img, { element, blobUrl, resize });
+    live$1.add(new WeakRef(img));
+    return true;
+  }
+  function uncoverImage(img) {
+    const cover = covers.get(img);
+    if (!cover) return false;
+    cover.resize.disconnect();
+    cover.element.remove();
+    URL.revokeObjectURL(cover.blobUrl);
+    covers.delete(img);
+    return true;
+  }
+  function uncoverAll() {
+    let count = 0;
+    for (const ref of live$1) {
+      const img = ref.deref();
+      if (!img) {
+        live$1.delete(ref);
+        continue;
+      }
+      if (uncoverImage(img)) count += 1;
+    }
+    for (const stray of Array.from(document.querySelectorAll("img[data-lens-translate]"))) {
+      stray.remove();
+      count += 1;
+    }
+    return count;
+  }
+  function backgroundUrl(element) {
+    const value = window.getComputedStyle(element).backgroundImage;
+    if (!value || value === "none") return "";
+    const match = /url\((['"]?)(.*?)\1\)/.exec(value);
+    const url = match?.[2] ?? "";
+    return url && !url.startsWith("#") ? url : "";
+  }
+  function classify(node) {
+    if (!node || typeof node !== "object") return null;
+    const element = node;
+    if (element.nodeType !== 1 || typeof element.tagName !== "string") return null;
+    if (isCover(element)) return null;
+    switch (element.tagName) {
+      case "IMG": {
+        const img = element;
+        return { element, kind: "img", url: img.currentSrc || img.src || "" };
+      }
+      case "CANVAS":
+        return { element, kind: "canvas", url: "" };
+      case "VIDEO":
+        return { element, kind: "video", url: "" };
+      default: {
+        const url = backgroundUrl(element);
+        return url ? { element, kind: "background", url } : null;
+      }
+    }
+  }
+  function isBigEnough(target, minSize) {
+    const rect = target.element.getBoundingClientRect();
+    return rect.width >= minSize && rect.height >= minSize;
+  }
+  function* walk(root2) {
+    for (const element of root2.querySelectorAll("*")) {
+      yield element;
+      const shadow2 = element.shadowRoot;
+      if (shadow2) yield* walk(shadow2);
+    }
+  }
+  const BACKGROUND_SWEEP_LIMIT = 4e3;
+  function collect$1(minSize) {
+    const found = [];
+    let seen = 0;
+    for (const element of walk(document)) {
+      seen += 1;
+      const tag = element.tagName;
+      const tagged = tag === "IMG" || tag === "CANVAS" || tag === "VIDEO";
+      if (!tagged && seen > BACKGROUND_SWEEP_LIMIT) continue;
+      const target = classify(element);
+      if (target && isBigEnough(target, minSize)) found.push(target);
+    }
+    return found;
+  }
+  function targetFromEvent(event, minSize, ours) {
+    for (const node of event.composedPath()) {
+      if (ours(node)) return null;
+      const target = classify(node);
+      if (target && isBigEnough(target, minSize)) return target;
+    }
+    return null;
   }
   const WritingDirection = {
     RightToLeft: 1,
@@ -1361,6 +1517,7 @@
     return Boolean(element?.closest?.(`#${HOST_ID}`)) || element?.getRootNode?.() === shadow;
   }
   const overlays = /* @__PURE__ */ new WeakMap();
+  const live = /* @__PURE__ */ new Set();
   const pct = (value) => `${(value * 100).toFixed(4)}%`;
   function textShadow(radius, colour) {
     const r = radius.toFixed(2);
@@ -1392,15 +1549,24 @@
     layer.style.width = `${rect.width}px`;
     layer.style.height = `${rect.height}px`;
   }
+  function overlaid() {
+    const out = [];
+    for (const ref of live) {
+      const element = ref.deref();
+      if (!element || !overlays.has(element)) live.delete(ref);
+      else out.push(element);
+    }
+    return out;
+  }
   function clearAllOverlays() {
     let count = 0;
-    for (const img of Array.from(document.images)) {
+    for (const img of overlaid()) {
       if (clearOverlay(img)) count += 1;
     }
     return count;
   }
   function repositionOverlays() {
-    for (const img of Array.from(document.images)) {
+    for (const img of overlaid()) {
       const entry = overlays.get(img);
       if (!entry) continue;
       if (!img.isConnected) {
@@ -1428,10 +1594,10 @@
     ].join(";");
     layer.appendChild(patch);
   }
-  function renderTranslation(img, blocks, settings2) {
+  function renderTranslation(img, blocks, settings2, natural) {
     clearOverlay(img);
     const rect = img.getBoundingClientRect();
-    const aspect = img.naturalWidth / img.naturalHeight;
+    const aspect = natural.width / natural.height;
     const fontFamily = settings2.fontFamily || getComputedStyle(img).fontFamily || "system-ui, sans-serif";
     const layer = document.createElement("div");
     layer.className = "lt-layer";
@@ -1439,6 +1605,7 @@
     uiRoot().appendChild(layer);
     const objectUrls = [];
     overlays.set(img, { layer, objectUrls });
+    live.add(new WeakRef(img));
     let rendered = 0;
     for (const block of blocks) {
       const rtl = isRtl(block);
@@ -1806,79 +1973,6 @@
     if (!blob) throw new Error("Could not encode the translated image");
     return blob;
   }
-  const covers = /* @__PURE__ */ new WeakMap();
-  const live = /* @__PURE__ */ new Set();
-  const isCovered = (img) => covers.has(img);
-  const COVER_MARK = "data-lens-translate";
-  const isCover = (node) => node.hasAttribute(COVER_MARK);
-  function place(cover, img) {
-    cover.style.left = `${img.offsetLeft}px`;
-    cover.style.top = `${img.offsetTop}px`;
-    cover.style.width = `${img.offsetWidth}px`;
-    cover.style.height = `${img.offsetHeight}px`;
-  }
-  function coverImage(img, blobUrl) {
-    uncoverImage(img);
-    const parent = img.parentElement;
-    if (!parent) return false;
-    const element = document.createElement("img");
-    element.src = blobUrl;
-    element.setAttribute(COVER_MARK, "");
-    element.setAttribute(
-      "style",
-      [
-        "position: absolute",
-        "margin: 0",
-        "padding: 0",
-        "border: 0",
-        "max-width: none",
-        "max-height: none",
-        "min-width: 0",
-        "min-height: 0",
-        "pointer-events: none",
-        // Above the image, below anything the page floats on top of it.
-        "z-index: 1",
-        // Inherit the shape so rounded media does not get square corners.
-        `border-radius: ${getComputedStyle(img).borderRadius}`,
-        `object-fit: ${getComputedStyle(img).objectFit || "fill"}`
-      ].map((rule) => `${rule} !important`).join(";")
-    );
-    if (getComputedStyle(parent).position === "static") {
-      parent.style.setProperty("position", "relative", "important");
-    }
-    img.insertAdjacentElement("afterend", element);
-    place(element, img);
-    const resize = new ResizeObserver(() => place(element, img));
-    resize.observe(img);
-    covers.set(img, { element, blobUrl, resize });
-    live.add(new WeakRef(img));
-    return true;
-  }
-  function uncoverImage(img) {
-    const cover = covers.get(img);
-    if (!cover) return false;
-    cover.resize.disconnect();
-    cover.element.remove();
-    URL.revokeObjectURL(cover.blobUrl);
-    covers.delete(img);
-    return true;
-  }
-  function uncoverAll() {
-    let count = 0;
-    for (const ref of live) {
-      const img = ref.deref();
-      if (!img) {
-        live.delete(ref);
-        continue;
-      }
-      if (uncoverImage(img)) count += 1;
-    }
-    for (const stray of Array.from(document.querySelectorAll("img[data-lens-translate]"))) {
-      stray.remove();
-      count += 1;
-    }
-    return count;
-  }
   function weigh(blocks) {
     let bytes2 = 0;
     for (const block of blocks) {
@@ -2093,13 +2187,13 @@
       preview.className = "lt-preview";
       preview.width = 460;
       preview.height = 64;
-      const refresh = () => {
+      const refresh2 = () => {
         const value = Number(slider.value);
         readout.textContent = field.unit === "%" ? `${Math.round(value * 100)}%` : `${value.toFixed(1)}x`;
         if (wantsPreview) drawOutlinePreview(preview, value);
       };
-      slider.addEventListener("input", refresh);
-      refresh();
+      slider.addEventListener("input", refresh2);
+      refresh2();
       const holder = document.createElement("span");
       holder.className = "lt-slider";
       holder.append(slider, readout);
@@ -2349,7 +2443,8 @@
     if (restored) button.classList.remove("lt-active");
     return restored;
   }
-  async function translate(img) {
+  async function translate(target) {
+    const img = target.element;
     if (busy.has(img)) return;
     if (!settings.enabled) {
       toast("Translation is switched off in settings");
@@ -2360,22 +2455,22 @@
     button.classList.add("lt-busy");
     button.classList.remove("lt-error");
     try {
-      const key = cacheKey(img.currentSrc || img.src, settings);
-      const displayedWidth = img.getBoundingClientRect().width || img.naturalWidth;
-      if (settings.renderMode === "canvas") {
+      const key = cacheKey(target.url, settings);
+      const displayedWidth = img.getBoundingClientRect().width;
+      if (settings.renderMode === "canvas" && target.url) {
         const done = getRender(renderKey(key, settings, displayedWidth), settings);
         if (done && coverImage(img, URL.createObjectURL(done))) {
-          if (currentImage === img) button.classList.add("lt-active");
+          if (currentTarget?.element === img) button.classList.add("lt-active");
           return;
         }
       }
-      const prepared = await acquireSource(img);
+      const prepared = await acquireSource(target);
       try {
-        let result = getCached(key, settings);
+        let result = target.url ? getCached(key, settings) : void 0;
         if (!result) {
           const upload = await encodeForUpload(prepared.source, settings);
           result = await callLens(upload, settings);
-          putCached(key, result, settings);
+          if (target.url) putCached(key, result, settings);
         }
         if (!result.blocks.length) {
           const detected = result.ocr.some((p) => p.lines.length > 0);
@@ -2394,18 +2489,21 @@
             // The displayed width is what decides whether text will be legible.
             displayedWidth
           );
-          putRender(renderKey(key, settings, displayedWidth), blob, settings);
+          if (target.url) putRender(renderKey(key, settings, displayedWidth), blob, settings);
           const url = URL.createObjectURL(blob);
           if (!coverImage(img, url)) {
             URL.revokeObjectURL(url);
             toast("This image cannot be covered here");
             return;
           }
-        } else if (!renderTranslation(img, result.blocks, settings)) {
+        } else if (!renderTranslation(img, result.blocks, settings, {
+          width: prepared.width,
+          height: prepared.height
+        })) {
           toast("Nothing could be placed on this image");
           return;
         }
-        if (currentImage === img) button.classList.add("lt-active");
+        if (currentTarget?.element === img) button.classList.add("lt-active");
       } finally {
         prepared.release();
       }
@@ -2418,12 +2516,12 @@
       button.classList.remove("lt-busy");
     }
   }
-  let currentImage = null;
+  let currentTarget = null;
   let hideTimer;
   let gearTimer;
   const GEAR_DELAY_MS = 550;
-  function showGear(img, anchor) {
-    const rect = anchor ?? img.getBoundingClientRect();
+  function showGear(target, anchor) {
+    const rect = anchor ?? target.element.getBoundingClientRect();
     gear.style.top = `${rect.top + 8}px`;
     gear.style.left = `${rect.left + rect.width - 69}px`;
     gear.style.opacity = "1";
@@ -2436,23 +2534,10 @@
     gear.style.transform = "scale(0.9)";
     gear.style.pointerEvents = "none";
   }
-  function isCandidate(node) {
-    const img = node;
-    if (!img || img.tagName !== "IMG") return false;
-    if (isCover(img)) return false;
-    const rect = img.getBoundingClientRect();
-    return rect.width >= settings.minImageSize && rect.height >= settings.minImageSize;
-  }
-  function imageFromEvent(event) {
-    for (const node of event.composedPath()) {
-      if (isOurs(node)) return null;
-      if (isCandidate(node)) return node;
-    }
-    return null;
-  }
-  function showButton(img, anchor) {
+  function showButton(target, anchor) {
     if (!settings.showButton) return;
-    currentImage = img;
+    const img = target.element;
+    currentTarget = target;
     const rect = anchor ?? img.getBoundingClientRect();
     button.style.top = `${rect.top + 5}px`;
     button.style.left = `${rect.left + rect.width - 37}px`;
@@ -2461,20 +2546,35 @@
     button.style.pointerEvents = "auto";
     button.classList.toggle("lt-active", isTranslated(img));
     window.clearTimeout(gearTimer);
-    if (gear.style.opacity === "1") showGear(img);
-    else gearTimer = window.setTimeout(() => showGear(img), GEAR_DELAY_MS);
+    if (gear.style.opacity === "1") showGear(target);
+    else gearTimer = window.setTimeout(() => showGear(target), GEAR_DELAY_MS);
   }
   function hideButton() {
     button.style.opacity = "0";
     button.style.transform = "scale(0.9)";
     button.style.pointerEvents = "none";
     hideGear();
-    currentImage = null;
+    currentTarget = null;
   }
   let pinned = false;
   let pinnedFrame = 0;
-  function visiblePart(img) {
-    const rect = img.getBoundingClientRect();
+  let known = [];
+  let refreshTimer = 0;
+  let tree = null;
+  const REFRESH_DELAY_MS = 250;
+  function refresh() {
+    known = collect$1(settings.minImageSize);
+    updatePinned();
+  }
+  function scheduleRefresh() {
+    if (refreshTimer) return;
+    refreshTimer = window.setTimeout(() => {
+      refreshTimer = 0;
+      refresh();
+    }, REFRESH_DELAY_MS);
+  }
+  function visiblePart(element) {
+    const rect = element.getBoundingClientRect();
     const left = Math.max(rect.left, 0);
     const top = Math.max(rect.top, 0);
     const width = Math.min(rect.right, window.innerWidth) - left;
@@ -2484,13 +2584,14 @@
   function mostVisible() {
     let best = null;
     let bestArea = 0;
-    for (const img of document.images) {
-      if (!isCandidate(img)) continue;
-      const part = visiblePart(img);
+    for (const target of known) {
+      if (!target.element.isConnected) continue;
+      if (!isBigEnough(target, settings.minImageSize)) continue;
+      const part = visiblePart(target.element);
       const area = part.width * part.height;
       if (area > bestArea) {
         bestArea = area;
-        best = { ...part, img };
+        best = { ...part, target };
       }
     }
     return best;
@@ -2505,12 +2606,12 @@
         hideButton();
         return;
       }
-      showButton(found.img, found);
-      showGear(found.img, found);
+      showButton(found.target, found);
+      showGear(found.target, found);
     });
   }
   function onImageLoad(event) {
-    if (event.target?.tagName === "IMG") updatePinned();
+    if (event.target?.tagName === "IMG") scheduleRefresh();
   }
   const TOUCH_QUERY = "(hover: none), (pointer: coarse)";
   function applyButtonMode() {
@@ -2519,19 +2620,30 @@
     pinned = wanted;
     if (pinned) {
       document.addEventListener("load", onImageLoad, true);
-      updatePinned();
+      tree = new MutationObserver(scheduleRefresh);
+      tree.observe(document.documentElement, {
+        childList: true,
+        subtree: true,
+        // A lazily-loaded image is the same element with a new address, and a
+        // background only exists in a style, so neither shows up as a new node.
+        attributes: true,
+        attributeFilter: ["src", "srcset", "style", "class"]
+      });
+      refresh();
     } else {
       document.removeEventListener("load", onImageLoad, true);
+      tree?.disconnect();
+      tree = null;
       hideButton();
     }
   }
   document.addEventListener(
     "mouseover",
     (event) => {
-      const img = imageFromEvent(event);
-      if (!img) return;
+      const found = targetFromEvent(event, settings.minImageSize, isOurs);
+      if (!found) return;
       window.clearTimeout(hideTimer);
-      showButton(img);
+      showButton(found);
     },
     true
   );
@@ -2539,7 +2651,9 @@
     "mouseout",
     (event) => {
       if (pinned) return;
-      if (imageFromEvent(event)) hideTimer = window.setTimeout(hideButton, 300);
+      if (targetFromEvent(event, settings.minImageSize, isOurs)) {
+        hideTimer = window.setTimeout(hideButton, 300);
+      }
     },
     true
   );
@@ -2570,7 +2684,7 @@
     (event) => {
       event.preventDefault();
       event.stopPropagation();
-      if (currentImage) void translate(currentImage);
+      if (currentTarget) void translate(currentTarget);
     },
     true
   );
@@ -2581,11 +2695,11 @@
       if (modifier === "none") return;
       const pressed = modifier === "alt" && event.altKey || modifier === "ctrl" && event.ctrlKey || modifier === "shift" && event.shiftKey;
       if (!pressed) return;
-      const img = imageFromEvent(event);
-      if (!img) return;
+      const found = targetFromEvent(event, settings.minImageSize, isOurs);
+      if (!found) return;
       event.preventDefault();
       event.stopPropagation();
-      void translate(img);
+      void translate(found);
     },
     true
   );
@@ -2595,10 +2709,10 @@
       updatePinned();
       return;
     }
-    if (currentImage?.isConnected) {
-      showButton(currentImage);
-      if (gear.style.opacity === "1") showGear(currentImage);
-    } else if (currentImage) hideButton();
+    if (currentTarget?.element.isConnected) {
+      showButton(currentTarget);
+      if (gear.style.opacity === "1") showGear(currentTarget);
+    } else if (currentTarget) hideButton();
   }
   window.addEventListener("resize", reposition);
   window.addEventListener("scroll", reposition, true);

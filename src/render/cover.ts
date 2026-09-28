@@ -22,10 +22,10 @@ interface Cover {
   resize: ResizeObserver;
 }
 
-const covers = new WeakMap<HTMLImageElement, Cover>();
-const live = new Set<WeakRef<HTMLImageElement>>();
+const covers = new WeakMap<HTMLElement, Cover>();
+const live = new Set<WeakRef<HTMLElement>>();
 
-export const isCovered = (img: HTMLImageElement): boolean => covers.has(img);
+export const isCovered = (img: HTMLElement): boolean => covers.has(img);
 
 /**
  * The marker on a cover element.
@@ -50,14 +50,14 @@ export const isCover = (node: Element): boolean => node.hasAttribute(COVER_MARK)
  * positioned sibling resolves against, so these numbers need no correction for
  * scrolling or for where the page happens to be.
  */
-function place(cover: HTMLImageElement, img: HTMLImageElement): void {
+function place(cover: HTMLImageElement, img: HTMLElement): void {
   cover.style.left = `${img.offsetLeft}px`;
   cover.style.top = `${img.offsetTop}px`;
   cover.style.width = `${img.offsetWidth}px`;
   cover.style.height = `${img.offsetHeight}px`;
 }
 
-export function coverImage(img: HTMLImageElement, blobUrl: string): boolean {
+export function coverImage(img: HTMLElement, blobUrl: string): boolean {
   uncoverImage(img);
 
   const parent = img.parentElement;
@@ -105,7 +105,7 @@ export function coverImage(img: HTMLImageElement, blobUrl: string): boolean {
   return true;
 }
 
-export function uncoverImage(img: HTMLImageElement): boolean {
+export function uncoverImage(img: HTMLElement): boolean {
   const cover = covers.get(img);
   if (!cover) return false;
   cover.resize.disconnect();

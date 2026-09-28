@@ -15,7 +15,15 @@ interface OverlayEntry {
   objectUrls: string[];
 }
 
-const overlays = new WeakMap<HTMLImageElement, OverlayEntry>();
+const overlays = new WeakMap<HTMLElement, OverlayEntry>();
+/**
+ * What has an overlay, for the two operations that need to enumerate them.
+ *
+ * A WeakMap cannot be walked, and this used to walk `document.images` instead -
+ * which quietly meant only an <img> could ever be cleared or repositioned, and
+ * a canvas or a background would have been stranded.
+ */
+const live = new Set<WeakRef<HTMLElement>>();
 const pct = (value: number): string => `${(value * 100).toFixed(4)}%`;
 
 function textShadow(radius: number, colour: string): string {
@@ -30,9 +38,9 @@ function textShadow(radius: number, colour: string): string {
     .join(',');
 }
 
-export const hasOverlay = (img: HTMLImageElement): boolean => overlays.has(img);
+export const hasOverlay = (img: HTMLElement): boolean => overlays.has(img);
 
-export function clearOverlay(img: HTMLImageElement): boolean {
+export function clearOverlay(img: HTMLElement): boolean {
   const entry = overlays.get(img);
   if (!entry) return false;
   for (const url of entry.objectUrls) URL.revokeObjectURL(url);
@@ -43,7 +51,7 @@ export function clearOverlay(img: HTMLImageElement): boolean {
 
 /** The shadow host is a fixed full-viewport layer, so these are viewport
  *  coordinates and scrolling needs no page-offset arithmetic. */
-function placeLayer(layer: HTMLDivElement, img: HTMLImageElement): void {
+function placeLayer(layer: HTMLDivElement, img: HTMLElement): void {
   const rect = img.getBoundingClientRect();
   layer.style.top = `${rect.top}px`;
   layer.style.left = `${rect.left}px`;
@@ -51,10 +59,21 @@ function placeLayer(layer: HTMLDivElement, img: HTMLImageElement): void {
   layer.style.height = `${rect.height}px`;
 }
 
+/** Whatever still has an overlay, with the dead references swept out. */
+function overlaid(): HTMLElement[] {
+  const out: HTMLElement[] = [];
+  for (const ref of live) {
+    const element = ref.deref();
+    if (!element || !overlays.has(element)) live.delete(ref);
+    else out.push(element);
+  }
+  return out;
+}
+
 /** Remove every overlay on the page. */
 export function clearAllOverlays(): number {
   let count = 0;
-  for (const img of Array.from(document.images)) {
+  for (const img of overlaid()) {
     if (clearOverlay(img)) count += 1;
   }
   return count;
@@ -62,7 +81,7 @@ export function clearAllOverlays(): number {
 
 /** Overlays live in page coordinates, so they must follow layout changes. */
 export function repositionOverlays(): void {
-  for (const img of Array.from(document.images)) {
+  for (const img of overlaid()) {
     const entry = overlays.get(img);
     if (!entry) continue;
     if (!img.isConnected) {
@@ -104,14 +123,17 @@ function renderBackground(
 }
 
 export function renderTranslation(
-  img: HTMLImageElement,
+  img: HTMLElement,
   blocks: TranslationBlock[],
-  settings: Settings
+  settings: Settings,
+  // The picture's own proportions, which only an <img> carries on the element.
+  // A canvas, a video and a background all get theirs from whatever was read.
+  natural: { width: number; height: number }
 ): number {
   clearOverlay(img);
 
   const rect = img.getBoundingClientRect();
-  const aspect = img.naturalWidth / img.naturalHeight;
+  const aspect = natural.width / natural.height;
   const fontFamily =
     settings.fontFamily || getComputedStyle(img).fontFamily || 'system-ui, sans-serif';
 
@@ -122,6 +144,7 @@ export function renderTranslation(
 
   const objectUrls: string[] = [];
   overlays.set(img, { layer, objectUrls });
+  live.add(new WeakRef(img));
 
   let rendered = 0;
   for (const block of blocks) {

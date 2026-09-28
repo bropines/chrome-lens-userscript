@@ -38,6 +38,7 @@ src/
   protobuf.ts           minimal wire codec: varint, length-delimited, fixed32
   types.ts              shared domain types; every cross-module shape lives here
   gm.ts                 every difference between userscript hosts, in one place
+  detect.ts             what counts as a picture, and where they are
   settings.ts           GM-backed store, defaults, and the settings field list
   languages.ts          language codes; labels come from Intl.DisplayNames
   cache.ts              LRU over Lens responses, evicted by bytes
@@ -207,6 +208,31 @@ made a working setup look broken:
 Past that, `chrome://inspect` over USB gives real DevTools against the phone's
 page. AdGuard runs scripts in the page context, so its errors are in the
 ordinary console; Tampermonkey's are behind its own context in the dropdown.
+
+### A picture is a kind, not a tag
+
+`<img>` is most of them and finding only those is not enough. `detect.ts`
+classifies four kinds - `img`, `canvas`, `video` and a CSS `background` - and
+everything downstream works on a `Target` (element, kind, url) rather than an
+`HTMLImageElement`. Three things that cost a session each:
+
+- **The document is not the page.** The site this was written for serves 24 kB
+  of HTML holding three `<img>`: a banner, an icon and a spinner. Every picture
+  worth translating arrives later from an API. A detector that reads the
+  document once finds nothing, so the list is kept current by a
+  MutationObserver - `childList` for new nodes and `src`/`srcset`/`style`/
+  `class` for an element that becomes a picture without being replaced.
+- **`document.images` does not cross a shadow boundary**, and neither does
+  `querySelectorAll`. The walk recurses into open shadow roots. Closed ones
+  stay invisible, which nothing can help.
+- **A canvas and a video have no address.** They key on nothing, so they are
+  never cached, and a tainted one cannot be recovered by re-fetching because
+  there is no URL to fetch. That is the one dead end in the ladder.
+
+Enumerating tags is free; deciding a background is not, because it costs a
+computed style per element. The sweep is capped, and the hover path never
+depends on it - it classifies whatever is under the cursor directly, so a
+background always works there.
 
 ### The pinned button is a scan, not an observer
 

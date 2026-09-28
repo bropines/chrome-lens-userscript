@@ -3,6 +3,8 @@ import { diagnose } from './diagnose.js';
 
 import { callLens } from './lens/client.js';
 import { acquireSource, encodeForUpload } from './image.js';
+import { collect, isBigEnough, targetFromEvent } from './detect.js';
+import type { Target } from './detect.js';
 import {
   clearAllOverlays,
   clearOverlay,
@@ -11,7 +13,7 @@ import {
   repositionOverlays,
 } from './render/overlay.js';
 import { renderToBlob } from './render/canvas.js';
-import { coverImage, isCover, isCovered, uncoverAll, uncoverImage } from './render/cover.js';
+import { coverImage, isCovered, uncoverAll, uncoverImage } from './render/cover.js';
 import { getSettings, saveSettings } from './settings.js';
 import {
   cacheKey,
@@ -59,17 +61,18 @@ function toast(message: string, ms = 3200): void {
   toastTimer = window.setTimeout(() => toastEl.classList.remove('lt-show'), ms);
 }
 
-const busy = new WeakSet<HTMLImageElement>();
+const busy = new WeakSet<HTMLElement>();
 
-const isTranslated = (img: HTMLImageElement): boolean => isCovered(img) || hasOverlay(img);
+const isTranslated = (img: HTMLElement): boolean => isCovered(img) || hasOverlay(img);
 
-function undo(img: HTMLImageElement): boolean {
+function undo(img: HTMLElement): boolean {
   const restored = uncoverImage(img) || clearOverlay(img);
   if (restored) button.classList.remove('lt-active');
   return restored;
 }
 
-async function translate(img: HTMLImageElement): Promise<void> {
+async function translate(target: Target): Promise<void> {
+  const img = target.element;
   if (busy.has(img)) return;
   if (!settings.enabled) {
     toast('Translation is switched off in settings');
@@ -81,15 +84,17 @@ async function translate(img: HTMLImageElement): Promise<void> {
   button.classList.add('lt-busy');
   button.classList.remove('lt-error');
   try {
-    const key = cacheKey(img.currentSrc || img.src, settings);
-    const displayedWidth = img.getBoundingClientRect().width || img.naturalWidth;
+    // A canvas and a video have no address, so they key on nothing and are
+    // simply never cached - there is no second request to save.
+    const key = cacheKey(target.url, settings);
+    const displayedWidth = img.getBoundingClientRect().width;
 
     // A finished rendering short-circuits everything: no pixels to fetch, no
     // canvas to paint, no round trip. This is the path a repeat toggle takes.
-    if (settings.renderMode === 'canvas') {
+    if (settings.renderMode === 'canvas' && target.url) {
       const done = getRender(renderKey(key, settings, displayedWidth), settings);
       if (done && coverImage(img, URL.createObjectURL(done))) {
-        if (currentImage === img) button.classList.add('lt-active');
+        if (currentTarget?.element === img) button.classList.add('lt-active');
         return;
       }
     }
@@ -97,13 +102,13 @@ async function translate(img: HTMLImageElement): Promise<void> {
     // Pixels are needed for rendering either way. The JPEG encode and the round
     // trip are not, so both sit behind the response cache - encoding an upload
     // nobody sends was the expensive half of a cache hit.
-    const prepared = await acquireSource(img);
+    const prepared = await acquireSource(target);
     try {
-      let result = getCached(key, settings);
+      let result = target.url ? getCached(key, settings) : undefined;
       if (!result) {
         const upload = await encodeForUpload(prepared.source, settings);
         result = await callLens(upload, settings);
-        putCached(key, result, settings);
+        if (target.url) putCached(key, result, settings);
       }
 
       if (!result.blocks.length) {
@@ -126,18 +131,23 @@ async function translate(img: HTMLImageElement): Promise<void> {
           // The displayed width is what decides whether text will be legible.
           displayedWidth
         );
-        putRender(renderKey(key, settings, displayedWidth), blob, settings);
+        if (target.url) putRender(renderKey(key, settings, displayedWidth), blob, settings);
         const url = URL.createObjectURL(blob);
         if (!coverImage(img, url)) {
           URL.revokeObjectURL(url);
           toast('This image cannot be covered here');
           return;
         }
-      } else if (!renderTranslation(img, result.blocks, settings)) {
+      } else if (
+        !renderTranslation(img, result.blocks, settings, {
+          width: prepared.width,
+          height: prepared.height,
+        })
+      ) {
         toast('Nothing could be placed on this image');
         return;
       }
-      if (currentImage === img) button.classList.add('lt-active');
+      if (currentTarget?.element === img) button.classList.add('lt-active');
     } finally {
       prepared.release();
     }
@@ -151,7 +161,7 @@ async function translate(img: HTMLImageElement): Promise<void> {
   }
 }
 
-let currentImage: HTMLImageElement | null = null;
+let currentTarget: Target | null = null;
 let hideTimer: number | undefined;
 let gearTimer: number | undefined;
 
@@ -170,8 +180,8 @@ interface Anchor {
   height: number;
 }
 
-function showGear(img: HTMLImageElement, anchor?: Anchor): void {
-  const rect = anchor ?? img.getBoundingClientRect();
+function showGear(target: Target, anchor?: Anchor): void {
+  const rect = anchor ?? target.element.getBoundingClientRect();
   gear.style.top = `${rect.top + 8}px`;
   gear.style.left = `${rect.left + rect.width - 69}px`;
   gear.style.opacity = '1';
@@ -186,36 +196,10 @@ function hideGear(): void {
   gear.style.pointerEvents = 'none';
 }
 
-function isCandidate(node: unknown): node is HTMLImageElement {
-  const img = node as HTMLImageElement | null;
-  if (!img || img.tagName !== 'IMG') return false;
-  // Our own rendering is an <img> in the page, and offering to translate it is
-  // how a translated image came to look untranslated.
-  if (isCover(img)) return false;
-  // Rendered size, not natural size: a 4000px image scaled to a 20px icon is
-  // still an icon.
-  const rect = img.getBoundingClientRect();
-  return rect.width >= settings.minImageSize && rect.height >= settings.minImageSize;
-}
-
-/**
- * The image under an event.
- *
- * composedPath is what makes this work on sites that put their content in a
- * shadow root of their own: a plain event.target would report the host element
- * instead of the image inside it.
- */
-function imageFromEvent(event: Event): HTMLImageElement | null {
-  for (const node of event.composedPath()) {
-    if (isOurs(node as EventTarget)) return null;
-    if (isCandidate(node)) return node;
-  }
-  return null;
-}
-
-function showButton(img: HTMLImageElement, anchor?: Anchor): void {
+function showButton(target: Target, anchor?: Anchor): void {
   if (!settings.showButton) return;
-  currentImage = img;
+  const img = target.element;
+  currentTarget = target;
   // Viewport coordinates: the shadow host is fixed and covers the viewport.
   const rect = anchor ?? img.getBoundingClientRect();
   button.style.top = `${rect.top + 5}px`;
@@ -226,8 +210,8 @@ function showButton(img: HTMLImageElement, anchor?: Anchor): void {
   button.classList.toggle('lt-active', isTranslated(img));
 
   window.clearTimeout(gearTimer);
-  if (gear.style.opacity === '1') showGear(img);
-  else gearTimer = window.setTimeout(() => showGear(img), GEAR_DELAY_MS);
+  if (gear.style.opacity === '1') showGear(target);
+  else gearTimer = window.setTimeout(() => showGear(target), GEAR_DELAY_MS);
 }
 
 function hideButton(): void {
@@ -235,7 +219,7 @@ function hideButton(): void {
   button.style.transform = 'scale(0.9)';
   button.style.pointerEvents = 'none';
   hideGear();
-  currentImage = null;
+  currentTarget = null;
 }
 
 /**
@@ -250,18 +234,47 @@ function hideButton(): void {
  * version was written first and is the obvious answer, but it only reports
  * while the document is being rendered: in a tab that is never painted it
  * simply never fires, and the button never appears with no error to say why.
- * A scan of `document.images` answers from layout, which is always there.
- * Reading a few hundred rects once per frame costs nothing next to that.
+ * A scan answers from layout, which is always there, and reading a few hundred
+ * rects once per frame costs nothing next to that.
  *
- * Its one limit is that `document.images` does not reach into a site's own
- * shadow roots, where the hover path does via composedPath.
+ * What it scans comes from `detect.ts` and is refreshed when the page changes,
+ * not re-derived per frame: walking the composed tree is the expensive part,
+ * and on the page this was written for every picture arrives from an API long
+ * after the document is done.
  */
 let pinned = false;
 let pinnedFrame = 0;
 
+/**
+ * The pictures this page is known to hold.
+ *
+ * Refreshed when the DOM changes rather than re-derived per frame, and
+ * throttled because a busy page mutates constantly while the answer only has
+ * to be right by the next time the button is placed.
+ */
+let known: Target[] = [];
+let refreshTimer = 0;
+let tree: MutationObserver | null = null;
+
+/** Long enough that a chatty page does not pay for every mutation. */
+const REFRESH_DELAY_MS = 250;
+
+function refresh(): void {
+  known = collect(settings.minImageSize);
+  updatePinned();
+}
+
+function scheduleRefresh(): void {
+  if (refreshTimer) return;
+  refreshTimer = window.setTimeout(() => {
+    refreshTimer = 0;
+    refresh();
+  }, REFRESH_DELAY_MS);
+}
+
 /** The part of an image that is actually on screen. */
-function visiblePart(img: HTMLImageElement): Anchor {
-  const rect = img.getBoundingClientRect();
+function visiblePart(element: HTMLElement): Anchor {
+  const rect = element.getBoundingClientRect();
   const left = Math.max(rect.left, 0);
   const top = Math.max(rect.top, 0);
   const width = Math.min(rect.right, window.innerWidth) - left;
@@ -269,18 +282,19 @@ function visiblePart(img: HTMLImageElement): Anchor {
   return { top, left, width: Math.max(0, width), height: Math.max(0, height) };
 }
 
-/** The image the reader is looking at: the most viewport area wins. */
-function mostVisible(): (Anchor & { img: HTMLImageElement }) | null {
-  let best: (Anchor & { img: HTMLImageElement }) | null = null;
+/** The picture the reader is looking at: the most viewport area wins. */
+function mostVisible(): (Anchor & { target: Target }) | null {
+  let best: (Anchor & { target: Target }) | null = null;
   let bestArea = 0;
 
-  for (const img of document.images) {
-    if (!isCandidate(img)) continue;
-    const part = visiblePart(img);
+  for (const target of known) {
+    if (!target.element.isConnected) continue;
+    if (!isBigEnough(target, settings.minImageSize)) continue;
+    const part = visiblePart(target.element);
     const area = part.width * part.height;
     if (area > bestArea) {
       bestArea = area;
-      best = { ...part, img };
+      best = { ...part, target };
     }
   }
   return best;
@@ -298,16 +312,18 @@ function updatePinned(): void {
       hideButton();
       return;
     }
-    showButton(found.img, found);
+    showButton(found.target, found);
     // No cursor to linger, so the delay before the settings button would only
     // ever be a delay.
-    showGear(found.img, found);
+    showGear(found.target, found);
   });
 }
 
 /** An image with no size yet fails isCandidate, so it is reconsidered on load. */
 function onImageLoad(event: Event): void {
-  if ((event.target as Element | null)?.tagName === 'IMG') updatePinned();
+  // An image with no size yet is not a candidate, so the list has to be taken
+  // again once it has one - and its address may only now be its real one.
+  if ((event.target as Element | null)?.tagName === 'IMG') scheduleRefresh();
 }
 
 /**
@@ -328,9 +344,20 @@ function applyButtonMode(): void {
   pinned = wanted;
   if (pinned) {
     document.addEventListener('load', onImageLoad, true);
-    updatePinned();
+    tree = new MutationObserver(scheduleRefresh);
+    tree.observe(document.documentElement, {
+      childList: true,
+      subtree: true,
+      // A lazily-loaded image is the same element with a new address, and a
+      // background only exists in a style, so neither shows up as a new node.
+      attributes: true,
+      attributeFilter: ['src', 'srcset', 'style', 'class'],
+    });
+    refresh();
   } else {
     document.removeEventListener('load', onImageLoad, true);
+    tree?.disconnect();
+    tree = null;
     hideButton();
   }
 }
@@ -338,10 +365,10 @@ function applyButtonMode(): void {
 document.addEventListener(
   'mouseover',
   (event) => {
-    const img = imageFromEvent(event);
-    if (!img) return;
+    const found = targetFromEvent(event, settings.minImageSize, isOurs);
+    if (!found) return;
     window.clearTimeout(hideTimer);
-    showButton(img);
+    showButton(found);
   },
   true
 );
@@ -350,7 +377,9 @@ document.addEventListener(
   'mouseout',
   (event) => {
     if (pinned) return;
-    if (imageFromEvent(event)) hideTimer = window.setTimeout(hideButton, 300);
+    if (targetFromEvent(event, settings.minImageSize, isOurs)) {
+      hideTimer = window.setTimeout(hideButton, 300);
+    }
   },
   true
 );
@@ -388,7 +417,7 @@ button.addEventListener(
   (event) => {
     event.preventDefault();
     event.stopPropagation();
-    if (currentImage) void translate(currentImage);
+    if (currentTarget) void translate(currentTarget);
   },
   true
 );
@@ -405,11 +434,11 @@ document.addEventListener(
       (modifier === 'shift' && event.shiftKey);
     if (!pressed) return;
 
-    const img = imageFromEvent(event);
-    if (!img) return;
+    const found = targetFromEvent(event, settings.minImageSize, isOurs);
+    if (!found) return;
     event.preventDefault();
     event.stopPropagation();
-    void translate(img);
+    void translate(found);
   },
   true
 );
@@ -423,10 +452,10 @@ function reposition(): void {
     updatePinned();
     return;
   }
-  if (currentImage?.isConnected) {
-    showButton(currentImage);
-    if (gear.style.opacity === '1') showGear(currentImage);
-  } else if (currentImage) hideButton();
+  if (currentTarget?.element.isConnected) {
+    showButton(currentTarget);
+    if (gear.style.opacity === '1') showGear(currentTarget);
+  } else if (currentTarget) hideButton();
 }
 
 window.addEventListener('resize', reposition);
