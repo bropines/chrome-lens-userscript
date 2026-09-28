@@ -161,6 +161,12 @@ Four details are easy to get wrong and are the reason this matches Chromium:
 
 Word offsets index the translation by **UTF-16 code unit**, which is what `icu::UnicodeString` uses on the server — and conveniently exactly how JavaScript indexes strings, so `String.prototype.slice` is already correct here.
 
+**Re-wrap horizontal text** lifts rule 1 on purpose. Chromium repeats the
+detected layout line for line, which is faithful and leaves the spacing between
+them out of your hands - a speech bubble is really one text area, so the setting
+lays the paragraph out again inside it, mends any word the server split across
+its own lines, and makes **Line spacing** mean something.
+
 Vertical CJK gets a fifth rule of its own: setting a Russian translation vertically is faithful to the source and miserable to read, so the `verticalText` setting defaults to `auto` and keeps the column only when the target language is itself CJK.
 
 ## Which images, and how they are read

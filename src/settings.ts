@@ -34,6 +34,7 @@ export const DEFAULTS: Settings = {
   outlineScale: 1,
   eraseMode: 'patch',
   hullPadding: 0.45,
+  reflowHorizontal: false,
   lineSpacing: 1.25,
   textAlign: 'auto',
 };
@@ -167,6 +168,12 @@ export const FIELDS: ReadonlyArray<Field> = [
     ],
   },
   {
+    key: 'reflowHorizontal', group: 'Layout',
+    label: 'Re-wrap horizontal text',
+    type: 'checkbox',
+    hint: 'treat a paragraph as one text area, not a repeat of the server lines',
+  },
+  {
     key: 'lineSpacing', group: 'Layout',
     label: 'Line spacing',
     type: 'range',
@@ -174,7 +181,7 @@ export const FIELDS: ReadonlyArray<Field> = [
     max: '2',
     step: '0.05',
     unit: 'x',
-    hint: 'only reaches re-wrapped text: manga mode, and vertical set horizontally',
+    hint: 'needs re-wrapped text: the switch above, or a vertical source',
   },
   {
     key: 'minReadablePx', group: 'Legibility',

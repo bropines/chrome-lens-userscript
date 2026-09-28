@@ -370,9 +370,15 @@ rendering identical.
 ### Line spacing only exists where text was re-wrapped
 
 `lineSpacing` reaches `drawReflowedParagraph` and nothing else, because that is
-the only place this script decides where a line goes. Everywhere else each line
-is painted at the box the server reported for it, and the gap between two of
-them is the source's, not ours.
+the only place this script decides where a line goes. Keeping the server's lines
+is what leaves the gap between them out of anyone's hands, which is why
+`reflowHorizontal` exists: a vertical column *has* to be re-wrapped, horizontal
+text does not, and Chromium never does - but a speech bubble is one text area,
+not a transcript of where the source happened to break. Re-wrapping also mends
+a word the server split across two of its lines.
+
+It is off by default, because repeating the source layout is the faithful
+behaviour and the one people get without asking.
 
 It has to reach **both** halves of the reflow: the multiple `fitTextBlock`
 measures against and the one the draw loop advances by. Fitting against 1.25 and

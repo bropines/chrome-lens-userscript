@@ -468,7 +468,13 @@ export async function renderToBlob(
     const hull = settings.drawBackground && (settings.eraseMode === 'hull' || settings.mangaMode);
     if (hull) eraseTextArea(draw, block, settings);
     // Erase the source either way; only the text placement changes.
-    const reflow = vertical && !stayVertical && Boolean(block.geometry);
+    //
+    // A vertical column has to be re-wrapped or the translation cannot be set
+    // in it at all. A horizontal paragraph does not have to be, and Chromium
+    // never is - but keeping the server's lines is also what leaves the spacing
+    // between them out of anyone's hands, so it is a setting.
+    const reflow =
+      Boolean(block.geometry) && !stayVertical && (vertical || settings.reflowHorizontal);
 
     for (let i = 0; i < block.lines.length; i += 1) {
       const line = block.lines[i];

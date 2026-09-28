@@ -169,6 +169,19 @@ export interface Settings {
   /** How far past the text's hull to extend the cover, as a fraction of line height. */
   hullPadding: number;
   /**
+   * Lay a horizontal paragraph out again instead of keeping the server's lines.
+   *
+   * Chromium repeats the detected layout: one source line, one drawn line, at
+   * the box the server reported for it. Faithful, and it leaves nothing to
+   * adjust - the gap between two lines is the source's, so `lineSpacing` has
+   * nothing to act on. Re-wrapping makes the paragraph one text area, which is
+   * what a speech bubble actually is.
+   *
+   * A vertical column is re-wrapped regardless: horizontal text cannot occupy
+   * a tall narrow box at all.
+   */
+  reflowHorizontal: boolean;
+  /**
    * Line spacing as a multiple of the font size, for reflowed paragraphs.
    *
    * It only reaches text that was re-wrapped - a vertical column set

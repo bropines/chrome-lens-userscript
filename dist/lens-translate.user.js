@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Lens Translate
 // @namespace    https://github.com/bropines/chrome-lens-userscript
-// @version      2.7.1
+// @version      2.8.0
 // @author       bropines
 // @description  Hover any image, click the button, and its text is translated in place - rendered the way Chromium's own Lens overlay does it.
 // @license      MIT
@@ -545,6 +545,7 @@
     outlineScale: 1,
     eraseMode: "patch",
     hullPadding: 0.45,
+    reflowHorizontal: false,
     lineSpacing: 1.25,
     textAlign: "auto"
   };
@@ -669,6 +670,13 @@
       ]
     },
     {
+      key: "reflowHorizontal",
+      group: "Layout",
+      label: "Re-wrap horizontal text",
+      type: "checkbox",
+      hint: "treat a paragraph as one text area, not a repeat of the server lines"
+    },
+    {
       key: "lineSpacing",
       group: "Layout",
       label: "Line spacing",
@@ -677,7 +685,7 @@
       max: "2",
       step: "0.05",
       unit: "x",
-      hint: "only reaches re-wrapped text: manga mode, and vertical set horizontally"
+      hint: "needs re-wrapped text: the switch above, or a vertical source"
     },
     {
       key: "minReadablePx",
@@ -1985,7 +1993,7 @@
       const stayVertical = !settings2.mangaMode && shouldStayVertical(block, settings2.verticalText);
       const hull = settings2.drawBackground && (settings2.eraseMode === "hull" || settings2.mangaMode);
       if (hull) eraseTextArea(draw, block, settings2);
-      const reflow = vertical && !stayVertical && Boolean(block.geometry);
+      const reflow = Boolean(block.geometry) && !stayVertical && (vertical || settings2.reflowHorizontal);
       for (let i = 0; i < block.lines.length; i += 1) {
         const line = block.lines[i];
         if (!line) continue;
