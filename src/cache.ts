@@ -118,23 +118,40 @@ export function putCached(key: string, result: LensResult, settings: Settings): 
  * The displayed width is bucketed: it decides the readable-text floor, but a
  * few pixels of layout jitter should not throw the cache away.
  */
+/**
+ * Settings that cannot change a drawing.
+ *
+ * An exclusion list rather than an inclusion list, on purpose. Forgetting to
+ * exclude one costs a re-render nobody notices; forgetting to include one hands
+ * back a picture drawn with the old value - which is exactly how a line-spacing
+ * change came to do nothing at all, twice over, because the key had been
+ * hand-written and the new setting was simply not in it.
+ *
+ * The upload settings are here because they change what Lens is asked, not how
+ * the answer is drawn: the renderer works from the decoded image, never the
+ * JPEG. The language settings are here because the response key already carries
+ * them.
+ */
+/** A byte no setting value contains, so two fields cannot run together. */
+const SEPARATOR = String.fromCharCode(0);
+
+const NOT_DRAWN: ReadonlySet<string> = new Set([
+  'enabled', 'showButton', 'buttonMode', 'hotkey', 'minImageSize',
+  'apiKey', 'timeoutMs', 'cacheBytes', 'region', 'timeZone',
+  'targetLang', 'sourceLang', 'ocrLang',
+  'maxArea', 'maxSide', 'jpegQuality',
+]);
+
 export function renderKey(key: string, settings: Settings, displayedWidth: number): string {
-  return [
-    key,
-    settings.renderMode,
-    settings.verticalText,
-    settings.fontFamily,
-    settings.drawBackground ? 1 : 0,
-    settings.minReadablePx,
-    settings.supersample,
-    settings.mangaMode ? 1 : 0,
-    settings.mangaBoxGrowth,
-    settings.outlineScale,
-    settings.eraseMode,
-    settings.hullPadding,
-    settings.textAlign,
-    Math.round(displayedWidth / 50),
-  ].join('');
+  const parts = [key];
+  for (const name of Object.keys(settings).sort()) {
+    if (NOT_DRAWN.has(name)) continue;
+    parts.push(`${name}=${String(settings[name as keyof Settings])}`);
+  }
+  // Legibility is decided against the displayed size, so a different one is a
+  // different picture - bucketed, because a pixel of resize is not.
+  parts.push(`w=${Math.round(displayedWidth / 50)}`);
+  return parts.join(SEPARATOR);
 }
 
 const renders = new Map<string, { blob: Blob; used: number }>();

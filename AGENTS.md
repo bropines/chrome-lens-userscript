@@ -308,6 +308,21 @@ Verified by counting `drawImage` calls and POSTs: three translations of the same
 photo under three rendition URLs cost one POST and zero pixel reads after the
 first.
 
+**The render key is an exclusion list, not an inclusion list.** It used to name
+the settings that matter, and a setting added later was simply not in it: the
+cache then handed back a picture drawn with the old value, so changing line
+spacing did nothing at all even on a fresh translate. Listing what *cannot*
+change a drawing fails the safe way - forget to exclude one and you pay for a
+re-render nobody notices.
+
+**A settings change redraws what is already on screen.** A finished rendering is
+a picture drawn under the settings of the moment; leaving it there means the
+panel says one thing and the page shows another, reconcilable only by toggling
+every image by hand. `redrawShowing` goes back through `translate`, so a change
+to the drawing comes out of the response cache and costs nothing, while changing
+the target language asks Lens again - the right answer in both cases, and not
+one that has to be decided here.
+
 ### Deliberate departures from Chromium
 
 - **Minimum readable size.** Lens fits text to the original line box, so fine

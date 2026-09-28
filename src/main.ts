@@ -63,9 +63,20 @@ function toast(message: string, ms = 3200): void {
 
 const busy = new WeakSet<HTMLElement>();
 
+/**
+ * What is showing a translation right now.
+ *
+ * A finished rendering is a picture drawn under the settings of the moment, so
+ * changing them has to redraw it - otherwise the panel says one thing and the
+ * page shows another, and the only way to reconcile them is to toggle every
+ * image by hand. A Map rather than a WeakMap because this one has to be walked.
+ */
+const showing = new Map<HTMLElement, Target>();
+
 const isTranslated = (img: HTMLElement): boolean => isCovered(img) || hasOverlay(img);
 
 function undo(img: HTMLElement): boolean {
+  showing.delete(img);
   const restored = uncoverImage(img) || clearOverlay(img);
   if (restored) button.classList.remove('lt-active');
   return restored;
@@ -94,6 +105,7 @@ async function translate(target: Target): Promise<void> {
     if (settings.renderMode === 'canvas' && target.url) {
       const done = getRender(renderKey(key, settings, displayedWidth), settings);
       if (done && coverImage(img, URL.createObjectURL(done))) {
+        showing.set(img, target);
         if (currentTarget?.element === img) button.classList.add('lt-active');
         return;
       }
@@ -147,6 +159,7 @@ async function translate(target: Target): Promise<void> {
         toast('Nothing could be placed on this image');
         return;
       }
+      showing.set(img, target);
       if (currentTarget?.element === img) button.classList.add('lt-active');
     } finally {
       prepared.release();
@@ -420,9 +433,27 @@ for (const control of [button, gear]) {
   });
 }
 
+/**
+ * Draw everything again under the settings just saved.
+ *
+ * It goes back through `translate`, so a change that only affects the drawing
+ * comes out of the response cache and costs nothing, while changing the target
+ * language asks Lens again - which is the right answer in both cases and not
+ * one this has to decide for itself.
+ */
+async function redrawShowing(): Promise<void> {
+  const targets = [...showing.values()].filter((target) => target.element.isConnected);
+  if (!targets.length) return;
+  for (const target of targets) {
+    undo(target.element);
+    await translate(target);
+  }
+}
+
 function onSaved(saved: Settings): void {
   settings = saved;
   applyButtonMode();
+  void redrawShowing();
   toast('Settings saved');
 }
 
@@ -513,6 +544,7 @@ registerCommand({
   menuLabel: 'Lens Translate: undo all on this page',
   label: 'Undo all on this page',
   run: () => {
+    showing.clear();
     const restored = uncoverAll() + clearAllOverlays();
     toast(restored ? `Restored ${restored} image${restored === 1 ? '' : 's'}` : 'Nothing to restore');
   },
@@ -530,6 +562,7 @@ registerCommand({
   run: () => {
     settings = saveSettings({ enabled: !settings.enabled });
     if (!settings.enabled) {
+      showing.clear();
       uncoverAll();
       clearAllOverlays();
       hideButton();

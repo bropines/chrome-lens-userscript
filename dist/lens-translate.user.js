@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Lens Translate
 // @namespace    https://github.com/bropines/chrome-lens-userscript
-// @version      2.8.1
+// @version      2.8.2
 // @author       bropines
 // @description  Hover any image, click the button, and its text is translated in place - rendered the way Chromium's own Lens overlay does it.
 // @license      MIT
@@ -2108,23 +2108,33 @@
       entries.delete(oldestKey);
     }
   }
+  const SEPARATOR = String.fromCharCode(0);
+  const NOT_DRAWN = /* @__PURE__ */ new Set([
+    "enabled",
+    "showButton",
+    "buttonMode",
+    "hotkey",
+    "minImageSize",
+    "apiKey",
+    "timeoutMs",
+    "cacheBytes",
+    "region",
+    "timeZone",
+    "targetLang",
+    "sourceLang",
+    "ocrLang",
+    "maxArea",
+    "maxSide",
+    "jpegQuality"
+  ]);
   function renderKey(key, settings2, displayedWidth) {
-    return [
-      key,
-      settings2.renderMode,
-      settings2.verticalText,
-      settings2.fontFamily,
-      settings2.drawBackground ? 1 : 0,
-      settings2.minReadablePx,
-      settings2.supersample,
-      settings2.mangaMode ? 1 : 0,
-      settings2.mangaBoxGrowth,
-      settings2.outlineScale,
-      settings2.eraseMode,
-      settings2.hullPadding,
-      settings2.textAlign,
-      Math.round(displayedWidth / 50)
-    ].join("");
+    const parts = [key];
+    for (const name of Object.keys(settings2).sort()) {
+      if (NOT_DRAWN.has(name)) continue;
+      parts.push(`${name}=${String(settings2[name])}`);
+    }
+    parts.push(`w=${Math.round(displayedWidth / 50)}`);
+    return parts.join(SEPARATOR);
   }
   const renders = /* @__PURE__ */ new Map();
   let renderBytes = 0;
@@ -2506,8 +2516,10 @@
     toastTimer = window.setTimeout(() => toastEl.classList.remove("lt-show"), ms);
   }
   const busy = /* @__PURE__ */ new WeakSet();
+  const showing = /* @__PURE__ */ new Map();
   const isTranslated = (img) => isCovered(img) || hasOverlay(img);
   function undo(img) {
+    showing.delete(img);
     const restored = uncoverImage(img) || clearOverlay(img);
     if (restored) button.classList.remove("lt-active");
     return restored;
@@ -2529,6 +2541,7 @@
       if (settings.renderMode === "canvas" && target.url) {
         const done = getRender(renderKey(key, settings, displayedWidth), settings);
         if (done && coverImage(img, URL.createObjectURL(done))) {
+          showing.set(img, target);
           if (currentTarget?.element === img) button.classList.add("lt-active");
           return;
         }
@@ -2572,6 +2585,7 @@
           toast("Nothing could be placed on this image");
           return;
         }
+        showing.set(img, target);
         if (currentTarget?.element === img) button.classList.add("lt-active");
       } finally {
         prepared.release();
@@ -2747,9 +2761,18 @@
       hideTimer = window.setTimeout(hideButton, 300);
     });
   }
+  async function redrawShowing() {
+    const targets2 = [...showing.values()].filter((target) => target.element.isConnected);
+    if (!targets2.length) return;
+    for (const target of targets2) {
+      undo(target.element);
+      await translate(target);
+    }
+  }
   function onSaved(saved) {
     settings = saved;
     applyButtonMode();
+    void redrawShowing();
     toast("Settings saved");
   }
   gear.addEventListener(
@@ -2820,6 +2843,7 @@
     menuLabel: "Lens Translate: undo all on this page",
     label: "Undo all on this page",
     run: () => {
+      showing.clear();
       const restored = uncoverAll() + clearAllOverlays();
       toast(restored ? `Restored ${restored} image${restored === 1 ? "" : "s"}` : "Nothing to restore");
     }
@@ -2835,6 +2859,7 @@
     run: () => {
       settings = saveSettings({ enabled: !settings.enabled });
       if (!settings.enabled) {
+        showing.clear();
         uncoverAll();
         clearAllOverlays();
         hideButton();
