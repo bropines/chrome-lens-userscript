@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Lens Translate
 // @namespace    https://github.com/bropines/chrome-lens-userscript
-// @version      2.4.0
+// @version      2.5.0
 // @author       bropines
 // @description  Hover any image, click the button, and its text is translated in place - rendered the way Chromium's own Lens overlay does it.
 // @license      MIT
@@ -48,12 +48,13 @@
     }
   }
   function writeStored(key, value) {
+    const encoded = JSON.stringify(value);
     if (typeof _GM_setValue === "function") {
-      _GM_setValue(key, value);
+      _GM_setValue(key, encoded);
       return;
     }
     try {
-      window.localStorage.setItem(LOCAL_PREFIX + key, JSON.stringify(value));
+      window.localStorage.setItem(LOCAL_PREFIX + key, encoded);
     } catch {
     }
   }
@@ -376,6 +377,7 @@
     outlineScale: 1,
     eraseMode: "patch",
     hullPadding: 0.45,
+    lineSpacing: 1.25,
     textAlign: "auto"
   };
   const GROUPS = [
@@ -497,6 +499,17 @@
         ["shift", "Shift + click"],
         ["none", "off"]
       ]
+    },
+    {
+      key: "lineSpacing",
+      group: "Layout",
+      label: "Line spacing",
+      type: "range",
+      min: "0.8",
+      max: "2",
+      step: "0.05",
+      unit: "x",
+      hint: "only reaches re-wrapped text: manga mode, and vertical set horizontally"
     },
     {
       key: "minReadablePx",
@@ -1619,12 +1632,13 @@
     ctx.save();
     ctx.translate(geometry.cx * width, geometry.cy * height);
     ctx.rotate(geometry.angle * DEG);
+    const spacing = settings2.lineSpacing > 0 ? settings2.lineSpacing : 1.25;
     const { size, lines } = fitTextBlock(
       (px) => {
         ctx.font = `${px}px ${fontFamily}`;
       },
       (candidate) => ctx.measureText(candidate).width,
-      (px) => px * 1.25,
+      (px) => px * spacing,
       text2,
       boxW,
       boxH,
@@ -1632,7 +1646,7 @@
     );
     const fontSize = Math.max(size, draw.minFontPx);
     ctx.font = `${fontSize}px ${fontFamily}`;
-    const lineHeight = fontSize * 1.25;
+    const lineHeight = fontSize * spacing;
     ctx.textAlign = "left";
     ctx.textBaseline = "top";
     const fill = argbToCss(style.textColor);

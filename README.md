@@ -10,6 +10,10 @@ No server, no extension, no account. TypeScript, built with Vite.
 
 **AdGuard** (Windows, Mac, Android) runs userscripts too: **Settings → Extensions → Add extension**, then paste that same raw URL. Nothing else differs, with one exception noted below.
 
+Every version is also tagged, so `raw/v2.5.0/dist/lens-translate.user.js` is a
+working script forever where `main` is only ever the latest one - worth knowing
+if an update ever goes wrong on you.
+
 Or build it yourself:
 
 ```bash

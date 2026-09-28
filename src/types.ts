@@ -169,6 +169,14 @@ export interface Settings {
   /** How far past the text's hull to extend the cover, as a fraction of line height. */
   hullPadding: number;
   /**
+   * Line spacing as a multiple of the font size, for reflowed paragraphs.
+   *
+   * It only reaches text that was re-wrapped - a vertical column set
+   * horizontally, or manga mode. Everywhere else each line is placed at the box
+   * the server reported for it, and there is no spacing to set.
+   */
+  lineSpacing: number;
+  /**
    * Override the alignment the server reports. 'auto' follows it, which is what
    * Chromium does; the rest force a side, which is usually what you want once
    * the text has been reflowed into a different shape than the source.

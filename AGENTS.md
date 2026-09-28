@@ -174,6 +174,14 @@ tried and a bad API key is not spent twice.
 An empty body is a body. Returning `null` for an empty string here reported a
 zero-byte 200 as "a response this script cannot read".
 
+**Nothing but a string may be handed to `GM_setValue`.** GM4 promises to persist
+strings, numbers and booleans, and AdGuard for Android honours exactly that in
+the worst possible way: it accepts an object and hands it straight back for as
+long as the page lives, so a read-after-write passes - and then the key reads
+empty after a reload. Settings that held until you refreshed were the symptom.
+`writeStored` JSON-encodes everything; `readStored` still accepts an object, so
+a profile an older version wrote keeps loading.
+
 ### A userscript on a phone has to diagnose itself
 
 There is no console to open and the host reports one word for every network
@@ -296,6 +304,22 @@ loses its left-hand column on a phone.
 A line that already fits is not touched, which is what keeps the desktop
 rendering identical.
 
+### Line spacing only exists where text was re-wrapped
+
+`lineSpacing` reaches `drawReflowedParagraph` and nothing else, because that is
+the only place this script decides where a line goes. Everywhere else each line
+is painted at the box the server reported for it, and the gap between two of
+them is the source's, not ours.
+
+It has to reach **both** halves of the reflow: the multiple `fitTextBlock`
+measures against and the one the draw loop advances by. Fitting against 1.25 and
+then painting at 1.9 chooses a size for a box the text no longer fits.
+
+A looser spacing therefore yields a *smaller* font, not a taller block - the fit
+trades one for the other, and the block stays inside the box either way. Anyone
+measuring this from pixels should measure that invariant; the pitch between
+bands merges into one at tight spacings and is not a reliable read.
+
 ### Wrapping is a property of the language, not the string
 
 `wrapText` decides between word and character breaking from `wrapsPerCharacter`,
@@ -326,7 +350,13 @@ width `2 * pad`, then fill.
   discovered the hard way; keep that habit.
 - No emoji in code or commit messages. No decorative banner comments.
 - `dist/` is committed so the script can be installed straight from the repo.
-  Rebuild it in the same commit as any `src/` change.
+  Rebuild it in the same commit as any `src/` change - CI rebuilds and refuses
+  a diff, because a stale `dist/` ships silently: the header claims the new
+  version and the code is the old one.
+- Bump `version` in `package.json` with anything users will install. CI tags
+  `v<version>` and cuts a release from it on every push to `main` that carries
+  a version it has not seen; the tag is the only way back to a build that
+  worked.
 
 ## Verifying changes
 

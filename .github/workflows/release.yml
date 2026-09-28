@@ -1,0 +1,58 @@
+name: build and tag
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - run: bun install --frozen-lockfile
+
+      # dist/ is committed so the script installs straight from the repo, which
+      # means a stale one ships silently: @version says the new number and the
+      # code is the old one, and everybody updates into nothing. Rebuilding here
+      # and refusing a diff is the only thing standing between that and users.
+      - name: dist matches src
+        run: |
+          bun run build
+          git diff --exit-code -- dist/ || {
+            echo "::error::dist/ is out of date. Run 'bun run build' and commit the result."
+            exit 1
+          }
+
+      - name: read the version
+        id: version
+        run: echo "value=v$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+
+      # A tag per version, so a release that breaks somebody's phone has
+      # somewhere to go back to: raw/<tag>/dist/lens-translate.user.js is a
+      # working script forever, where main is only ever the latest one.
+      - name: tag and release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.value }}
+        run: |
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
+            echo "$TAG is already released; nothing to do."
+            exit 0
+          fi
+          git tag "$TAG"
+          git push origin "$TAG"
+          gh release create "$TAG" dist/lens-translate.user.js \
+            --title "$TAG" \
+            --generate-notes

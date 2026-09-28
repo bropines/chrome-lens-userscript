@@ -34,6 +34,7 @@ export const DEFAULTS: Settings = {
   outlineScale: 1,
   eraseMode: 'patch',
   hullPadding: 0.45,
+  lineSpacing: 1.25,
   textAlign: 'auto',
 };
 
@@ -164,6 +165,16 @@ export const FIELDS: ReadonlyArray<Field> = [
       ['shift', 'Shift + click'],
       ['none', 'off'],
     ],
+  },
+  {
+    key: 'lineSpacing', group: 'Layout',
+    label: 'Line spacing',
+    type: 'range',
+    min: '0.8',
+    max: '2',
+    step: '0.05',
+    unit: 'x',
+    hint: 'only reaches re-wrapped text: manga mode, and vertical set horizontally',
   },
   {
     key: 'minReadablePx', group: 'Legibility',

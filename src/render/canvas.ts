@@ -178,12 +178,16 @@ function drawReflowedParagraph(
   ctx.translate(geometry.cx * width, geometry.cy * height);
   ctx.rotate(geometry.angle * DEG);
 
+  // The same multiple has to reach both the fit and the draw: choosing a size
+  // against one spacing and then painting at another overflows the box.
+  const spacing = settings.lineSpacing > 0 ? settings.lineSpacing : 1.25;
+
   const { size, lines } = fitTextBlock(
     (px) => {
       ctx.font = `${px}px ${fontFamily}`;
     },
     (candidate) => ctx.measureText(candidate).width,
-    (px) => px * 1.25,
+    (px) => px * spacing,
     text,
     boxW,
     boxH,
@@ -191,7 +195,7 @@ function drawReflowedParagraph(
   );
   const fontSize = Math.max(size, draw.minFontPx);
   ctx.font = `${fontSize}px ${fontFamily}`;
-  const lineHeight = fontSize * 1.25;
+  const lineHeight = fontSize * spacing;
 
   ctx.textAlign = 'left';
   ctx.textBaseline = 'top';

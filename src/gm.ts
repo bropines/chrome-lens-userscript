@@ -13,19 +13,22 @@ import type { Bytes } from './types.js';
  * Everything that differs between userscript hosts.
  *
  * Tampermonkey is the reference implementation, but AdGuard ships a userscript
- * engine of its own (Extensions -> Add extension) and it differs in three ways
+ * engine of its own (Extensions -> Add extension) and it differs in four ways
  * that reach this script:
  *
- * 1. It has no userscript menu, so `GM_registerMenuCommand` simply does not
- *    exist. Calling it is a TypeError that aborts the rest of the bundle.
- * 2. It runs scripts in the page's own context rather than a sandbox, which is
- *    invisible here but is why nothing may rely on a private global.
+ * 1. `GM_registerMenuCommand` may not exist. Calling it is a TypeError that
+ *    aborts the rest of the bundle.
+ * 2. It may run scripts in the page's own context rather than a sandbox, which
+ *    is why nothing may rely on a private global.
  * 3. Its `GM_xmlhttpRequest` has been loose about `responseType` (CoreLibs
- *    #1983), and no host documents which shapes of request *body* it accepts.
+ *    #1983), reports a status through `onerror`, and no host documents which
+ *    shapes of request *body* it accepts.
+ * 4. Its storage persists only what GM4 promises - strings, numbers, booleans.
  *
- * None of that is reliably readable from `GM_info.scriptHandler` - a version
- * behaves how it behaves - so every difference below is settled by feature
- * detection, or by trying and falling back.
+ * And which of those apply is not readable from `GM_info`: one build has the
+ * menu and sandboxes, another has neither. A version behaves how it behaves, so
+ * every difference below is settled by feature detection, by writing to the
+ * narrowest contract, or by trying and falling back.
  */
 
 /** Only ever used to word an error; never to decide behaviour. */
@@ -53,13 +56,26 @@ export function readStored(key: string): unknown {
   }
 }
 
+/**
+ * Always a string, never the object itself.
+ *
+ * The GM4 API only promises to persist strings, numbers and booleans, and
+ * AdGuard for Android takes that literally in the worst way: it accepts an
+ * object and hands it straight back for as long as the page lives, so a
+ * read-after-write looks fine - and then the key reads empty after a reload.
+ * Settings that survived until you refreshed the page were the symptom.
+ *
+ * Reading stays tolerant of both, so a value an older version wrote as an
+ * object still loads.
+ */
 export function writeStored(key: string, value: unknown): void {
+  const encoded = JSON.stringify(value);
   if (typeof GM_setValue === 'function') {
-    GM_setValue(key, value);
+    GM_setValue(key, encoded);
     return;
   }
   try {
-    window.localStorage.setItem(LOCAL_PREFIX + key, JSON.stringify(value));
+    window.localStorage.setItem(LOCAL_PREFIX + key, encoded);
   } catch {
     // Private mode, or a quota that a page has already filled. Nothing to do.
   }
