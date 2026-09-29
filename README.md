@@ -236,7 +236,7 @@ swallow the text whole on a black one. 0 removes it.
 
 Lens sizes translated text to fit the *original* line box. On a 2400px page shown 600px wide, fine print measured here fitted at 9–13px, which is 2–3px on screen — no more readable than the original was, and that is the complaint.
 
-Two settings address it. **Minimum text size** (default 12 CSS px as displayed) raises anything below the floor, growing its background to match; lines in a dense paragraph can then overlap, which is the trade and why it is adjustable — 0 turns it off. **Render sharpness** draws the canvas at 1x/2x/3x the image's natural size, so zooming in or opening the image full size keeps the text crisp rather than smearing.
+Two settings address it. **Minimum text size** (default 12 CSS px as displayed) raises anything below the floor, growing its background to match; lines in a dense paragraph would then overlap, so **Keep text out of the next bubble** decides who yields — and it is the size, because text that shrinks is readable while text written across its neighbour is not. The room a paragraph may use is measured against the surrounding paragraphs rather than guessed at, which is what makes **Bubble fill** safe to raise. 0 turns the floor off entirely. **Render sharpness** draws the canvas at 1x/2x/3x the image's natural size, so zooming in or opening the image full size keeps the text crisp rather than smearing.
 
 ## Two ways to draw
 
