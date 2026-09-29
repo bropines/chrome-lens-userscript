@@ -347,14 +347,32 @@ across versions yet.
 
 ```ts
 import {
-  callLens, collect, ignoreElements, prepareImage, renderToBlob, setTransport,
+  callLens, ignoreElements, prepareImage, renderToBlob, setTransport,
 } from 'lens-translate-userscript/engine';
-import type { LensOptions, RenderOptions, Transport } from 'lens-translate-userscript/engine';
+import type {
+  LensOptions, RenderOptions, Target, Transport,
+} from 'lens-translate-userscript/engine';
 
-// 1. The one thing the engine cannot do for itself. In a userscript this wraps
-//    GM_xmlhttpRequest; the endpoint also answers a CORS preflight, so a plain
-//    fetch works where an Origin header is acceptable.
-setTransport(myTransport);
+// 1. The one thing the engine cannot do for itself: a cross-origin POST to an
+//    endpoint that sets no CORS headers for it. In a userscript this wraps
+//    GM_xmlhttpRequest - `src/gm.ts` is that implementation, and it is worth
+//    reading before writing another, because the encoding retry, the response
+//    normalisation and the fallback to a plain fetch are all answers to hosts
+//    that behave differently. The Lens endpoint does answer a preflight, so a
+//    plain fetch works too wherever an Origin header is acceptable.
+const transport: Transport = {
+  async post({ url, headers, body, timeoutMs }) {
+    const response = await fetch(url, { method: 'POST', headers, body, signal: AbortSignal.timeout(timeoutMs) });
+    const bytes = new Uint8Array(await response.arrayBuffer()) as Uint8Array<ArrayBuffer>;
+    return { status: response.status, bytes, contentType: 'application/x-protobuf' };
+  },
+  async get(url, timeoutMs) {
+    const response = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
+    const bytes = new Uint8Array(await response.arrayBuffer()) as Uint8Array<ArrayBuffer>;
+    return { status: response.status, bytes, contentType: response.headers.get('content-type') ?? '' };
+  },
+};
+setTransport(transport);
 
 // 2. If the front end draws anything over a picture, say so, or the detector
 //    will find it and offer to translate a translation.
@@ -363,17 +381,29 @@ ignoreElements((element) => element.hasAttribute('data-my-overlay'));
 // 3. Options are split so a caller that wants to draw a picture does not have
 //    to invent a value for `hotkey`: LensOptions for what is asked,
 //    RenderOptions for how it is drawn, CacheOptions for what is kept.
-const prepared = await prepareImage(target, lens);
-const result = await callLens(prepared, lens);
-const blob = await renderToBlob(
-  prepared.source, prepared.sourceWidth, prepared.sourceHeight, result.blocks, draw
-);
+const lens: LensOptions = { targetLang: 'ru', /* ...and the rest */ };
+const draw: RenderOptions = { minReadablePx: 12, /* ...and the rest */ };
+
+async function translate(target: Target): Promise<Blob> {
+  const prepared = await prepareImage(target, lens);
+  try {
+    const result = await callLens(prepared, lens);
+    return await renderToBlob(
+      prepared.source, prepared.sourceWidth, prepared.sourceHeight, result.blocks, draw
+    );
+  } finally {
+    // The decoded pixels may be an ImageBitmap, which is not garbage collected
+    // on its own.
+    prepared.release();
+  }
+}
 ```
 
-`src/gm.ts` is this script's transport, and it is worth reading before writing
-another: the encoding retry, the response normalisation and the fallback to a
-plain fetch are all answers to hosts that behave differently, and none of that
-is the engine's business.
+`collect(minSize)` finds the pictures on the page and `targetFromEvent` finds
+the one under a pointer; both cross open shadow roots, which `document.images`
+does not. `cacheKey` / `getCached` and `getStored` / `putStored` are there if
+the front end wants the same two-level cache this one uses, and can be ignored
+entirely if it does not.
 
 ## For agents
 
