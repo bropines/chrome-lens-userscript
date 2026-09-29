@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Lens Translate
 // @namespace    https://github.com/bropines/chrome-lens-userscript
-// @version      2.8.2
+// @version      2.9.0
 // @author       bropines
 // @description  Hover any image, click the button, and its text is translated in place - rendered the way Chromium's own Lens overlay does it.
 // @license      MIT
@@ -540,6 +540,7 @@
     minReadablePx: 12,
     supersample: 2,
     cacheBytes: 32 * 1024 * 1024,
+    persistCache: true,
     mangaMode: false,
     mangaBoxGrowth: 1.45,
     outlineScale: 1,
@@ -724,6 +725,13 @@
         ["pinned", "always, over the image in view"]
       ],
       hint: "a touch screen has no hover, and tapping the image is how you turn the page"
+    },
+    {
+      key: "persistCache",
+      group: "Behaviour",
+      label: "Remember across reloads",
+      type: "checkbox",
+      hint: "recognise a picture by its pixels, so reopening a page asks Lens nothing"
     },
     { key: "minImageSize", group: "Behaviour", label: "Ignore images under (px)", type: "number" },
     { key: "jpegQuality", group: "Advanced", label: "Upload quality (0..1)", type: "number", step: "0.05" },
@@ -1337,6 +1345,28 @@
     }
     return null;
   }
+  const FINGERPRINT_SIZE = 128;
+  function fingerprint(source, width, height) {
+    const canvas = document.createElement("canvas");
+    canvas.width = FINGERPRINT_SIZE;
+    canvas.height = FINGERPRINT_SIZE;
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    if (!ctx) return "";
+    try {
+      ctx.drawImage(source, 0, 0, FINGERPRINT_SIZE, FINGERPRINT_SIZE);
+      const { data } = ctx.getImageData(0, 0, FINGERPRINT_SIZE, FINGERPRINT_SIZE);
+      let a = 2166136261;
+      let b = 16777619;
+      for (let i = 0; i < data.length; i += 1) {
+        a = Math.imul(a ^ data[i], 16777619);
+        b = Math.imul(b + data[i] + i, 2246822507);
+      }
+      const lane = (n) => (n >>> 0).toString(36);
+      return `${lane(a)}.${lane(b)}.${width}x${height}`;
+    } catch {
+      return "";
+    }
+  }
   async function encodeForUpload(source, settings2, release = () => {
   }) {
     const natural = sourceSize(source);
@@ -1421,6 +1451,96 @@
       height: bitmap.height,
       release: () => bitmap.close()
     };
+  }
+  const DB_NAME = "lens-translate";
+  const DB_VERSION = 1;
+  const STORE = "responses";
+  let open = null;
+  function database() {
+    if (open) return open;
+    open = new Promise((resolve) => {
+      let request2;
+      try {
+        request2 = indexedDB.open(DB_NAME, DB_VERSION);
+      } catch {
+        resolve(null);
+        return;
+      }
+      request2.onupgradeneeded = () => {
+        const db = request2.result;
+        if (!db.objectStoreNames.contains(STORE)) {
+          db.createObjectStore(STORE, { keyPath: "hash" }).createIndex("used", "used");
+        }
+      };
+      request2.onsuccess = () => resolve(request2.result);
+      request2.onerror = () => resolve(null);
+      request2.onblocked = () => resolve(null);
+    });
+    return open;
+  }
+  function run(mode, body2) {
+    return database().then(
+      (db) => new Promise((resolve) => {
+        if (!db) {
+          resolve(null);
+          return;
+        }
+        try {
+          const transaction = db.transaction(STORE, mode);
+          const request2 = body2(transaction.objectStore(STORE));
+          request2.onsuccess = () => resolve(request2.result);
+          request2.onerror = () => resolve(null);
+          transaction.onabort = () => resolve(null);
+        } catch {
+          resolve(null);
+        }
+      })
+    );
+  }
+  const languagesOf = (settings2) => [settings2.targetLang, settings2.sourceLang, settings2.ocrLang].join("|");
+  function weigh$1(result) {
+    let bytes2 = 0;
+    for (const block of result.blocks) {
+      bytes2 += block.translation.length * 2;
+      for (const line of block.lines) bytes2 += line.background?.bytes.byteLength ?? 0;
+    }
+    return bytes2;
+  }
+  async function getStored(hash, settings2) {
+    if (!hash || !settings2.persistCache) return null;
+    const entry = await run("readonly", (store) => store.get(hash)) ?? null;
+    if (!entry || entry.languages !== languagesOf(settings2)) return null;
+    void run("readwrite", (store) => store.put({ ...entry, used: Date.now() }));
+    return entry.result;
+  }
+  async function putStored(hash, result, settings2) {
+    if (!hash || !settings2.persistCache || settings2.cacheBytes <= 0) return;
+    const entry = {
+      hash,
+      languages: languagesOf(settings2),
+      result,
+      bytes: weigh$1(result),
+      used: Date.now()
+    };
+    await run("readwrite", (store) => store.put(entry));
+    await evict(settings2.cacheBytes);
+  }
+  async function evict(budget) {
+    const all2 = await run("readonly", (store) => store.getAll()) ?? [];
+    let total = all2.reduce((sum, entry) => sum + entry.bytes, 0);
+    if (total <= budget) return;
+    for (const entry of [...all2].sort((a, b) => a.used - b.used)) {
+      if (total <= budget) break;
+      total -= entry.bytes;
+      await run("readwrite", (store) => store.delete(entry.hash));
+    }
+  }
+  async function clearStored() {
+    await run("readwrite", (store) => store.clear());
+  }
+  async function storedStats() {
+    const all2 = await run("readonly", (store) => store.getAll()) ?? [];
+    return { entries: all2.length, bytes: all2.reduce((sum, entry) => sum + entry.bytes, 0) };
   }
   const WritingDirection = {
     RightToLeft: 1,
@@ -1788,15 +1908,15 @@
   function drawVertical({ ctx }, text2, boxW, boxH, size, fill, outline, outlineColor) {
     const em = size * 1.16;
     let total = 0;
-    for (const [upright, run] of verticalRuns(text2)) {
-      total += upright ? em * [...run].length : ctx.measureText(run).width;
+    for (const [upright, run2] of verticalRuns(text2)) {
+      total += upright ? em * [...run2].length : ctx.measureText(run2).width;
     }
     let y = (boxH - total) / 2;
     ctx.textBaseline = "top";
     ctx.textAlign = "left";
-    for (const [upright, run] of verticalRuns(text2)) {
+    for (const [upright, run2] of verticalRuns(text2)) {
       if (upright) {
-        for (const char of run) {
+        for (const char of run2) {
           const advance = ctx.measureText(char).width;
           const corner = CORNER_PUNCT.has(char);
           const x = (boxW - advance) / 2 + (corner ? advance * 0.45 : 0);
@@ -1807,13 +1927,13 @@
           y += em;
         }
       } else {
-        const advance = ctx.measureText(run).width;
+        const advance = ctx.measureText(run2).width;
         ctx.save();
         ctx.translate(boxW / 2, y);
         ctx.rotate(90 * DEG);
-        strokeThenFill(ctx, run, 0, -size / 2, outline, outlineColor);
+        strokeThenFill(ctx, run2, 0, -size / 2, outline, outlineColor);
         ctx.fillStyle = fill;
-        ctx.fillText(run, 0, -size / 2);
+        ctx.fillText(run2, 0, -size / 2);
         ctx.restore();
         y += advance;
       }
@@ -2428,8 +2548,8 @@
   let panel = null;
   let body = null;
   let onSettings = null;
-  function onReportSettings(open) {
-    onSettings = open;
+  function onReportSettings(open2) {
+    onSettings = open2;
   }
   function closeReport() {
     panel?.remove();
@@ -2549,10 +2669,19 @@
       const prepared = await acquireSource(target);
       try {
         let result = target.url ? getCached(key, settings) : void 0;
+        const hash = result ? "" : fingerprint(prepared.source, prepared.width, prepared.height);
+        if (!result && hash) {
+          const remembered = await getStored(hash, settings);
+          if (remembered) {
+            result = remembered;
+            if (target.url) putCached(key, result, settings);
+          }
+        }
         if (!result) {
           const upload = await encodeForUpload(prepared.source, settings);
           result = await callLens(upload, settings);
           if (target.url) putCached(key, result, settings);
+          void putStored(hash, result, settings);
         }
         if (!result.blocks.length) {
           const detected = result.ocr.some((p) => p.lines.length > 0);
@@ -2832,11 +2961,15 @@
     menuLabel: "Lens Translate: clear cache",
     label: "Clear cache",
     run: () => {
-      const { entries: entries2, bytes: bytes2 } = cacheStats();
+      const memory = cacheStats();
       clearCache();
-      toast(
-        entries2 ? `Cleared ${entries2} cached result${entries2 === 1 ? "" : "s"} (${(bytes2 / 1048576).toFixed(1)} MB)` : "The cache was already empty"
-      );
+      void storedStats().then(({ entries: entries2, bytes: bytes2 }) => {
+        void clearStored();
+        const total = memory.entries + entries2;
+        toast(
+          total ? `Cleared ${total} cached result${total === 1 ? "" : "s"} (${((memory.bytes + bytes2) / 1048576).toFixed(1)} MB)` : "The cache was already empty"
+        );
+      });
     }
   });
   registerCommand({

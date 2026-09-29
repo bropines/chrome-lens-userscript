@@ -57,6 +57,51 @@ function ownPixels(target: Target): Source | null {
   return null;
 }
 
+/**
+ * A short, stable name for what this picture *is*.
+ *
+ * Keyed on content rather than address, because the address is the unreliable
+ * half: a CDN serves the same photo under a dozen URLs, a reader re-mints a
+ * blob: URL on every load, and neither survives a reload. The same pixels,
+ * wherever they came from, answer to the same name.
+ *
+ * Taken from a fixed 128x128 downscale, so the cost does not depend on the
+ * image and no JPEG encode is needed - the encode is the expensive half of a
+ * miss, and this runs before it. The natural size joins the hash because two
+ * pictures that differ only in resolution are not the same upload.
+ *
+ * Downscaling is deterministic within a browser but not promised across
+ * versions; the worst an upgrade can do is miss and ask Lens again.
+ */
+const FINGERPRINT_SIZE = 128;
+
+export function fingerprint(source: Source, width: number, height: number): string {
+  const canvas = document.createElement('canvas');
+  canvas.width = FINGERPRINT_SIZE;
+  canvas.height = FINGERPRINT_SIZE;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) return '';
+
+  try {
+    ctx.drawImage(source, 0, 0, FINGERPRINT_SIZE, FINGERPRINT_SIZE);
+    const { data } = ctx.getImageData(0, 0, FINGERPRINT_SIZE, FINGERPRINT_SIZE);
+    // FNV-1a over two offset lanes: one 32-bit lane collides often enough to
+    // matter across a few thousand pictures, two do not, and both are one pass.
+    let a = 0x811c9dc5;
+    let b = 0x01000193;
+    for (let i = 0; i < data.length; i += 1) {
+      a = Math.imul(a ^ (data[i] as number), 0x01000193);
+      b = Math.imul(b + (data[i] as number) + i, 0x85ebca6b);
+    }
+    const lane = (n: number): string => (n >>> 0).toString(36);
+    return `${lane(a)}.${lane(b)}.${width}x${height}`;
+  } catch {
+    // A tainted canvas has no readable pixels, so it has no fingerprint; the
+    // caller falls back to the address.
+    return '';
+  }
+}
+
 /** Draw, then JPEG-encode at Chromium's quality. Throws if the canvas is tainted. */
 export async function encodeForUpload(
   source: Source,

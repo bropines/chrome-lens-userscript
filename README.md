@@ -274,6 +274,13 @@ Two details that took measuring to get right:
 - The cache check sits *ahead* of the JPEG encode. Encoding an upload that is
   never sent was the expensive half of a cache hit.
 
+Both die with the page, so a third sits under them: **Remember across reloads**
+keeps Lens's answers in IndexedDB, keyed by a fingerprint of the pixels rather
+than the URL. Reopening a chapter then costs no uploads and no requests at all,
+and the same photo is recognised under a different address - a CDN rendition, a
+freshly minted `blob:`. Only the answer is kept; the picture is drawn again
+locally, which is milliseconds and no bytes.
+
 Eviction is by total bytes rather than entry count, because the weight is
 almost entirely the inpainted WebP patches and the rendered PNGs, and those vary
 hugely between a two-word sign and a page of manga.

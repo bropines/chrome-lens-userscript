@@ -2,7 +2,8 @@ import { registerCommand } from './gm.js';
 import { diagnose } from './diagnose.js';
 
 import { callLens } from './lens/client.js';
-import { acquireSource, encodeForUpload } from './image.js';
+import { acquireSource, encodeForUpload, fingerprint } from './image.js';
+import { clearStored, getStored, putStored, storedStats } from './store.js';
 import { collect, isBigEnough, targetFromEvent } from './detect.js';
 import type { Target } from './detect.js';
 import {
@@ -117,10 +118,25 @@ async function translate(target: Target): Promise<void> {
     const prepared = await acquireSource(target);
     try {
       let result = target.url ? getCached(key, settings) : undefined;
+
+      // The pixels are in hand but not yet encoded, which is the moment to ask
+      // whether this picture has been answered before - under any address, and
+      // in any earlier life of this page. The encode is the expensive half and
+      // sits after this deliberately.
+      const hash = result ? '' : fingerprint(prepared.source, prepared.width, prepared.height);
+      if (!result && hash) {
+        const remembered = await getStored(hash, settings);
+        if (remembered) {
+          result = remembered;
+          if (target.url) putCached(key, result, settings);
+        }
+      }
+
       if (!result) {
         const upload = await encodeForUpload(prepared.source, settings);
         result = await callLens(upload, settings);
         if (target.url) putCached(key, result, settings);
+        void putStored(hash, result, settings);
       }
 
       if (!result.blocks.length) {
@@ -530,13 +546,19 @@ registerCommand({
   menuLabel: 'Lens Translate: clear cache',
   label: 'Clear cache',
   run: () => {
-    const { entries, bytes } = cacheStats();
+    // Two stores with one budget between them, so they are reported as one.
+    const memory = cacheStats();
     clearCache();
-    toast(
-      entries
-        ? `Cleared ${entries} cached result${entries === 1 ? '' : 's'} (${(bytes / 1048576).toFixed(1)} MB)`
-        : 'The cache was already empty'
-    );
+    void storedStats().then(({ entries, bytes }) => {
+      void clearStored();
+      const total = memory.entries + entries;
+      toast(
+        total
+          ? `Cleared ${total} cached result${total === 1 ? '' : 's'} ` +
+            `(${((memory.bytes + bytes) / 1048576).toFixed(1)} MB)`
+          : 'The cache was already empty'
+      );
+    });
   },
 });
 

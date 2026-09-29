@@ -138,6 +138,14 @@ export interface Settings {
   /** Canvas is rendered at this multiple of the image's natural size. */
   supersample: number;
   /**
+   * Keep Lens's answers across reloads, keyed by what the picture *is*.
+   *
+   * The in-memory cache dies with the page, so reopening a chapter asked the
+   * same questions again. Only the answer is kept; the picture is drawn again
+   * locally, which costs milliseconds and no bytes at all.
+   */
+  persistCache: boolean;
+  /**
    * How much of Lens's answers to keep in memory, in bytes. Weighed by the
    * inpainted patches, which dominate. 0 disables caching.
    */

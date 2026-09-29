@@ -42,6 +42,7 @@ src/
   settings.ts           GM-backed store, defaults, and the settings field list
   languages.ts          language codes; labels come from Intl.DisplayNames
   cache.ts              LRU over Lens responses, evicted by bytes
+  store.ts              the same answers kept across reloads, keyed by content
   image.ts              fetch, downscale, JPEG encode
   gen/fields.ts         GENERATED - do not edit
   lens/                 request builder, response parser, transport
@@ -322,6 +323,32 @@ every image by hand. `redrawShowing` goes back through `translate`, so a change
 to the drawing comes out of the response cache and costs nothing, while changing
 the target language asks Lens again - the right answer in both cases, and not
 one that has to be decided here.
+
+### The address is the unreliable half of a picture's identity
+
+`cache.ts` keys on the URL, which is free but wrong often enough to matter: a
+CDN serves one photo under a dozen addresses, a reader re-mints a `blob:` URL
+every load, and none of it survives a reload at all. `store.ts` keys on the
+*content* - a 128x128 downscale run through two FNV lanes, plus the natural size
+- and keeps the answer in IndexedDB.
+
+Three things about where it sits in the flow:
+
+- **After the pixels, before the encode.** The decode has happened by then, so
+  the fingerprint is nearly free, and the JPEG encode - the expensive half of a
+  miss - is skipped entirely on a hit, along with the round trip.
+- **Only the answer is kept, never the picture.** Drawing from it is local work
+  in milliseconds, and a stored rendering would be wrong the moment a setting
+  changed.
+- **The languages are part of the entry**, not the key, so asking for a
+  different target language misses rather than returning the old translation.
+
+It is per-origin, being IndexedDB, and it degrades to nothing when storage is
+blocked - every call resolves to null rather than throwing, including a blocked
+upgrade, which would otherwise hang every caller waiting on the database.
+
+Downscaling is deterministic within a browser but not promised across versions.
+The worst an upgrade can do is miss and ask Lens again.
 
 ### Deliberate departures from Chromium
 
