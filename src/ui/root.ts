@@ -1,3 +1,4 @@
+import { scriptVersion } from '../gm.js';
 import styles from './styles.css?raw';
 
 /**
@@ -23,6 +24,10 @@ export function uiRoot(): ShadowRoot {
 
   const host = document.createElement('div');
   host.id = HOST_ID;
+  // The one place a phone can be asked which build it is running. There is no
+  // console to open there and GM_info does not reach the page, so without this
+  // the answer costs a round trip through the user every time.
+  host.dataset['version'] = scriptVersion();
   // Inline, and marked important, because this one element does live in the
   // page and is the only thing page CSS could still interfere with.
   //

@@ -1,4 +1,5 @@
 import {
+  MIN_FONT_SIZE,
   OUTLINE_RATIO,
   argbToCss,
   buildLineText,
@@ -7,6 +8,7 @@ import {
   isRtl,
   justification,
   shouldStayVertical,
+  wrapText,
   wrapsPerCharacter,
 } from './layout.js';
 import { boxCorners, convexHull, fillHull } from './hull.js';
@@ -231,19 +233,31 @@ function drawReflowedParagraph(
   // against one spacing and then painting at another overflows the box.
   const spacing = settings.lineSpacing > 0 ? settings.lineSpacing : 1.25;
 
-  const { size, lines } = fitTextBlock(
-    (px) => {
-      ctx.font = `${px}px ${fontFamily}`;
-    },
-    (candidate) => ctx.measureText(candidate).width,
-    (px) => px * spacing,
-    text,
-    boxW,
-    boxH,
-    wrapsPerCharacter(block)
-  );
-  const fontSize = Math.max(size, draw.minFontPx);
-  ctx.font = `${fontSize}px ${fontFamily}`;
+  const perCharacter = wrapsPerCharacter(block);
+  const measure = (candidate: string): number => ctx.measureText(candidate).width;
+  const setFont = (px: number): void => {
+    ctx.font = `${px}px ${fontFamily}`;
+  };
+
+  const { size } = fitTextBlock(setFont, measure, (px) => px * spacing, text, boxW, boxH, perCharacter);
+
+  // The readable-size floor overrides what fits, and the wrap has to be redone
+  // at the size actually drawn. Wrapping for one size and painting at another
+  // is what sent whole lines off the picture: every line was measured against
+  // the box at a font nobody used.
+  let fontSize = Math.max(size, draw.minFontPx);
+  setFont(fontSize);
+  let lines = wrapText(measure, text, boxW, perCharacter);
+
+  // wrapText keeps a token that cannot be broken even when it overruns, so the
+  // box is not a guarantee yet. One proportional step down makes it one.
+  const widest = lines.reduce((max: number, line: string) => Math.max(max, measure(line)), 0);
+  if (widest > boxW && widest > 0) {
+    fontSize = Math.max(MIN_FONT_SIZE, (fontSize * boxW) / widest);
+    setFont(fontSize);
+    lines = wrapText(measure, text, boxW, perCharacter);
+  }
+
   const lineHeight = fontSize * spacing;
 
   ctx.textAlign = 'left';

@@ -31,6 +31,9 @@ import type { Bytes } from './types.js';
  * narrowest contract, or by trying and falling back.
  */
 
+/** Which build is actually running, which a phone has no other way to say. */
+export const scriptVersion = (): string => GM_info?.script?.version ?? 'unknown';
+
 /** Only ever used to word an error; never to decide behaviour. */
 export function hostName(): string {
   return GM_info?.scriptHandler ?? 'The userscript host';

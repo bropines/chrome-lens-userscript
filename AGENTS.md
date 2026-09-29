@@ -385,6 +385,25 @@ painted the bars: a vertical column fitted at 3px and floored at 24px grows
 eightfold, turning a 27x264 box into a 216x2112 rectangle on a 760x560 image.
 Measure the text and size the fill to that; a ratio has nothing bounding it.
 
+### The wrap must be measured at the size that gets painted
+
+`fitTextBlock` returns the largest size that fits *and* the lines wrapped for
+it. Then the readable-size floor overrides the size - and the lines were still
+the ones measured against the box at a font nobody used, so every one of them
+overran. On a 600x800 thumbnail shown at 390 px the floor is a 1.5x override,
+and whole words left the picture; `fitInside` had put the box inside the image
+and the text walked out of the box.
+
+So the wrap is redone at the size actually drawn. `wrapText` still keeps a token
+it cannot break even when that token overruns, so one proportional step down
+follows - `fontSize * boxW / widest` - which turns the box from a target into a
+guarantee.
+
+Reproducing this needed the real geometry, not invented boxes: a synthetic case
+with plausible numbers rendered clean. The response was in the store on the
+device, so `indexedDB.open('lens-translate')` over the debugger handed back the
+exact paragraph and line rects to replay.
+
 ### Nothing may be drawn where the canvas will only clip it
 
 The picture is a hard bound, and there are exactly two ways back inside it.

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Lens Translate
 // @namespace    https://github.com/bropines/chrome-lens-userscript
-// @version      2.9.0
+// @version      2.9.1
 // @author       bropines
 // @description  Hover any image, click the button, and its text is translated in place - rendered the way Chromium's own Lens overlay does it.
 // @license      MIT
@@ -35,6 +35,7 @@
   var _GM_setValue = /* @__PURE__ */ (() => typeof GM_setValue != "undefined" ? GM_setValue : void 0)();
   var _GM_xmlhttpRequest = /* @__PURE__ */ (() => typeof GM_xmlhttpRequest != "undefined" ? GM_xmlhttpRequest : void 0)();
   var _unsafeWindow = /* @__PURE__ */ (() => typeof unsafeWindow != "undefined" ? unsafeWindow : void 0)();
+  const scriptVersion = () => _GM_info?.script?.version ?? "unknown";
   function hostName() {
     return _GM_info?.scriptHandler ?? "The userscript host";
   }
@@ -327,6 +328,7 @@
     if (shadow) return shadow;
     const host = document.createElement("div");
     host.id = HOST_ID;
+    host.dataset["version"] = scriptVersion();
     host.setAttribute(
       "style",
       [
@@ -1979,19 +1981,21 @@
     ctx.translate(box.cx, box.cy);
     ctx.rotate(geometry.angle * DEG);
     const spacing = settings2.lineSpacing > 0 ? settings2.lineSpacing : 1.25;
-    const { size, lines } = fitTextBlock(
-      (px) => {
-        ctx.font = `${px}px ${fontFamily}`;
-      },
-      (candidate) => ctx.measureText(candidate).width,
-      (px) => px * spacing,
-      text2,
-      boxW,
-      boxH,
-      wrapsPerCharacter(block)
-    );
-    const fontSize = Math.max(size, draw.minFontPx);
-    ctx.font = `${fontSize}px ${fontFamily}`;
+    const perCharacter = wrapsPerCharacter(block);
+    const measure = (candidate) => ctx.measureText(candidate).width;
+    const setFont = (px) => {
+      ctx.font = `${px}px ${fontFamily}`;
+    };
+    const { size } = fitTextBlock(setFont, measure, (px) => px * spacing, text2, boxW, boxH, perCharacter);
+    let fontSize = Math.max(size, draw.minFontPx);
+    setFont(fontSize);
+    let lines = wrapText(measure, text2, boxW, perCharacter);
+    const widest = lines.reduce((max, line) => Math.max(max, measure(line)), 0);
+    if (widest > boxW && widest > 0) {
+      fontSize = Math.max(MIN_FONT_SIZE, fontSize * boxW / widest);
+      setFont(fontSize);
+      lines = wrapText(measure, text2, boxW, perCharacter);
+    }
     const lineHeight = fontSize * spacing;
     ctx.textAlign = "left";
     ctx.textBaseline = "top";
