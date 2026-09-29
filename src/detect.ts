@@ -1,6 +1,3 @@
-import { isCover } from './render/cover.js';
-import { HOST_ID } from './ui/root.js';
-
 /**
  * Finding the pictures on a page.
  *
@@ -45,6 +42,26 @@ export interface Target {
   pointable: boolean;
 }
 
+/**
+ * Elements that are not part of the page.
+ *
+ * Two things look exactly like a picture and are neither: the front end's own
+ * UI - ours is a shadow host whose settings panel has a canvas in it - and a
+ * finished translation, which this script lays over the image as an `<img>`
+ * that everything looking for images duly finds, offering to translate a
+ * translation.
+ *
+ * Both are the caller's to name. This module knows what a picture is; what any
+ * particular front end draws on top of one is not its business, and asking it
+ * to import the answer is what had a detector importing a renderer and a
+ * shadow root.
+ */
+let ignored: (element: Element) => boolean = () => false;
+
+export function ignoreElements(predicate: (element: Element) => boolean): void {
+  ignored = predicate;
+}
+
 /** The first `url()` in a computed background, if it is an image at all. */
 function backgroundUrl(element: Element): string {
   const value = window.getComputedStyle(element).backgroundImage;
@@ -70,7 +87,7 @@ export function classify(node: unknown): Target | null {
   if (element.nodeType !== 1 || typeof element.tagName !== 'string') return null;
   // Our own rendering is an <img> in the page; offering to translate it is how
   // a translated image came to look untranslated.
-  if (isCover(element)) return null;
+  if (ignored(element)) return null;
 
   const pointable = window.getComputedStyle(element).pointerEvents !== 'none';
 
@@ -105,10 +122,10 @@ export function isBigEnough(target: Target, minSize: number): boolean {
  */
 function* walk(root: ParentNode): Generator<Element> {
   for (const element of root.querySelectorAll('*')) {
-    // Our own UI is a shadow root like any other, and the settings panel has a
-    // canvas in it. Walking into ourselves would offer to translate our own
-    // preview.
-    if (element.id === HOST_ID) continue;
+    // The front end's own UI is a shadow root like any other, and our settings
+    // panel has a canvas in it. Walking into ourselves would offer to translate
+    // our own preview.
+    if (ignored(element)) continue;
     yield element;
     const shadow = (element as Element & { shadowRoot: ShadowRoot | null }).shadowRoot;
     if (shadow) yield* walk(shadow);

@@ -1,25 +1,35 @@
 {
   "name": "lens-translate-userscript",
-  "version": "2.10.0",
+  "version": "2.11.0",
   "description": "Translate text inside images in place, rendered the way Chromium's Lens overlay does.",
   "license": "MIT",
   "type": "module",
+  "exports": {
+    ".": "./src/engine.ts",
+    "./engine": "./src/engine.ts",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src",
+    "dist",
+    "proto",
+    "tsconfig.json"
+  ],
   "scripts": {
     "gen": "buf generate && bun scripts/gen-fields.ts",
     "dev": "vite",
-    "build": "tsc --noEmit && vite build",
-    "typecheck": "tsc --noEmit"
+    "build": "tsc --noEmit && bun scripts/check-layers.ts && vite build",
+    "typecheck": "tsc --noEmit",
+    "check": "bun scripts/check-layers.ts"
   },
   "devDependencies": {
     "@bufbuild/buf": "^1.73.0",
     "@bufbuild/protoc-gen-es": "^2.15.0",
+    "@bufbuild/protobuf": "^2.15.0",
     "@types/node": "^22.20.3",
     "typescript": "^7.0.2",
     "vite": "^7.1.0",
     "vite-plugin-monkey": "^5.0.0"
-  },
-  "dependencies": {
-    "@bufbuild/protobuf": "^2.15.0"
   },
   "repository": {
     "type": "git",

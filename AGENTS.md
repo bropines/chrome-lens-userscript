@@ -23,20 +23,25 @@ need to land in both.
 bun install
 bun run gen        # proto/ -> .protogen -> src/gen/fields.ts  (after updating protos)
 bun run typecheck  # tsc --noEmit, strict
-bun run build      # typecheck, then dist/lens-translate.user.js
+bun run check      # the engine's import closure stays clean
+bun run build      # typecheck, check, then dist/lens-translate.user.js
 bun run dev        # live-reload userscript for development
 ```
 
-`bun run build` is the gate: it will not emit if the types do not check.
+`bun run build` is the gate: it will not emit if the types do not check, or if
+the engine has grown an import of the application.
 
 ## Layout
 
 ```
 proto/                  Chromium's Lens .proto files, copied verbatim
 scripts/gen-fields.ts   descriptors -> typed field-number table (build time only)
+scripts/check-layers.ts the engine may not import the application
 src/
+  engine.ts             the engine's public entry - everything below the line
   protobuf.ts           minimal wire codec: varint, length-delimited, fixed32
   types.ts              shared domain types; every cross-module shape lives here
+  transport.ts          the privileged request the engine cannot make itself
   gm.ts                 every difference between userscript hosts, in one place
   detect.ts             what counts as a picture, and where they are
   settings.ts           GM-backed store, defaults, and the settings field list
@@ -58,6 +63,60 @@ src/
 
 Each of these cost a debugging session. Please do not "simplify" them without
 reading the reasoning first.
+
+### The engine may not import the application
+
+`src/engine.ts` is the line. Everything reachable from it asks Lens and draws
+the answer; nothing reachable from it knows what a userscript is. Above the
+line are `main.ts`, `settings.ts`, `gm.ts`, `diagnose.ts` and `ui/`, and they
+may import downwards as much as they like.
+
+The reason is a second consumer: the same engine drives another script, and it
+cannot bring this one's button, shadow root and settings panel with it. But the
+property is negative, which is the kind that decays. It held on the day it was
+arranged and three imports had already crossed the line before anyone looked:
+
+| module | pulled | what exactly |
+|---|---|---|
+| `render/overlay.ts` | `ui/root.ts` | drew its layer into **our** shadow root |
+| `detect.ts` | `ui/root.ts` | knew our `HOST_ID` |
+| `detect.ts` | `render/cover.ts` | knew **our** cover marker |
+
+Each was a one-line convenience at the time. So it is checked rather than
+intended: `scripts/check-layers.ts` walks the import closure of the entry point
+and fails the build if it reaches the application or any bare specifier - which
+is what catches `$`, and with it `vite-plugin-monkey`. Run it against a
+deliberate violation before trusting it; a checker that cannot fail proves
+nothing, and this one was written by adding the import back and watching it go
+red.
+
+Three things came out of drawing the line, and all three are better designs
+independently of the consumer:
+
+- **The options are split three ways.** `Settings` was one 32-field object and
+  would have become the public API, so a caller wanting to draw a picture had to
+  invent a value for `hotkey`. `LensOptions` is what is asked of Lens,
+  `RenderOptions` how the answer is drawn, `CacheOptions` what is kept;
+  `EngineOptions` is the three together and `Settings` is that plus this
+  script's own `AppSettings`. Each module takes the narrowest one it uses, which
+  is also documentation: `renderToBlob` cannot read an API key.
+- **The transport is injected.** `lens/client.ts` imported `gm.ts`, which
+  imports `$`, which is the whole dependency on a userscript host. Now the
+  engine declares `Transport` and the front end calls `setTransport`. `gm.ts`
+  exports `gmTransport`, and the Tampermonkey blocked-domain hint moved with it,
+  since only a host knows where a blocked domain is undone.
+- **The detector is told what to ignore.** `ignoreElements` takes a predicate;
+  `main.ts` passes `(el) => el.id === HOST_ID || isCover(el)`. It must be
+  installed before anything scans, which is why it sits at the top of `main.ts`
+  next to `setTransport`.
+
+The DOM renderer's CSS travels with it as `OVERLAY_CSS` rather than living in
+`ui/styles.css`, because `position: absolute` and `white-space: pre` are not
+decoration there - they are how a line lands where the geometry says it does,
+and a front end that drops them gets a correct layout stacked in one corner.
+
+What CI cannot check is a breaking change to the engine's surface, since there
+is no consumer here to break. The tag is the contract: pin it.
 
 ### Rendering must not fight the page
 
@@ -254,7 +313,8 @@ lowers it, because a reader that sets it on its page image to stop dragging is a
 real thing and there the picture is all there is. What it settles is a
 disagreement: the hover path can never select an unpointable element, so the
 pinned one must not prefer one. The walk also refuses to enter our own host,
-whose settings panel has a canvas of its own.
+whose settings panel has a canvas of its own - through the predicate the front
+end installs with `ignoreElements`, not by knowing what our host is.
 
 Enumerating tags is free; deciding a background is not, because it costs a
 computed style per element. The sweep is capped, and the hover path never
@@ -309,12 +369,18 @@ Verified by counting `drawImage` calls and POSTs: three translations of the same
 photo under three rendition URLs cost one POST and zero pixel reads after the
 first.
 
-**The render key is an exclusion list, not an inclusion list.** It used to name
-the settings that matter, and a setting added later was simply not in it: the
-cache then handed back a picture drawn with the old value, so changing line
-spacing did nothing at all even on a fresh translate. Listing what *cannot*
-change a drawing fails the safe way - forget to exclude one and you pay for a
-re-render nobody notices.
+**The render key names the settings that matter, and the compiler checks the
+list.** It named them once before and went stale: a setting added later was
+simply not in it, the cache handed back a picture drawn with the old value, and
+changing line spacing did nothing at all even on a fresh translate. The fix at
+the time was to invert it and list what *cannot* change a drawing, which fails
+the safe way but only by giving up on being right.
+
+Splitting `RenderOptions` out of `Settings` is what makes naming them safe
+again. `DRAWN` is written `satisfies Record<keyof RenderOptions, 0>`, so a field
+added to that type fails the build until it is listed. Do not put it back as an
+exclusion list - that was a workaround for a list nothing was checking, and now
+something is.
 
 **A settings change redraws what is already on screen.** A finished rendering is
 a picture drawn under the settings of the moment; leaving it there means the
@@ -566,3 +632,19 @@ Two traps that produced false passes:
 If you change the request builder, the strongest check is to serialize a request
 in JS and parse it with Python's `protobuf` library in the sibling project — it
 catches a wrong field number immediately.
+
+If you change the engine's surface, verify it the way a consumer would rather
+than from inside this repo, where every import resolves whether or not the
+package says it should. Build `src/engine.ts` as its own entry, then drive it
+from a page that supplies its own transport, its own `ignoreElements` predicate
+and its own root: what that proves is that the engine works with none of this
+script's UI on the page at all, which no test run through `main.ts` can show.
+
+The packaging is its own question and has its own trap: shipping raw TypeScript
+through the `exports` map works, but only a real consumer proves it. Copy the
+repo's `src/` and `package.json` into a throwaway project's
+`node_modules/lens-translate-userscript/`, which is what a git dependency
+materialises, and run that project's own `tsc --noEmit` and `vite build`. The
+bundle it produces should contain no `GM_`, no `unsafeWindow` and no
+`lens-translate-root`; grep for them, because a passing build only proves the
+imports resolved.

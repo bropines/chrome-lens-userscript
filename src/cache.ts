@@ -1,4 +1,10 @@
-import type { LensResult, Settings, TranslationBlock } from './types.js';
+import type {
+  CacheOptions,
+  LensOptions,
+  LensResult,
+  RenderOptions,
+  TranslationBlock,
+} from './types.js';
 
 /**
  * Remember what Lens said about an image.
@@ -35,10 +41,6 @@ let totalBytes = 0;
 let clock = 0;
 
 /**
- * What the answer depends on. Render-time settings are deliberately absent:
- * they change how it is drawn, not what came back.
- */
-/**
  * Query parameters that select a rendition rather than identify the picture.
  *
  * Twitter serves one photo as ?name=small / medium / large / orig, and React
@@ -67,11 +69,15 @@ export function normalizeUrl(raw: string): string {
   }
 }
 
-export function cacheKey(url: string, settings: Settings): string {
+/**
+ * What the answer depends on. Render-time settings are deliberately absent:
+ * they change how it is drawn, not what came back.
+ */
+export function cacheKey(url: string, settings: LensOptions): string {
   return [normalizeUrl(url), settings.targetLang, settings.sourceLang, settings.ocrLang].join('\u0000');
 }
 
-export function getCached(key: string, settings: Settings): LensResult | null {
+export function getCached(key: string, settings: CacheOptions): LensResult | null {
   if (settings.cacheBytes <= 0) return null;
   const entry = entries.get(key);
   if (!entry) return null;
@@ -79,7 +85,7 @@ export function getCached(key: string, settings: Settings): LensResult | null {
   return entry.result;
 }
 
-export function putCached(key: string, result: LensResult, settings: Settings): void {
+export function putCached(key: string, result: LensResult, settings: CacheOptions): void {
   const limit = settings.cacheBytes;
   if (limit <= 0) return;
 
@@ -108,6 +114,50 @@ export function putCached(key: string, result: LensResult, settings: Settings): 
   }
 }
 
+/** A byte no setting value contains, so two fields cannot run together. */
+const SEPARATOR = String.fromCharCode(0);
+
+/**
+ * Every setting that changes a drawing, named once.
+ *
+ * This was the other way round - a list of the settings that *cannot* change a
+ * drawing - because naming the ones that can went stale the first time: a
+ * setting added later was simply not in the list, the cache handed back a
+ * picture drawn with the old value, and a line-spacing change did nothing at
+ * all, twice over.
+ *
+ * Splitting `RenderOptions` out of `Settings` is what makes naming them safe.
+ * `satisfies` requires every key of the type here and refuses any other, so a
+ * field added to it fails the build until it is listed, rather than quietly
+ * staying out of the key.
+ */
+const DRAWN = Object.keys({
+  fontFamily: 0,
+  drawBackground: 0,
+  verticalText: 0,
+  minReadablePx: 0,
+  supersample: 0,
+  mangaMode: 0,
+  mangaBoxGrowth: 0,
+  outlineScale: 0,
+  eraseMode: 0,
+  hullPadding: 0,
+  reflowHorizontal: 0,
+  fitToBox: 0,
+  lineSpacing: 0,
+  textAlign: 0,
+} satisfies Record<keyof RenderOptions, 0>)
+  .sort() as Array<keyof RenderOptions>;
+
+export function renderKey(key: string, settings: RenderOptions, displayedWidth: number): string {
+  const parts = [key];
+  for (const name of DRAWN) parts.push(`${name}=${String(settings[name])}`);
+  // Legibility is decided against the displayed size, so a different one is a
+  // different picture - bucketed, because a pixel of resize is not.
+  parts.push(`w=${Math.round(displayedWidth / 50)}`);
+  return parts.join(SEPARATOR);
+}
+
 /**
  * A rendered translation, keyed by everything that changes how it looks.
  *
@@ -118,46 +168,10 @@ export function putCached(key: string, result: LensResult, settings: Settings): 
  * The displayed width is bucketed: it decides the readable-text floor, but a
  * few pixels of layout jitter should not throw the cache away.
  */
-/**
- * Settings that cannot change a drawing.
- *
- * An exclusion list rather than an inclusion list, on purpose. Forgetting to
- * exclude one costs a re-render nobody notices; forgetting to include one hands
- * back a picture drawn with the old value - which is exactly how a line-spacing
- * change came to do nothing at all, twice over, because the key had been
- * hand-written and the new setting was simply not in it.
- *
- * The upload settings are here because they change what Lens is asked, not how
- * the answer is drawn: the renderer works from the decoded image, never the
- * JPEG. The language settings are here because the response key already carries
- * them.
- */
-/** A byte no setting value contains, so two fields cannot run together. */
-const SEPARATOR = String.fromCharCode(0);
-
-const NOT_DRAWN: ReadonlySet<string> = new Set([
-  'enabled', 'showButton', 'buttonMode', 'hotkey', 'minImageSize',
-  'apiKey', 'timeoutMs', 'cacheBytes', 'region', 'timeZone',
-  'targetLang', 'sourceLang', 'ocrLang',
-  'maxArea', 'maxSide', 'jpegQuality',
-]);
-
-export function renderKey(key: string, settings: Settings, displayedWidth: number): string {
-  const parts = [key];
-  for (const name of Object.keys(settings).sort()) {
-    if (NOT_DRAWN.has(name)) continue;
-    parts.push(`${name}=${String(settings[name as keyof Settings])}`);
-  }
-  // Legibility is decided against the displayed size, so a different one is a
-  // different picture - bucketed, because a pixel of resize is not.
-  parts.push(`w=${Math.round(displayedWidth / 50)}`);
-  return parts.join(SEPARATOR);
-}
-
 const renders = new Map<string, { blob: Blob; used: number }>();
 let renderBytes = 0;
 
-export function getRender(key: string, settings: Settings): Blob | null {
+export function getRender(key: string, settings: CacheOptions): Blob | null {
   if (settings.cacheBytes <= 0) return null;
   const entry = renders.get(key);
   if (!entry) return null;
@@ -165,7 +179,7 @@ export function getRender(key: string, settings: Settings): Blob | null {
   return entry.blob;
 }
 
-export function putRender(key: string, blob: Blob, settings: Settings): void {
+export function putRender(key: string, blob: Blob, settings: CacheOptions): void {
   const limit = settings.cacheBytes;
   if (limit <= 0 || blob.size > limit) return;
 

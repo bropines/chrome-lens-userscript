@@ -1,4 +1,5 @@
 import { scriptVersion } from '../gm.js';
+import { OVERLAY_CSS } from '../render/overlay.js';
 import styles from './styles.css?raw';
 
 /**
@@ -57,7 +58,9 @@ export function uiRoot(): ShadowRoot {
 
   shadow = host.attachShadow({ mode: 'open' });
   const sheet = document.createElement('style');
-  sheet.textContent = styles;
+  // The DOM renderer's own rules come with it rather than being kept here: a
+  // front end that forgets them gets a correct layout stacked in one corner.
+  sheet.textContent = `${styles}\n${OVERLAY_CSS}`;
   shadow.appendChild(sheet);
 
   document.documentElement.appendChild(host);

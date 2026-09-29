@@ -306,13 +306,18 @@ Sites with a strict Content-Security-Policy may still block `blob:` URLs in `bac
 ```
 proto/               Chromium's Lens .proto files
 scripts/gen-fields.ts   descriptors -> typed field-number table
+scripts/check-layers.ts the engine may not import the application
 src/
+  engine.ts          the engine's public entry; see below
   protobuf.ts        minimal wire codec
   types.ts           shared domain types
+  transport.ts       the privileged request the engine cannot make itself
   settings.ts        GM-backed settings store
+  gm.ts              every difference between userscript hosts
   image.ts           fetch, downscale, JPEG encode
+  detect.ts          what counts as a picture, and where they are
   gen/fields.ts      generated; do not edit
-  lens/              request builder, response parser, transport
+  lens/              request builder, response parser, client
   render/            layout maths, canvas painter, DOM overlay, image swap
   ui/                settings panel, styles
 ```
@@ -320,8 +325,55 @@ src/
 ```bash
 bun run dev        # live-reload userscript for development
 bun run typecheck  # tsc --noEmit, strict
-bun run build      # typecheck, then dist/lens-translate.user.js
+bun run check      # the engine's import closure stays clean
+bun run build      # typecheck, check, then dist/lens-translate.user.js
 ```
+
+## Using the engine from another script
+
+Everything under `src/engine.ts` asks Lens and draws the answer, and none of it
+knows what a userscript is - no `GM_*`, no settings store, no shadow root, no
+button. A second script can install this repo and keep its own front end:
+
+```json
+"dependencies": {
+  "lens-translate-userscript": "github:bropines/chrome-lens-userscript#v2.11.0"
+}
+```
+
+It is raw TypeScript, built by whoever imports it, with no runtime dependencies
+and no build step of its own. Pin the tag; the engine's surface is not stable
+across versions yet.
+
+```ts
+import {
+  callLens, collect, ignoreElements, prepareImage, renderToBlob, setTransport,
+} from 'lens-translate-userscript/engine';
+import type { LensOptions, RenderOptions, Transport } from 'lens-translate-userscript/engine';
+
+// 1. The one thing the engine cannot do for itself. In a userscript this wraps
+//    GM_xmlhttpRequest; the endpoint also answers a CORS preflight, so a plain
+//    fetch works where an Origin header is acceptable.
+setTransport(myTransport);
+
+// 2. If the front end draws anything over a picture, say so, or the detector
+//    will find it and offer to translate a translation.
+ignoreElements((element) => element.hasAttribute('data-my-overlay'));
+
+// 3. Options are split so a caller that wants to draw a picture does not have
+//    to invent a value for `hotkey`: LensOptions for what is asked,
+//    RenderOptions for how it is drawn, CacheOptions for what is kept.
+const prepared = await prepareImage(target, lens);
+const result = await callLens(prepared, lens);
+const blob = await renderToBlob(
+  prepared.source, prepared.sourceWidth, prepared.sourceHeight, result.blocks, draw
+);
+```
+
+`src/gm.ts` is this script's transport, and it is worth reading before writing
+another: the encoding retry, the response normalisation and the fallback to a
+plain fetch are all answers to hosts that behave differently, and none of that
+is the engine's business.
 
 ## For agents
 

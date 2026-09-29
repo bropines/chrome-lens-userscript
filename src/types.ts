@@ -103,7 +103,14 @@ export type VerticalTextMode = 'auto' | 'keep' | 'horizontal';
 export type HotkeyModifier = 'alt' | 'ctrl' | 'shift' | 'none';
 export type ButtonMode = 'auto' | 'hover' | 'pinned';
 
-export interface Settings {
+/**
+ * What is asked of Lens, and what is sent to ask it.
+ *
+ * The upload settings belong here rather than with the drawing: they decide
+ * what the server is shown, and the renderer works from the decoded image and
+ * never from the JPEG.
+ */
+export interface LensOptions {
   targetLang: string;
   sourceLang: string;
   ocrLang: string;
@@ -111,24 +118,22 @@ export interface Settings {
   timeZone: string;
   apiKey: string;
   timeoutMs: number;
-  minImageSize: number;
   maxArea: number;
   maxSide: number;
   jpegQuality: number;
-  showButton: boolean;
-  /**
-   * When the translate button is on screen.
-   *   'auto'   - pinned on a touch screen, on hover everywhere else.
-   *   'hover'  - only while the cursor is over an image.
-   *   'pinned' - always, over whichever image fills most of the viewport.
-   */
-  buttonMode: ButtonMode;
-  hotkey: HotkeyModifier;
+}
+
+/**
+ * How the answer is drawn.
+ *
+ * Every field here changes the picture, and nothing outside it does - which is
+ * what lets the render cache key itself on this type exhaustively instead of
+ * naming the settings that do not matter and hoping none is forgotten.
+ */
+export interface RenderOptions {
   fontFamily: string;
   drawBackground: boolean;
   verticalText: VerticalTextMode;
-  renderMode: RenderMode;
-  enabled: boolean;
   /**
    * Smallest size, in CSS pixels as displayed, that translated text is allowed
    * to render at. Lens fits text to the original line box, which on a large
@@ -137,19 +142,6 @@ export interface Settings {
   minReadablePx: number;
   /** Canvas is rendered at this multiple of the image's natural size. */
   supersample: number;
-  /**
-   * Keep Lens's answers across reloads, keyed by what the picture *is*.
-   *
-   * The in-memory cache dies with the page, so reopening a chapter asked the
-   * same questions again. Only the answer is kept; the picture is drawn again
-   * locally, which costs milliseconds and no bytes at all.
-   */
-  persistCache: boolean;
-  /**
-   * How much of Lens's answers to keep in memory, in bytes. Weighed by the
-   * inpainted patches, which dominate. 0 disables caching.
-   */
-  cacheBytes: number;
   /**
    * Manga preset. Speech bubbles are round and the detected paragraph box hugs
    * the glyphs, so reflowed text is forced into a column far narrower than the
@@ -214,6 +206,53 @@ export interface Settings {
    */
   textAlign: 'auto' | 'left' | 'center' | 'right';
 }
+
+/** What is remembered of Lens's answers, and for how long. */
+export interface CacheOptions {
+  /**
+   * Keep Lens's answers across reloads, keyed by what the picture *is*.
+   *
+   * The in-memory cache dies with the page, so reopening a chapter asked the
+   * same questions again. Only the answer is kept; the picture is drawn again
+   * locally, which costs milliseconds and no bytes at all.
+   */
+  persistCache: boolean;
+  /**
+   * How much of Lens's answers to keep in memory, in bytes. Weighed by the
+   * inpainted patches, which dominate. 0 disables caching.
+   */
+  cacheBytes: number;
+}
+
+/**
+ * Everything the engine needs, and nothing it does not.
+ *
+ * The split is the public surface: a host embedding this asks Lens and draws
+ * the answer with these, while `AppSettings` below is this userscript's own
+ * business - a different front end has its own button, its own hotkey and its
+ * own idea of what counts as an image, and should not have to invent values
+ * for ours in order to translate a picture.
+ */
+export interface EngineOptions extends LensOptions, RenderOptions, CacheOptions {}
+
+/** How this userscript behaves. No engine module may read any of these. */
+export interface AppSettings {
+  enabled: boolean;
+  showButton: boolean;
+  /**
+   * When the translate button is on screen.
+   *   'auto'   - pinned on a touch screen, on hover everywhere else.
+   *   'hover'  - only while the cursor is over an image.
+   *   'pinned' - always, over whichever image fills most of the viewport.
+   */
+  buttonMode: ButtonMode;
+  hotkey: HotkeyModifier;
+  /** Smallest rendered box, in CSS pixels, that counts as a picture. */
+  minImageSize: number;
+  renderMode: RenderMode;
+}
+
+export interface Settings extends EngineOptions, AppSettings {}
 
 /** An image encoded and sized the way Chromium would send it. */
 export interface PreparedImage {

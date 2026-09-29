@@ -13,7 +13,7 @@ import {
 } from './layout.js';
 import { boxCorners, convexHull, fillHull } from './hull.js';
 import type { Point } from './hull.js';
-import type { Geometry, Settings, TranslatedLine, TranslationBlock } from '../types.js';
+import type { Geometry, RenderOptions, TranslatedLine, TranslationBlock } from '../types.js';
 
 /**
  * Bake the translation into a bitmap that replaces the image.
@@ -258,7 +258,7 @@ function roomFor(own: Rect, others: Rect[], growth: number, width: number, heigh
 function drawReflowedParagraph(
   draw: DrawContext,
   block: TranslationBlock,
-  settings: Settings,
+  settings: RenderOptions,
   room: Rect
 ): void {
   const geometry = block.geometry;
@@ -375,7 +375,7 @@ function drawReflowedParagraph(
  * than fidelity - which is the case on a page of vertical text, where the
  * residue runs as streaks the full height of a bubble.
  */
-function eraseTextArea(draw: DrawContext, block: TranslationBlock, settings: Settings): void {
+function eraseTextArea(draw: DrawContext, block: TranslationBlock, settings: RenderOptions): void {
   const { ctx, width, height } = draw;
   const points: Point[] = [];
   let thinnest = Infinity;
@@ -446,7 +446,7 @@ async function drawLine(
   block: TranslationBlock,
   line: TranslatedLine,
   nextLine: TranslatedLine | undefined,
-  settings: Settings,
+  settings: RenderOptions,
   backgroundOnly = false,
   skipBackground = false
 ): Promise<void> {
@@ -562,7 +562,7 @@ export async function renderToBlob(
   naturalWidth: number,
   naturalHeight: number,
   blocks: TranslationBlock[],
-  settings: Settings,
+  settings: RenderOptions,
   displayedWidth = naturalWidth
 ): Promise<Blob> {
   // Supersampling: the canvas replaces the image, so rendering above natural

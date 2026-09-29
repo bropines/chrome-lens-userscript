@@ -1,6 +1,6 @@
 import { fetchImageBlob } from './lens/client.js';
 import type { Target } from './detect.js';
-import type { Bytes, PreparedImage, Settings } from './types.js';
+import type { Bytes, LensOptions, PreparedImage } from './types.js';
 
 /**
  * Chromium's rule: shrink only when the image is both large in area and
@@ -12,7 +12,7 @@ import type { Bytes, PreparedImage, Settings } from './types.js';
 export function targetSize(
   width: number,
   height: number,
-  { maxArea, maxSide }: Pick<Settings, 'maxArea' | 'maxSide'>
+  { maxArea, maxSide }: Pick<LensOptions, 'maxArea' | 'maxSide'>
 ): { width: number; height: number } {
   if (width * height <= maxArea || (width <= maxSide && height <= maxSide)) {
     return { width, height };
@@ -105,7 +105,7 @@ export function fingerprint(source: Source, width: number, height: number): stri
 /** Draw, then JPEG-encode at Chromium's quality. Throws if the canvas is tainted. */
 export async function encodeForUpload(
   source: Source,
-  settings: Settings,
+  settings: LensOptions,
   release: () => void = () => {}
 ): Promise<PreparedImage> {
   const natural = sourceSize(source);
@@ -175,7 +175,7 @@ function loadWithCors(url: string): Promise<HTMLImageElement> {
  */
 export async function prepareImage(
   target: Target,
-  settings: Settings
+  settings: LensOptions
 ): Promise<PreparedImage> {
   const own = ownPixels(target);
   if (own) {

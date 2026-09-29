@@ -7,8 +7,37 @@ import {
   justification,
   shouldStayVertical,
 } from './layout.js';
-import { uiRoot } from '../ui/root.js';
-import type { Geometry, Settings, TranslatedLine, TranslationBlock } from '../types.js';
+import type { Geometry, RenderOptions, TranslatedLine, TranslationBlock } from '../types.js';
+
+/**
+ * The rules the layer this renderer builds needs to exist.
+ *
+ * They travel with the renderer rather than with the front end's stylesheet,
+ * because they are not styling in the decorative sense - `position: absolute`
+ * and `white-space: pre` are how a line lands where the geometry says it does.
+ * A front end that drops them gets text stacked in the corner of the page.
+ */
+export const OVERLAY_CSS = `
+.lt-layer {
+  position: absolute;
+  overflow: hidden;
+  pointer-events: none;
+}
+.lt-bg {
+  position: absolute;
+  max-width: none;
+}
+.lt-line {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  white-space: pre;
+  line-height: 1;
+  transform-origin: center center;
+  margin: 0;
+  padding: 0;
+}
+`;
 
 interface OverlayEntry {
   layer: HTMLDivElement;
@@ -125,10 +154,20 @@ function renderBackground(
 export function renderTranslation(
   img: HTMLElement,
   blocks: TranslationBlock[],
-  settings: Settings,
+  settings: RenderOptions,
   // The picture's own proportions, which only an <img> carries on the element.
   // A canvas, a video and a background all get theirs from whatever was read.
-  natural: { width: number; height: number }
+  natural: { width: number; height: number },
+  /**
+   * Where the layer goes.
+   *
+   * A parameter rather than this script's own shadow root: the renderer used to
+   * reach into `ui/root.ts` for it, which meant the engine's DOM renderer only
+   * worked inside this particular front end's chrome. It needs a positioned,
+   * full-viewport container and the rules above; whose it is, is not its
+   * business.
+   */
+  root: ParentNode
 ): number {
   clearOverlay(img);
 
@@ -140,7 +179,7 @@ export function renderTranslation(
   const layer = document.createElement('div');
   layer.className = 'lt-layer';
   placeLayer(layer, img);
-  uiRoot().appendChild(layer);
+  root.append(layer);
 
   const objectUrls: string[] = [];
   overlays.set(img, { layer, objectUrls });

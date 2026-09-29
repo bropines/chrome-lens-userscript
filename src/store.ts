@@ -1,4 +1,4 @@
-import type { LensResult, Settings } from './types.js';
+import type { CacheOptions, LensOptions, LensResult } from './types.js';
 
 /**
  * What Lens said, kept across reloads.
@@ -80,7 +80,7 @@ function run<T>(
 }
 
 /** The languages the answer was given in; a different set is a different answer. */
-const languagesOf = (settings: Settings): string =>
+const languagesOf = (settings: LensOptions): string =>
   [settings.targetLang, settings.sourceLang, settings.ocrLang].join('|');
 
 /** Roughly the weight of an answer: the inpainted patches, and little else. */
@@ -95,7 +95,7 @@ function weigh(result: LensResult): number {
 
 export async function getStored(
   hash: string,
-  settings: Settings
+  settings: LensOptions & CacheOptions
 ): Promise<LensResult | null> {
   if (!hash || !settings.persistCache) return null;
   const entry = (await run<StoredEntry>('readonly', (store) => store.get(hash))) ?? null;
@@ -110,7 +110,7 @@ export async function getStored(
 export async function putStored(
   hash: string,
   result: LensResult,
-  settings: Settings
+  settings: LensOptions & CacheOptions
 ): Promise<void> {
   if (!hash || !settings.persistCache || settings.cacheBytes <= 0) return;
   const entry: StoredEntry = {

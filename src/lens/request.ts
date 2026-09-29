@@ -1,6 +1,6 @@
 import { F } from '../gen/fields.js';
 import { writer } from '../protobuf.js';
-import type { Bytes, PreparedImage, Settings } from '../types.js';
+import type { Bytes, LensOptions, PreparedImage } from '../types.js';
 
 /** Enum values from Chromium's platform/surface/filter protos. */
 const PLATFORM_WEB = 3;
@@ -23,7 +23,7 @@ function randomUuid(): bigint {
  * AUTO_FILTER rather than joining it, so sending both is a state real Chrome
  * never produces.
  */
-export function buildRequest(image: PreparedImage, settings: Settings): Bytes {
+export function buildRequest(image: PreparedImage, settings: LensOptions): Bytes {
   const translating = Boolean(settings.targetLang);
 
   return writer()

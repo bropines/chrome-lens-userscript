@@ -7,7 +7,10 @@ import {
   GM_xmlhttpRequest,
   unsafeWindow,
 } from '$';
+import type { BinaryRequest, BinaryResponse, Transport as EngineTransport } from './transport.js';
 import type { Bytes } from './types.js';
+
+export type { BinaryResponse };
 
 /**
  * Everything that differs between userscript hosts.
@@ -137,12 +140,6 @@ const request: typeof GM_xmlhttpRequest | undefined =
     ? GM_xmlhttpRequest
     : (GM?.xmlHttpRequest as unknown as typeof GM_xmlhttpRequest | undefined);
 
-/** A response reduced to the three things this script ever reads. */
-export interface BinaryResponse {
-  status: number;
-  bytes: Bytes;
-  contentType: string;
-}
 
 /**
  * Ask for bytes, and be ready to be given text instead.
@@ -394,12 +391,7 @@ async function climb(attempt: Attempt, remember: boolean): Promise<BinaryRespons
   throw new Error(failures.join('; ') || 'the request was never sent');
 }
 
-export function postBinary(options: {
-  url: string;
-  headers: Record<string, string>;
-  body: Bytes;
-  timeoutMs: number;
-}): Promise<BinaryResponse> {
+export function postBinary(options: BinaryRequest): Promise<BinaryResponse> {
   return climb({ ...options, method: 'POST', encoding: 'typed' }, true);
 }
 
@@ -409,6 +401,22 @@ export function getBinary(url: string, timeoutMs: number): Promise<BinaryRespons
     false
   );
 }
+
+/**
+ * This host, as the transport the engine asks for.
+ *
+ * The engine knows it needs a privileged cross-origin POST and nothing more;
+ * which host is running, what it does with a typed array and where a blocked
+ * domain is undone are all answered here.
+ */
+export const gmTransport: EngineTransport = {
+  post: postBinary,
+  get: getBinary,
+  hint: () =>
+    hostName() === 'Tampermonkey'
+      ? ' If Tampermonkey blocked this domain, clear it under Settings > Security > Blocked domains.'
+      : '',
+};
 
 // --- Diagnostics ------------------------------------------------------------
 

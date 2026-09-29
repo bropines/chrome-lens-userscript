@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Lens Translate
 // @namespace    https://github.com/bropines/chrome-lens-userscript
-// @version      2.10.0
+// @version      2.11.0
 // @author       bropines
 // @description  Hover any image, click the button, and its text is translated in place - rendered the way Chromium's own Lens overlay does it.
 // @license      MIT
@@ -215,6 +215,11 @@
       false
     );
   }
+  const gmTransport = {
+    post: postBinary,
+    get: getBinary,
+    hint: () => hostName() === "Tampermonkey" ? " If Tampermonkey blocked this domain, clear it under Settings > Security > Blocked domains." : ""
+  };
   function hostFacts() {
     const has = (name, value) => `${name}: ${typeof value === "function" ? "yes" : "NO"}`;
     return [
@@ -248,112 +253,19 @@
       return `${error.message}, ${Date.now() - started} ms`;
     }
   }
-  const covers = /* @__PURE__ */ new WeakMap();
-  const live$1 = /* @__PURE__ */ new Set();
-  const isCovered = (img) => covers.has(img);
-  const COVER_MARK = "data-lens-translate";
-  const isCover = (node) => node.hasAttribute(COVER_MARK);
-  function place(cover, img) {
-    cover.style.left = `${img.offsetLeft}px`;
-    cover.style.top = `${img.offsetTop}px`;
-    cover.style.width = `${img.offsetWidth}px`;
-    cover.style.height = `${img.offsetHeight}px`;
+  let installed = null;
+  function setTransport(transport) {
+    installed = transport;
   }
-  function coverImage(img, blobUrl) {
-    uncoverImage(img);
-    const parent = img.parentElement;
-    if (!parent) return false;
-    const element = document.createElement("img");
-    element.src = blobUrl;
-    element.setAttribute(COVER_MARK, "");
-    element.setAttribute(
-      "style",
-      [
-        "position: absolute",
-        "margin: 0",
-        "padding: 0",
-        "border: 0",
-        "max-width: none",
-        "max-height: none",
-        "min-width: 0",
-        "min-height: 0",
-        "pointer-events: none",
-        // Above the image, below anything the page floats on top of it.
-        "z-index: 1",
-        // Inherit the shape so rounded media does not get square corners.
-        `border-radius: ${getComputedStyle(img).borderRadius}`,
-        `object-fit: ${getComputedStyle(img).objectFit || "fill"}`
-      ].map((rule) => `${rule} !important`).join(";")
-    );
-    if (getComputedStyle(parent).position === "static") {
-      parent.style.setProperty("position", "relative", "important");
+  function getTransport() {
+    if (!installed) {
+      throw new Error("No transport is installed: call setTransport() before translating");
     }
-    img.insertAdjacentElement("afterend", element);
-    place(element, img);
-    const resize = new ResizeObserver(() => place(element, img));
-    resize.observe(img);
-    covers.set(img, { element, blobUrl, resize });
-    live$1.add(new WeakRef(img));
-    return true;
+    return installed;
   }
-  function uncoverImage(img) {
-    const cover = covers.get(img);
-    if (!cover) return false;
-    cover.resize.disconnect();
-    cover.element.remove();
-    URL.revokeObjectURL(cover.blobUrl);
-    covers.delete(img);
-    return true;
-  }
-  function uncoverAll() {
-    let count = 0;
-    for (const ref of live$1) {
-      const img = ref.deref();
-      if (!img) {
-        live$1.delete(ref);
-        continue;
-      }
-      if (uncoverImage(img)) count += 1;
-    }
-    for (const stray of Array.from(document.querySelectorAll("img[data-lens-translate]"))) {
-      stray.remove();
-      count += 1;
-    }
-    return count;
-  }
-  const styles = "/* Lives inside a shadow root, so these selectors compete with nothing. The\n   :host is a fixed, click-through, full-viewport layer; everything here is\n   positioned in viewport coordinates. */\n\n:host {\n  font: 14px/1.45 system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;\n  color: #1a1a1a;\n}\n\n#lt-button,\n#lt-gear {\n  position: absolute;\n  width: 32px;\n  height: 32px;\n  background: rgba(0, 0, 0, 0.6);\n  border-radius: 50%;\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  opacity: 0;\n  pointer-events: none;\n  cursor: pointer;\n  transition: opacity 0.2s ease-in-out, transform 0.15s ease-in-out, background 0.2s;\n  transform: scale(0.9);\n  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);\n  border: 1px solid rgba(255, 255, 255, 0.2);\n}\n#lt-button:hover,\n#lt-gear:hover {\n  background: rgba(0, 0, 0, 0.85);\n  transform: scale(1.05);\n}\n\n/* Appears a beat after the main button, so a passing cursor does not summon\n   two controls at once. */\n#lt-gear {\n  width: 26px;\n  height: 26px;\n}\n#lt-button.lt-busy svg {\n  animation: lt-spin 1s linear infinite;\n}\n#lt-button.lt-active {\n  background: rgba(20, 110, 60, 0.9);\n}\n#lt-button.lt-error {\n  background: rgba(170, 30, 30, 0.9);\n}\n@keyframes lt-spin {\n  to {\n    transform: rotate(360deg);\n  }\n}\n\n.lt-layer {\n  position: absolute;\n  overflow: hidden;\n  pointer-events: none;\n}\n.lt-bg {\n  position: absolute;\n  max-width: none;\n}\n.lt-line {\n  position: absolute;\n  display: flex;\n  align-items: center;\n  white-space: pre;\n  line-height: 1;\n  transform-origin: center center;\n  margin: 0;\n  padding: 0;\n}\n\n#lt-toast {\n  position: absolute;\n  bottom: 16px;\n  left: 50%;\n  transform: translateX(-50%);\n  background: rgba(0, 0, 0, 0.88);\n  color: #fff;\n  padding: 8px 16px;\n  border-radius: 8px;\n  font-size: 13px;\n  pointer-events: none;\n  opacity: 0;\n  transition: opacity 0.2s;\n  max-width: 70vw;\n}\n#lt-toast.lt-show {\n  opacity: 1;\n}\n\n/* ------------------------------------------------------------- settings */\n\n.lt-panel-backdrop {\n  position: absolute;\n  inset: 0;\n  background: rgba(0, 0, 0, 0.5);\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  pointer-events: auto;\n}\n.lt-panel {\n  background: #fff;\n  width: min(560px, 92vw);\n  max-height: 86vh;\n  display: flex;\n  flex-direction: column;\n  border-radius: 12px;\n  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.4);\n  overflow: hidden;\n}\n.lt-panel-head,\n.lt-panel-foot {\n  display: flex;\n  align-items: center;\n  gap: 8px;\n  padding: 12px 18px;\n  flex: none;\n}\n.lt-panel-head {\n  border-bottom: 1px solid #e6e6e6;\n  justify-content: space-between;\n  font-size: 15px;\n  font-weight: 600;\n}\n.lt-panel-foot {\n  border-top: 1px solid #e6e6e6;\n}\n.lt-spacer {\n  flex: 1;\n}\n.lt-panel-body {\n  padding: 10px 18px 16px;\n  overflow-y: auto;\n}\n\n.lt-row {\n  display: grid;\n  grid-template-columns: 190px minmax(0, 1fr);\n  align-items: center;\n  gap: 2px 14px;\n  padding: 7px 0;\n}\n.lt-label {\n  color: #333;\n}\n.lt-hint {\n  grid-column: 2;\n  color: #808080;\n  font-size: 12px;\n}\n.lt-input {\n  font: inherit;\n  padding: 7px 9px;\n  border: 1px solid #ccc;\n  border-radius: 6px;\n  background: #fff;\n  color: #1a1a1a;\n  min-width: 0;\n  width: 100%;\n  box-sizing: border-box;\n}\n.lt-input[type='checkbox'] {\n  justify-self: start;\n  width: 17px;\n  height: 17px;\n  padding: 0;\n}\n.lt-x {\n  border: 0;\n  background: transparent;\n  font-size: 22px;\n  line-height: 1;\n  cursor: pointer;\n  color: #666;\n  padding: 0 4px;\n}\n.lt-btn {\n  font: inherit;\n  padding: 7px 15px;\n  border-radius: 7px;\n  cursor: pointer;\n  border: 1px solid #ccc;\n  background: #f5f5f5;\n  color: #1a1a1a;\n}\n.lt-btn.lt-primary {\n  background: #1a73e8;\n  border-color: #1a73e8;\n  color: #fff;\n}\n.lt-btn.lt-ghost:hover {\n  background: #eaeaea;\n}\n\n@media (prefers-color-scheme: dark) {\n  .lt-panel {\n    background: #1f1f22;\n    color: #ececec;\n  }\n  .lt-panel-head,\n  .lt-panel-foot {\n    border-color: #35353a;\n  }\n  .lt-label {\n    color: #d6d6d6;\n  }\n  .lt-hint {\n    color: #9a9a9a;\n  }\n  .lt-input {\n    background: #2a2a2e;\n    border-color: #45454c;\n    color: #ececec;\n  }\n  .lt-btn {\n    background: #2e2e33;\n    border-color: #45454c;\n    color: #ececec;\n  }\n  .lt-btn.lt-ghost:hover {\n    background: #3a3a40;\n  }\n  .lt-x {\n    color: #bbb;\n  }\n}\n\n/* Outline slider with its live sample. */\n.lt-slider {\n  display: flex;\n  align-items: center;\n  gap: 10px;\n  min-width: 0;\n}\n.lt-slider input[type='range'] {\n  flex: 1;\n  width: auto;\n  padding: 0;\n  border: 0;\n  background: transparent;\n  accent-color: #1a73e8;\n}\n.lt-readout {\n  min-width: 42px;\n  text-align: right;\n  font-variant-numeric: tabular-nums;\n  color: #666;\n}\n.lt-preview {\n  grid-column: 2;\n  width: 100%;\n  height: auto;\n  border-radius: 6px;\n  border: 1px solid #ddd;\n  margin-top: 6px;\n}\n@media (prefers-color-scheme: dark) {\n  .lt-readout {\n    color: #aaa;\n  }\n  .lt-preview {\n    border-color: #45454c;\n  }\n}\n\n/* Section headings. */\n.lt-group {\n  grid-column: 1 / -1;\n  margin: 16px 0 4px;\n  padding-bottom: 5px;\n  border-bottom: 1px solid #e6e6e6;\n  font-size: 11px;\n  font-weight: 600;\n  letter-spacing: 0.07em;\n  text-transform: uppercase;\n  color: #888;\n}\n.lt-group:first-child {\n  margin-top: 4px;\n}\n@media (prefers-color-scheme: dark) {\n  .lt-group {\n    border-color: #35353a;\n    color: #8c8c96;\n  }\n}\n\n/* Menu commands, for a host that has no menu of its own. */\n.lt-actions {\n  display: flex;\n  flex-wrap: wrap;\n  gap: 8px;\n  padding: 4px 0 0;\n}\n.lt-note {\n  color: #808080;\n  font-size: 12px;\n  padding-top: 8px;\n}\n@media (prefers-color-scheme: dark) {\n  .lt-note {\n    color: #9a9a9a;\n  }\n}\n\n/* The diagnostics report: fixed width, so columns line up as written. */\n.lt-panel-report {\n  max-width: 560px;\n}\n.lt-report {\n  margin: 0;\n  padding: 14px 18px;\n  overflow: auto;\n  white-space: pre-wrap;\n  word-break: break-word;\n  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;\n  font-size: 12px;\n  line-height: 1.5;\n  user-select: text;\n  -webkit-user-select: text;\n}\n";
-  const HOST_ID = "lens-translate-root";
-  let shadow = null;
-  function uiRoot() {
-    if (shadow) return shadow;
-    const host = document.createElement("div");
-    host.id = HOST_ID;
-    host.dataset["version"] = scriptVersion();
-    host.setAttribute(
-      "style",
-      [
-        "all: initial",
-        "font: 14px/1.45 system-ui, -apple-system, 'Segoe UI', Roboto, Ubuntu, sans-serif",
-        "color: #1a1a1a",
-        "position: fixed",
-        "top: 0",
-        "left: 0",
-        "width: 100%",
-        "height: 100%",
-        "z-index: 2147483647",
-        "pointer-events: none"
-      ].map((rule) => `${rule} !important`).join(";")
-    );
-    shadow = host.attachShadow({ mode: "open" });
-    const sheet = document.createElement("style");
-    sheet.textContent = styles;
-    shadow.appendChild(sheet);
-    document.documentElement.appendChild(host);
-    return shadow;
-  }
-  function isOurs(node) {
-    const element = node;
-    return Boolean(element?.closest?.(`#${HOST_ID}`)) || element?.getRootNode?.() === shadow;
+  let ignored = () => false;
+  function ignoreElements(predicate) {
+    ignored = predicate;
   }
   function backgroundUrl(element) {
     const value = window.getComputedStyle(element).backgroundImage;
@@ -366,7 +278,7 @@
     if (!node || typeof node !== "object") return null;
     const element = node;
     if (element.nodeType !== 1 || typeof element.tagName !== "string") return null;
-    if (isCover(element)) return null;
+    if (ignored(element)) return null;
     const pointable = window.getComputedStyle(element).pointerEvents !== "none";
     switch (element.tagName) {
       case "IMG": {
@@ -389,7 +301,7 @@
   }
   function* walk(root2) {
     for (const element of root2.querySelectorAll("*")) {
-      if (element.id === HOST_ID) continue;
+      if (ignored(element)) continue;
       yield element;
       const shadow2 = element.shadowRoot;
       if (shadow2) yield* walk(shadow2);
@@ -1222,7 +1134,7 @@
   const LENS_ENDPOINT = "https://lensfrontend-pa.googleapis.com/v1/crupload";
   const IMAGE_TIMEOUT_MS = 3e4;
   async function callLens(image, settings2) {
-    const response = await postBinary({
+    const response = await getTransport().post({
       url: LENS_ENDPOINT,
       headers: {
         "Content-Type": "application/x-protobuf",
@@ -1238,11 +1150,12 @@
     }
   }
   async function fetchImageBlob(url) {
+    const transport = getTransport();
     let response;
     try {
-      response = await getBinary(url, IMAGE_TIMEOUT_MS);
+      response = await transport.get(url, IMAGE_TIMEOUT_MS);
     } catch (error) {
-      const hint = hostName() === "Tampermonkey" ? " If Tampermonkey blocked this domain, clear it under Settings > Security > Blocked domains." : "";
+      const hint = transport.hint?.() ?? "";
       throw new Error(`Could not fetch the image (${error.message}).${hint}`);
     }
     return new Blob([response.bytes], { type: response.contentType });
@@ -1680,8 +1593,29 @@
     const value = map[alignment] ?? "center";
     return rtl && value === "flex-start" ? "flex-end" : value;
   }
+  const OVERLAY_CSS = `
+.lt-layer {
+  position: absolute;
+  overflow: hidden;
+  pointer-events: none;
+}
+.lt-bg {
+  position: absolute;
+  max-width: none;
+}
+.lt-line {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  white-space: pre;
+  line-height: 1;
+  transform-origin: center center;
+  margin: 0;
+  padding: 0;
+}
+`;
   const overlays = /* @__PURE__ */ new WeakMap();
-  const live = /* @__PURE__ */ new Set();
+  const live$1 = /* @__PURE__ */ new Set();
   const pct = (value) => `${(value * 100).toFixed(4)}%`;
   function textShadow(radius, colour) {
     const r = radius.toFixed(2);
@@ -1715,9 +1649,9 @@
   }
   function overlaid() {
     const out = [];
-    for (const ref of live) {
+    for (const ref of live$1) {
       const element = ref.deref();
-      if (!element || !overlays.has(element)) live.delete(ref);
+      if (!element || !overlays.has(element)) live$1.delete(ref);
       else out.push(element);
     }
     return out;
@@ -1758,7 +1692,7 @@
     ].join(";");
     layer.appendChild(patch);
   }
-  function renderTranslation(img, blocks, settings2, natural) {
+  function renderTranslation(img, blocks, settings2, natural, root2) {
     clearOverlay(img);
     const rect = img.getBoundingClientRect();
     const aspect = natural.width / natural.height;
@@ -1766,10 +1700,10 @@
     const layer = document.createElement("div");
     layer.className = "lt-layer";
     placeLayer(layer, img);
-    uiRoot().appendChild(layer);
+    root2.append(layer);
     const objectUrls = [];
     overlays.set(img, { layer, objectUrls });
-    live.add(new WeakRef(img));
+    live$1.add(new WeakRef(img));
     let rendered = 0;
     for (const block of blocks) {
       const rtl = isRtl(block);
@@ -2213,6 +2147,79 @@
     if (!blob) throw new Error("Could not encode the translated image");
     return blob;
   }
+  const covers = /* @__PURE__ */ new WeakMap();
+  const live = /* @__PURE__ */ new Set();
+  const isCovered = (img) => covers.has(img);
+  const COVER_MARK = "data-lens-translate";
+  const isCover = (node) => node.hasAttribute(COVER_MARK);
+  function place(cover, img) {
+    cover.style.left = `${img.offsetLeft}px`;
+    cover.style.top = `${img.offsetTop}px`;
+    cover.style.width = `${img.offsetWidth}px`;
+    cover.style.height = `${img.offsetHeight}px`;
+  }
+  function coverImage(img, blobUrl) {
+    uncoverImage(img);
+    const parent = img.parentElement;
+    if (!parent) return false;
+    const element = document.createElement("img");
+    element.src = blobUrl;
+    element.setAttribute(COVER_MARK, "");
+    element.setAttribute(
+      "style",
+      [
+        "position: absolute",
+        "margin: 0",
+        "padding: 0",
+        "border: 0",
+        "max-width: none",
+        "max-height: none",
+        "min-width: 0",
+        "min-height: 0",
+        "pointer-events: none",
+        // Above the image, below anything the page floats on top of it.
+        "z-index: 1",
+        // Inherit the shape so rounded media does not get square corners.
+        `border-radius: ${getComputedStyle(img).borderRadius}`,
+        `object-fit: ${getComputedStyle(img).objectFit || "fill"}`
+      ].map((rule) => `${rule} !important`).join(";")
+    );
+    if (getComputedStyle(parent).position === "static") {
+      parent.style.setProperty("position", "relative", "important");
+    }
+    img.insertAdjacentElement("afterend", element);
+    place(element, img);
+    const resize = new ResizeObserver(() => place(element, img));
+    resize.observe(img);
+    covers.set(img, { element, blobUrl, resize });
+    live.add(new WeakRef(img));
+    return true;
+  }
+  function uncoverImage(img) {
+    const cover = covers.get(img);
+    if (!cover) return false;
+    cover.resize.disconnect();
+    cover.element.remove();
+    URL.revokeObjectURL(cover.blobUrl);
+    covers.delete(img);
+    return true;
+  }
+  function uncoverAll() {
+    let count = 0;
+    for (const ref of live) {
+      const img = ref.deref();
+      if (!img) {
+        live.delete(ref);
+        continue;
+      }
+      if (uncoverImage(img)) count += 1;
+    }
+    for (const stray of Array.from(document.querySelectorAll("img[data-lens-translate]"))) {
+      stray.remove();
+      count += 1;
+    }
+    return count;
+  }
   function weigh(blocks) {
     let bytes2 = 0;
     for (const block of blocks) {
@@ -2290,30 +2297,25 @@
     }
   }
   const SEPARATOR = String.fromCharCode(0);
-  const NOT_DRAWN = /* @__PURE__ */ new Set([
-    "enabled",
-    "showButton",
-    "buttonMode",
-    "hotkey",
-    "minImageSize",
-    "apiKey",
-    "timeoutMs",
-    "cacheBytes",
-    "region",
-    "timeZone",
-    "targetLang",
-    "sourceLang",
-    "ocrLang",
-    "maxArea",
-    "maxSide",
-    "jpegQuality"
-  ]);
+  const DRAWN = Object.keys({
+    fontFamily: 0,
+    drawBackground: 0,
+    verticalText: 0,
+    minReadablePx: 0,
+    supersample: 0,
+    mangaMode: 0,
+    mangaBoxGrowth: 0,
+    outlineScale: 0,
+    eraseMode: 0,
+    hullPadding: 0,
+    reflowHorizontal: 0,
+    fitToBox: 0,
+    lineSpacing: 0,
+    textAlign: 0
+  }).sort();
   function renderKey(key, settings2, displayedWidth) {
     const parts = [key];
-    for (const name of Object.keys(settings2).sort()) {
-      if (NOT_DRAWN.has(name)) continue;
-      parts.push(`${name}=${String(settings2[name])}`);
-    }
+    for (const name of DRAWN) parts.push(`${name}=${String(settings2[name])}`);
     parts.push(`w=${Math.round(displayedWidth / 50)}`);
     return parts.join(SEPARATOR);
   }
@@ -2359,6 +2361,41 @@
     entries: entries.size + renders.size,
     bytes: totalBytes + renderBytes
   });
+  const styles = "/* Lives inside a shadow root, so these selectors compete with nothing. The\n   :host is a fixed, click-through, full-viewport layer; everything here is\n   positioned in viewport coordinates. */\n\n:host {\n  font: 14px/1.45 system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;\n  color: #1a1a1a;\n}\n\n#lt-button,\n#lt-gear {\n  position: absolute;\n  width: 32px;\n  height: 32px;\n  background: rgba(0, 0, 0, 0.6);\n  border-radius: 50%;\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  opacity: 0;\n  pointer-events: none;\n  cursor: pointer;\n  transition: opacity 0.2s ease-in-out, transform 0.15s ease-in-out, background 0.2s;\n  transform: scale(0.9);\n  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);\n  border: 1px solid rgba(255, 255, 255, 0.2);\n}\n#lt-button:hover,\n#lt-gear:hover {\n  background: rgba(0, 0, 0, 0.85);\n  transform: scale(1.05);\n}\n\n/* Appears a beat after the main button, so a passing cursor does not summon\n   two controls at once. */\n#lt-gear {\n  width: 26px;\n  height: 26px;\n}\n#lt-button.lt-busy svg {\n  animation: lt-spin 1s linear infinite;\n}\n#lt-button.lt-active {\n  background: rgba(20, 110, 60, 0.9);\n}\n#lt-button.lt-error {\n  background: rgba(170, 30, 30, 0.9);\n}\n@keyframes lt-spin {\n  to {\n    transform: rotate(360deg);\n  }\n}\n\n#lt-toast {\n  position: absolute;\n  bottom: 16px;\n  left: 50%;\n  transform: translateX(-50%);\n  background: rgba(0, 0, 0, 0.88);\n  color: #fff;\n  padding: 8px 16px;\n  border-radius: 8px;\n  font-size: 13px;\n  pointer-events: none;\n  opacity: 0;\n  transition: opacity 0.2s;\n  max-width: 70vw;\n}\n#lt-toast.lt-show {\n  opacity: 1;\n}\n\n/* ------------------------------------------------------------- settings */\n\n.lt-panel-backdrop {\n  position: absolute;\n  inset: 0;\n  background: rgba(0, 0, 0, 0.5);\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  pointer-events: auto;\n}\n.lt-panel {\n  background: #fff;\n  width: min(560px, 92vw);\n  max-height: 86vh;\n  display: flex;\n  flex-direction: column;\n  border-radius: 12px;\n  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.4);\n  overflow: hidden;\n}\n.lt-panel-head,\n.lt-panel-foot {\n  display: flex;\n  align-items: center;\n  gap: 8px;\n  padding: 12px 18px;\n  flex: none;\n}\n.lt-panel-head {\n  border-bottom: 1px solid #e6e6e6;\n  justify-content: space-between;\n  font-size: 15px;\n  font-weight: 600;\n}\n.lt-panel-foot {\n  border-top: 1px solid #e6e6e6;\n}\n.lt-spacer {\n  flex: 1;\n}\n.lt-panel-body {\n  padding: 10px 18px 16px;\n  overflow-y: auto;\n}\n\n.lt-row {\n  display: grid;\n  grid-template-columns: 190px minmax(0, 1fr);\n  align-items: center;\n  gap: 2px 14px;\n  padding: 7px 0;\n}\n.lt-label {\n  color: #333;\n}\n.lt-hint {\n  grid-column: 2;\n  color: #808080;\n  font-size: 12px;\n}\n.lt-input {\n  font: inherit;\n  padding: 7px 9px;\n  border: 1px solid #ccc;\n  border-radius: 6px;\n  background: #fff;\n  color: #1a1a1a;\n  min-width: 0;\n  width: 100%;\n  box-sizing: border-box;\n}\n.lt-input[type='checkbox'] {\n  justify-self: start;\n  width: 17px;\n  height: 17px;\n  padding: 0;\n}\n.lt-x {\n  border: 0;\n  background: transparent;\n  font-size: 22px;\n  line-height: 1;\n  cursor: pointer;\n  color: #666;\n  padding: 0 4px;\n}\n.lt-btn {\n  font: inherit;\n  padding: 7px 15px;\n  border-radius: 7px;\n  cursor: pointer;\n  border: 1px solid #ccc;\n  background: #f5f5f5;\n  color: #1a1a1a;\n}\n.lt-btn.lt-primary {\n  background: #1a73e8;\n  border-color: #1a73e8;\n  color: #fff;\n}\n.lt-btn.lt-ghost:hover {\n  background: #eaeaea;\n}\n\n@media (prefers-color-scheme: dark) {\n  .lt-panel {\n    background: #1f1f22;\n    color: #ececec;\n  }\n  .lt-panel-head,\n  .lt-panel-foot {\n    border-color: #35353a;\n  }\n  .lt-label {\n    color: #d6d6d6;\n  }\n  .lt-hint {\n    color: #9a9a9a;\n  }\n  .lt-input {\n    background: #2a2a2e;\n    border-color: #45454c;\n    color: #ececec;\n  }\n  .lt-btn {\n    background: #2e2e33;\n    border-color: #45454c;\n    color: #ececec;\n  }\n  .lt-btn.lt-ghost:hover {\n    background: #3a3a40;\n  }\n  .lt-x {\n    color: #bbb;\n  }\n}\n\n/* Outline slider with its live sample. */\n.lt-slider {\n  display: flex;\n  align-items: center;\n  gap: 10px;\n  min-width: 0;\n}\n.lt-slider input[type='range'] {\n  flex: 1;\n  width: auto;\n  padding: 0;\n  border: 0;\n  background: transparent;\n  accent-color: #1a73e8;\n}\n.lt-readout {\n  min-width: 42px;\n  text-align: right;\n  font-variant-numeric: tabular-nums;\n  color: #666;\n}\n.lt-preview {\n  grid-column: 2;\n  width: 100%;\n  height: auto;\n  border-radius: 6px;\n  border: 1px solid #ddd;\n  margin-top: 6px;\n}\n@media (prefers-color-scheme: dark) {\n  .lt-readout {\n    color: #aaa;\n  }\n  .lt-preview {\n    border-color: #45454c;\n  }\n}\n\n/* Section headings. */\n.lt-group {\n  grid-column: 1 / -1;\n  margin: 16px 0 4px;\n  padding-bottom: 5px;\n  border-bottom: 1px solid #e6e6e6;\n  font-size: 11px;\n  font-weight: 600;\n  letter-spacing: 0.07em;\n  text-transform: uppercase;\n  color: #888;\n}\n.lt-group:first-child {\n  margin-top: 4px;\n}\n@media (prefers-color-scheme: dark) {\n  .lt-group {\n    border-color: #35353a;\n    color: #8c8c96;\n  }\n}\n\n/* Menu commands, for a host that has no menu of its own. */\n.lt-actions {\n  display: flex;\n  flex-wrap: wrap;\n  gap: 8px;\n  padding: 4px 0 0;\n}\n.lt-note {\n  color: #808080;\n  font-size: 12px;\n  padding-top: 8px;\n}\n@media (prefers-color-scheme: dark) {\n  .lt-note {\n    color: #9a9a9a;\n  }\n}\n\n/* The diagnostics report: fixed width, so columns line up as written. */\n.lt-panel-report {\n  max-width: 560px;\n}\n.lt-report {\n  margin: 0;\n  padding: 14px 18px;\n  overflow: auto;\n  white-space: pre-wrap;\n  word-break: break-word;\n  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;\n  font-size: 12px;\n  line-height: 1.5;\n  user-select: text;\n  -webkit-user-select: text;\n}\n";
+  const HOST_ID = "lens-translate-root";
+  let shadow = null;
+  function uiRoot() {
+    if (shadow) return shadow;
+    const host = document.createElement("div");
+    host.id = HOST_ID;
+    host.dataset["version"] = scriptVersion();
+    host.setAttribute(
+      "style",
+      [
+        "all: initial",
+        "font: 14px/1.45 system-ui, -apple-system, 'Segoe UI', Roboto, Ubuntu, sans-serif",
+        "color: #1a1a1a",
+        "position: fixed",
+        "top: 0",
+        "left: 0",
+        "width: 100%",
+        "height: 100%",
+        "z-index: 2147483647",
+        "pointer-events: none"
+      ].map((rule) => `${rule} !important`).join(";")
+    );
+    shadow = host.attachShadow({ mode: "open" });
+    const sheet = document.createElement("style");
+    sheet.textContent = `${styles}
+${OVERLAY_CSS}`;
+    shadow.appendChild(sheet);
+    document.documentElement.appendChild(host);
+    return shadow;
+  }
+  function isOurs(node) {
+    const element = node;
+    return Boolean(element?.closest?.(`#${HOST_ID}`)) || element?.getRootNode?.() === shadow;
+  }
   let panel$1 = null;
   function drawOutlinePreview(canvas, scale) {
     const ctx = canvas.getContext("2d");
@@ -2675,6 +2712,8 @@
   const ICON = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="white" width="20" height="20"><path d="M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M12,4A8,8 0 0,1 20,12H18A6,6 0 0,0 12,6V4M12,8A4,4 0 0,1 16,12A4,4 0 0,1 12,16A4,4 0 0,1 8,12A4,4 0 0,1 12,8Z"/></svg>`;
   const GEAR = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="white" width="15" height="15"><path d="M12,15.5A3.5,3.5 0 0,1 8.5,12A3.5,3.5 0 0,1 12,8.5A3.5,3.5 0 0,1 15.5,12A3.5,3.5 0 0,1 12,15.5M19.43,12.97C19.47,12.65 19.5,12.33 19.5,12C19.5,11.67 19.47,11.34 19.43,11L21.54,9.37C21.73,9.22 21.78,8.95 21.66,8.73L19.66,5.27C19.54,5.05 19.27,4.96 19.05,5.05L16.56,6.05C16.04,5.66 15.5,5.32 14.87,5.07L14.5,2.42C14.46,2.18 14.25,2 14,2H10C9.75,2 9.54,2.18 9.5,2.42L9.13,5.07C8.5,5.32 7.96,5.66 7.44,6.05L4.95,5.05C4.73,4.96 4.46,5.05 4.34,5.27L2.34,8.73C2.21,8.95 2.27,9.22 2.46,9.37L4.57,11C4.53,11.34 4.5,11.67 4.5,12C4.5,12.33 4.53,12.65 4.57,12.97L2.46,14.63C2.27,14.78 2.21,15.05 2.34,15.27L4.34,18.73C4.46,18.95 4.73,19.03 4.95,18.95L7.44,17.94C7.96,18.34 8.5,18.68 9.13,18.93L9.5,21.58C9.54,21.82 9.75,22 10,22H14C14.25,22 14.46,21.82 14.5,21.58L14.87,18.93C15.5,18.67 16.04,18.34 16.56,17.94L19.05,18.95C19.27,19.03 19.54,18.95 19.66,18.73L21.66,15.27C21.78,15.05 21.73,14.78 21.54,14.63L19.43,12.97Z"/></svg>`;
   let settings = getSettings();
+  setTransport(gmTransport);
+  ignoreElements((element) => element.id === HOST_ID || isCover(element));
   const root = uiRoot();
   const button = document.createElement("div");
   button.id = "lt-button";
@@ -2768,10 +2807,13 @@
             toast("This image cannot be covered here");
             return;
           }
-        } else if (!renderTranslation(img, result.blocks, settings, {
-          width: prepared.width,
-          height: prepared.height
-        })) {
+        } else if (!renderTranslation(
+          img,
+          result.blocks,
+          settings,
+          { width: prepared.width, height: prepared.height },
+          root
+        )) {
           toast("Nothing could be placed on this image");
           return;
         }
