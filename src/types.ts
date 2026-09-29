@@ -190,6 +190,16 @@ export interface Settings {
    */
   reflowHorizontal: boolean;
   /**
+   * Let the readable-size floor give way rather than the layout.
+   *
+   * The floor raises text past what its box can hold, and a re-wrapped
+   * paragraph that outgrows its room is one written across the next bubble.
+   * With this on, the size yields until the paragraph fits the space between
+   * its neighbours - which is also why that space is measured against them
+   * rather than guessed at with a fixed multiple.
+   */
+  fitToBox: boolean;
+  /**
    * Line spacing as a multiple of the font size, for reflowed paragraphs.
    *
    * It only reaches text that was re-wrapped - a vertical column set

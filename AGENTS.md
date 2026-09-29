@@ -385,6 +385,34 @@ painted the bars: a vertical column fitted at 3px and floored at 24px grows
 eightfold, turning a 27x264 box into a 216x2112 rectangle on a 760x560 image.
 Measure the text and size the fill to that; a ratio has nothing bounding it.
 
+### A paragraph's room is bounded by its neighbours, not by a multiple
+
+The detected box hugs the glyphs, so it has to grow - a bubble is round and has
+space the box does not describe. `mangaBoxGrowth` guessed at how much, and a
+guess is wrong in both directions at once: too little where a bubble is
+generous, too much where the next one is close, which is how a translation came
+to be written across its neighbour.
+
+`roomFor` grows each side until it would reach another paragraph, capped by the
+multiple and by the picture. Only a paragraph sharing the band on the
+perpendicular axis can block a side - one diagonally away is not in the way.
+Rotation is ignored there on purpose: these boxes come back within a tenth of a
+degree of upright, and an approximation erring towards *less* room cannot cause
+an overlap.
+
+Room alone is not enough, because the readable-size floor can still ask for more
+than any room has. `fitToBox` decides who yields, and the answer is the floor:
+the size comes down until the paragraph fits, repeatedly, because a smaller font
+rewraps into fewer lines and may then fit outright. Text that shrinks is
+readable; text written over the next bubble is not.
+
+This makes `mangaBoxGrowth` safe to raise - the neighbours are the real cap, so
+a bigger multiple only takes room that is genuinely free.
+
+Measured rather than eyeballed: render each paragraph alone, then count pixels
+where two of those renders are both inked. On the page this came from it was 576
+before and 0 after.
+
 ### The wrap must be measured at the size that gets painted
 
 `fitTextBlock` returns the largest size that fits *and* the lines wrapped for

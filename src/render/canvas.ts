@@ -13,7 +13,7 @@ import {
 } from './layout.js';
 import { boxCorners, convexHull, fillHull } from './hull.js';
 import type { Point } from './hull.js';
-import type { Settings, TranslatedLine, TranslationBlock } from '../types.js';
+import type { Geometry, Settings, TranslatedLine, TranslationBlock } from '../types.js';
 
 /**
  * Bake the translation into a bitmap that replaces the image.
@@ -191,10 +191,75 @@ function fitInside(
   return { cx: place(box.cx, halfX, width), cy: place(box.cy, halfY, height), w, h };
 }
 
+interface Rect {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+}
+
+const rectOf = (geometry: Geometry, width: number, height: number): Rect => ({
+  left: (geometry.cx - geometry.w / 2) * width,
+  right: (geometry.cx + geometry.w / 2) * width,
+  top: (geometry.cy - geometry.h / 2) * height,
+  bottom: (geometry.cy + geometry.h / 2) * height,
+});
+
+/** Never let two paragraphs share an edge; a pixel of daylight reads as one. */
+const GAP = 2;
+
+/**
+ * How much room a paragraph actually has.
+ *
+ * The detected box hugs the glyphs, so it has to grow - a bubble is round and
+ * has space the box does not describe. Growing by a fixed multiple is a guess
+ * that is wrong in both directions at once: too little where a bubble is
+ * generous, and too much where the next one is close, which is how a
+ * translation ends up written across its neighbour.
+ *
+ * The real limit is the neighbours. Each side grows until it would reach
+ * another paragraph, capped by the multiple and by the picture. Only a
+ * paragraph that actually shares the band on the perpendicular axis can block a
+ * side: one diagonally away is not in the way.
+ *
+ * Rotation is ignored here, deliberately. These are axis-aligned extents of
+ * boxes that come back within a tenth of a degree of upright in practice, and
+ * an approximation that errs towards less room cannot cause an overlap.
+ */
+function roomFor(own: Rect, others: Rect[], growth: number, width: number, height: number): Rect {
+  const growX = ((own.right - own.left) * (growth - 1)) / 2;
+  const growY = ((own.bottom - own.top) * (growth - 1)) / 2;
+
+  let left = Math.max(0, own.left - growX);
+  let right = Math.min(width, own.right + growX);
+  let top = Math.max(0, own.top - growY);
+  let bottom = Math.min(height, own.bottom + growY);
+
+  for (const other of others) {
+    if (other.bottom > own.top && other.top < own.bottom) {
+      if (other.right <= own.left) left = Math.max(left, other.right + GAP);
+      if (other.left >= own.right) right = Math.min(right, other.left - GAP);
+    }
+    if (other.right > own.left && other.left < own.right) {
+      if (other.bottom <= own.top) top = Math.max(top, other.bottom + GAP);
+      if (other.top >= own.bottom) bottom = Math.min(bottom, other.top - GAP);
+    }
+  }
+
+  // A neighbour closer than the box itself would invert it; the box wins.
+  return {
+    left: Math.min(left, own.left),
+    right: Math.max(right, own.right),
+    top: Math.min(top, own.top),
+    bottom: Math.max(bottom, own.bottom),
+  };
+}
+
 function drawReflowedParagraph(
   draw: DrawContext,
   block: TranslationBlock,
-  settings: Settings
+  settings: Settings,
+  room: Rect
 ): void {
   const geometry = block.geometry;
   if (!geometry || geometry.w <= 0 || geometry.h <= 0) return;
@@ -203,15 +268,14 @@ function drawReflowedParagraph(
   // The detected box hugs the glyphs. A speech bubble is round and has room
   // around them, so manga mode lays out wider than the box and lets the text
   // use it - otherwise a bubble's worth of Russian wraps into a thin column.
-  const growth = settings.mangaMode ? Math.max(1, settings.mangaBoxGrowth) : 1;
-  // Growing the box is exactly what pushes a bubble near an edge off the
-  // picture, so the grown box is the one that has to be brought back.
+  // The room was measured against the neighbours; fitInside then answers for
+  // the picture's own edges, which a rotated box can still cross.
   const box = fitInside(
     {
-      cx: geometry.cx * width,
-      cy: geometry.cy * height,
-      w: geometry.w * width * growth,
-      h: geometry.h * height * Math.min(growth, 1.2),
+      cx: (room.left + room.right) / 2,
+      cy: (room.top + room.bottom) / 2,
+      w: room.right - room.left,
+      h: room.bottom - room.top,
       angle: geometry.angle,
     },
     width,
@@ -256,6 +320,19 @@ function drawReflowedParagraph(
     fontSize = Math.max(MIN_FONT_SIZE, (fontSize * boxW) / widest);
     setFont(fontSize);
     lines = wrapText(measure, text, boxW, perCharacter);
+  }
+
+  // A paragraph taller than its room is one written across the next bubble, so
+  // the readable-size floor gives way here rather than the layout. Repeated,
+  // because a smaller font rewraps into fewer lines and may then fit outright.
+  if (settings.fitToBox) {
+    for (let pass = 0; pass < 3; pass += 1) {
+      const needed = lines.length * fontSize * spacing;
+      if (needed <= boxH || fontSize <= MIN_FONT_SIZE) break;
+      fontSize = Math.max(MIN_FONT_SIZE, (fontSize * boxH) / needed);
+      setFont(fontSize);
+      lines = wrapText(measure, text, boxW, perCharacter);
+    }
   }
 
   const lineHeight = fontSize * spacing;
@@ -522,7 +599,12 @@ export async function renderToBlob(
     minFontPx: floorCssPx > 0 ? floorCssPx * canvasPerCssPx : 0,
   };
 
-  for (const block of blocks) {
+  const boxes = blocks.map((block) =>
+    block.geometry ? rectOf(block.geometry, width, height) : null
+  );
+  const growth = settings.mangaMode ? Math.max(1, settings.mangaBoxGrowth) : 1;
+
+  for (const [index, block] of blocks.entries()) {
     const vertical = block.writingDirection === 2;
     // Manga mode never leaves a column standing: that is the whole point of it.
     const stayVertical =
@@ -548,7 +630,13 @@ export async function renderToBlob(
         if (!hull) await drawLine(draw, block, line, block.lines[i + 1], settings, true);
       } else await drawLine(draw, block, line, block.lines[i + 1], settings, false, hull);
     }
-    if (reflow) drawReflowedParagraph(draw, block, settings);
+    if (reflow) {
+      const own = boxes[index];
+      if (own) {
+        const others = boxes.filter((rect, at): rect is Rect => rect !== null && at !== index);
+        drawReflowedParagraph(draw, block, settings, roomFor(own, others, growth, width, height));
+      }
+    }
   }
 
   const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'));

@@ -549,6 +549,7 @@
     eraseMode: "patch",
     hullPadding: 0.45,
     reflowHorizontal: false,
+    fitToBox: true,
     lineSpacing: 1.25,
     textAlign: "auto"
   };
@@ -623,7 +624,7 @@
       label: "Bubble fill (manga mode)",
       type: "number",
       step: "0.05",
-      hint: "how far past the detected text box to lay out; 1 = exactly the box"
+      hint: "how far past the detected box to lay out; safe to raise while the setting below is on"
     },
     { key: "drawBackground", group: "Erasing the original", label: "Erase the original text", type: "checkbox" },
     {
@@ -678,6 +679,13 @@
       label: "Re-wrap horizontal text",
       type: "checkbox",
       hint: "treat a paragraph as one text area, not a repeat of the server lines"
+    },
+    {
+      key: "fitToBox",
+      group: "Layout",
+      label: "Keep text out of the next bubble",
+      type: "checkbox",
+      hint: "shrink a paragraph that outgrows the room between its neighbours"
     },
     {
       key: "lineSpacing",
@@ -1955,17 +1963,47 @@
     const place2 = (centre, half, limit) => half * 2 >= limit ? limit / 2 : Math.min(Math.max(centre, half), limit - half);
     return { cx: place2(box.cx, halfX, width), cy: place2(box.cy, halfY, height), w, h };
   }
-  function drawReflowedParagraph(draw, block, settings2) {
+  const rectOf = (geometry, width, height) => ({
+    left: (geometry.cx - geometry.w / 2) * width,
+    right: (geometry.cx + geometry.w / 2) * width,
+    top: (geometry.cy - geometry.h / 2) * height,
+    bottom: (geometry.cy + geometry.h / 2) * height
+  });
+  const GAP = 2;
+  function roomFor(own, others, growth, width, height) {
+    const growX = (own.right - own.left) * (growth - 1) / 2;
+    const growY = (own.bottom - own.top) * (growth - 1) / 2;
+    let left = Math.max(0, own.left - growX);
+    let right = Math.min(width, own.right + growX);
+    let top = Math.max(0, own.top - growY);
+    let bottom = Math.min(height, own.bottom + growY);
+    for (const other of others) {
+      if (other.bottom > own.top && other.top < own.bottom) {
+        if (other.right <= own.left) left = Math.max(left, other.right + GAP);
+        if (other.left >= own.right) right = Math.min(right, other.left - GAP);
+      }
+      if (other.right > own.left && other.left < own.right) {
+        if (other.bottom <= own.top) top = Math.max(top, other.bottom + GAP);
+        if (other.top >= own.bottom) bottom = Math.min(bottom, other.top - GAP);
+      }
+    }
+    return {
+      left: Math.min(left, own.left),
+      right: Math.max(right, own.right),
+      top: Math.min(top, own.top),
+      bottom: Math.max(bottom, own.bottom)
+    };
+  }
+  function drawReflowedParagraph(draw, block, settings2, room) {
     const geometry = block.geometry;
     if (!geometry || geometry.w <= 0 || geometry.h <= 0) return;
     const { ctx, width, height, fontFamily } = draw;
-    const growth = settings2.mangaMode ? Math.max(1, settings2.mangaBoxGrowth) : 1;
     const box = fitInside(
       {
-        cx: geometry.cx * width,
-        cy: geometry.cy * height,
-        w: geometry.w * width * growth,
-        h: geometry.h * height * Math.min(growth, 1.2),
+        cx: (room.left + room.right) / 2,
+        cy: (room.top + room.bottom) / 2,
+        w: room.right - room.left,
+        h: room.bottom - room.top,
         angle: geometry.angle
       },
       width,
@@ -1995,6 +2033,15 @@
       fontSize = Math.max(MIN_FONT_SIZE, fontSize * boxW / widest);
       setFont(fontSize);
       lines = wrapText(measure, text2, boxW, perCharacter);
+    }
+    if (settings2.fitToBox) {
+      for (let pass = 0; pass < 3; pass += 1) {
+        const needed = lines.length * fontSize * spacing;
+        if (needed <= boxH || fontSize <= MIN_FONT_SIZE) break;
+        fontSize = Math.max(MIN_FONT_SIZE, fontSize * boxH / needed);
+        setFont(fontSize);
+        lines = wrapText(measure, text2, boxW, perCharacter);
+      }
     }
     const lineHeight = fontSize * spacing;
     ctx.textAlign = "left";
@@ -2137,7 +2184,11 @@
       fontFamily,
       minFontPx: floorCssPx > 0 ? floorCssPx * canvasPerCssPx : 0
     };
-    for (const block of blocks) {
+    const boxes = blocks.map(
+      (block) => block.geometry ? rectOf(block.geometry, width, height) : null
+    );
+    const growth = settings2.mangaMode ? Math.max(1, settings2.mangaBoxGrowth) : 1;
+    for (const [index, block] of blocks.entries()) {
       const vertical = block.writingDirection === 2;
       const stayVertical = !settings2.mangaMode && shouldStayVertical(block, settings2.verticalText);
       const hull = settings2.drawBackground && (settings2.eraseMode === "hull" || settings2.mangaMode);
@@ -2150,7 +2201,13 @@
           if (!hull) await drawLine(draw, block, line, block.lines[i + 1], settings2, true);
         } else await drawLine(draw, block, line, block.lines[i + 1], settings2, false, hull);
       }
-      if (reflow) drawReflowedParagraph(draw, block, settings2);
+      if (reflow) {
+        const own = boxes[index];
+        if (own) {
+          const others = boxes.filter((rect, at) => rect !== null && at !== index);
+          drawReflowedParagraph(draw, block, settings2, roomFor(own, others, growth, width, height));
+        }
+      }
     }
     const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
     if (!blob) throw new Error("Could not encode the translated image");

@@ -36,6 +36,7 @@ export const DEFAULTS: Settings = {
   eraseMode: 'patch',
   hullPadding: 0.45,
   reflowHorizontal: false,
+  fitToBox: true,
   lineSpacing: 1.25,
   textAlign: 'auto',
 };
@@ -123,7 +124,7 @@ export const FIELDS: ReadonlyArray<Field> = [
     label: 'Bubble fill (manga mode)',
     type: 'number',
     step: '0.05',
-    hint: 'how far past the detected text box to lay out; 1 = exactly the box',
+    hint: 'how far past the detected box to lay out; safe to raise while the setting below is on',
   },
   { key: 'drawBackground', group: 'Erasing the original', label: 'Erase the original text', type: 'checkbox' },
   {
@@ -173,6 +174,12 @@ export const FIELDS: ReadonlyArray<Field> = [
     label: 'Re-wrap horizontal text',
     type: 'checkbox',
     hint: 'treat a paragraph as one text area, not a repeat of the server lines',
+  },
+  {
+    key: 'fitToBox', group: 'Layout',
+    label: 'Keep text out of the next bubble',
+    type: 'checkbox',
+    hint: 'shrink a paragraph that outgrows the room between its neighbours',
   },
   {
     key: 'lineSpacing', group: 'Layout',
