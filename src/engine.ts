@@ -77,14 +77,23 @@ export {
   clearAllOverlays,
   clearOverlay,
   hasOverlay,
+  peekAllOverlays,
+  peekOverlay,
   renderTranslation,
   repositionOverlays,
+  sweepOverlays,
 } from './render/overlay.js';
 export {
   COVER_MARK,
   coverImage,
   isCover,
   isCovered,
+  peekAllCovers,
+  peekCover,
+  sweepCovers,
   uncoverAll,
   uncoverImage,
 } from './render/cover.js';
+export type { CoverOptions } from './render/cover.js';
+export type { PictureHandlers } from './render/watch.js';
+export { watchPicture } from './render/watch.js';

@@ -7,6 +7,7 @@ import {
   justification,
   shouldStayVertical,
 } from './layout.js';
+import { watchPicture } from './watch.js';
 import type { Geometry, RenderOptions, TranslatedLine, TranslationBlock } from '../types.js';
 
 /**
@@ -42,6 +43,9 @@ export const OVERLAY_CSS = `
 interface OverlayEntry {
   layer: HTMLDivElement;
   objectUrls: string[];
+  ref: WeakRef<HTMLElement>;
+  stopWatching: () => void;
+  hiddenFor: Set<'peek' | 'pending'>;
 }
 
 const overlays = new WeakMap<HTMLElement, OverlayEntry>();
@@ -72,10 +76,48 @@ export const hasOverlay = (img: HTMLElement): boolean => overlays.has(img);
 export function clearOverlay(img: HTMLElement): boolean {
   const entry = overlays.get(img);
   if (!entry) return false;
+  entry.stopWatching();
   for (const url of entry.objectUrls) URL.revokeObjectURL(url);
   entry.layer.remove();
   overlays.delete(img);
+  // The reference goes with the overlay. It used to stay until the next walk
+  // happened to sweep it, so a page that was translated and undone over and
+  // over grew the set without bound.
+  live.delete(entry.ref);
   return true;
+}
+
+function showOrHide(entry: OverlayEntry): void {
+  entry.layer.style.visibility = entry.hiddenFor.size ? 'hidden' : '';
+}
+
+/** Show the original underneath for as long as it is asked to; nothing is torn down. */
+export function peekOverlay(img: HTMLElement, peeking: boolean): boolean {
+  const entry = overlays.get(img);
+  if (!entry) return false;
+  if (peeking) entry.hiddenFor.add('peek');
+  else entry.hiddenFor.delete('peek');
+  showOrHide(entry);
+  return true;
+}
+
+export function peekAllOverlays(peeking: boolean): void {
+  for (const img of overlaid()) peekOverlay(img, peeking);
+}
+
+/**
+ * Remove the overlays whose image has left the page.
+ *
+ * Repositioning does this too, but only when something scrolls or resizes, and
+ * a feed that discards its images while the reader is still is the case where
+ * the layers would otherwise sit in the page for good.
+ */
+export function sweepOverlays(): number {
+  let removed = 0;
+  for (const img of overlaid()) {
+    if (!img.isConnected && clearOverlay(img)) removed += 1;
+  }
+  return removed;
 }
 
 /** The shadow host is a fixed full-viewport layer, so these are viewport
@@ -167,7 +209,11 @@ export function renderTranslation(
    * full-viewport container and the rules above; whose it is, is not its
    * business.
    */
-  root: ParentNode
+  root: ParentNode,
+  options: {
+    /** The overlay was removed because the picture changed, not because it was asked to be. */
+    onGone?: () => void;
+  } = {}
 ): number {
   clearOverlay(img);
 
@@ -182,8 +228,30 @@ export function renderTranslation(
   root.append(layer);
 
   const objectUrls: string[] = [];
-  overlays.set(img, { layer, objectUrls });
-  live.add(new WeakRef(img));
+  const ref = new WeakRef(img);
+  const entry: OverlayEntry = {
+    layer,
+    objectUrls,
+    ref,
+    hiddenFor: new Set(),
+    stopWatching: () => {},
+  };
+  // Watched like a cover is: the layer sits in our own root, so it is not even
+  // a sibling to be orphaned - it would simply float over whatever the page
+  // shows next at the old image's position.
+  entry.stopWatching = watchPicture(img, {
+    stale: () => {
+      const current = ref.deref();
+      if (current && clearOverlay(current)) options.onGone?.();
+    },
+    pending: (on) => {
+      if (on) entry.hiddenFor.add('pending');
+      else entry.hiddenFor.delete('pending');
+      showOrHide(entry);
+    },
+  });
+  overlays.set(img, entry);
+  live.add(ref);
 
   let rendered = 0;
   for (const block of blocks) {

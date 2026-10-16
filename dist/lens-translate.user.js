@@ -1348,7 +1348,7 @@
       return "";
     }
   }
-  async function encodeForUpload(source, settings2, release = () => {
+  async function encodeForUpload(source, settings2, release2 = () => {
   }) {
     const natural = sourceSize(source);
     const { width, height } = targetSize(natural.width, natural.height, settings2);
@@ -1375,7 +1375,7 @@
       source,
       sourceWidth: natural.width,
       sourceHeight: natural.height,
-      release
+      release: release2
     };
   }
   function loadWithCors(url) {
@@ -1805,6 +1805,198 @@
       bottom: Math.max(bottom, own.bottom)
     };
   }
+  function weigh(blocks) {
+    let bytes2 = 0;
+    for (const block of blocks) {
+      bytes2 += block.translation.length * 2;
+      for (const line of block.lines) bytes2 += line.background?.bytes.byteLength ?? 0;
+    }
+    return bytes2;
+  }
+  const entries = /* @__PURE__ */ new Map();
+  const renders = /* @__PURE__ */ new Map();
+  let totalBytes = 0;
+  let clock = 0;
+  const SIZE_NAME = /^(thumb|tiny|small|medium|large|orig|original|\d{2,4}x\d{2,4}|\d{2,4})$/i;
+  const RENDITION_PARAMS = {
+    name: SIZE_NAME,
+    format: /^(jpe?g|png|webp|avif|gif|auto)$/i,
+    fm: /^(jpe?g|png|webp|avif|gif|auto)$/i,
+    q: /^\d+$/,
+    quality: /^\d+$/,
+    dpr: /^\d+(\.\d+)?$/,
+    auto: /^[a-z,]+$/i
+  };
+  function normalizeUrl(raw) {
+    if (!raw || raw.startsWith("data:") || raw.startsWith("blob:")) return raw;
+    try {
+      const url = new URL(raw, document.baseURI);
+      for (const [name, value] of [...url.searchParams]) {
+        if (RENDITION_PARAMS[name.toLowerCase()]?.test(value)) url.searchParams.delete(name);
+      }
+      url.hash = "";
+      const query = url.searchParams.toString();
+      return `${url.origin}${url.pathname}${query ? `?${query}` : ""}`;
+    } catch {
+      return raw;
+    }
+  }
+  function sameShape(a, b) {
+    if (!a || !b) return true;
+    if (!(a.width > 0 && a.height > 0 && b.width > 0 && b.height > 0)) return true;
+    const ratio = a.width / a.height / (b.width / b.height);
+    return Math.abs(ratio - 1) <= 0.02;
+  }
+  function cacheKey(url, settings2) {
+    return [normalizeUrl(url), settings2.targetLang, settings2.sourceLang, settings2.ocrLang].join("\0");
+  }
+  function evict(limit) {
+    while (totalBytes > limit && entries.size + renders.size > 1) {
+      let oldest = null;
+      let oldestUsed = Infinity;
+      for (const [key, entry] of entries) {
+        if (entry.used < oldestUsed) {
+          oldestUsed = entry.used;
+          oldest = { map: "response", key };
+        }
+      }
+      for (const [key, entry] of renders) {
+        if (entry.used < oldestUsed) {
+          oldestUsed = entry.used;
+          oldest = { map: "render", key };
+        }
+      }
+      if (!oldest) break;
+      if (oldest.map === "response") {
+        totalBytes -= entries.get(oldest.key)?.bytes ?? 0;
+        entries.delete(oldest.key);
+      } else {
+        totalBytes -= renders.get(oldest.key)?.blob.size ?? 0;
+        renders.delete(oldest.key);
+      }
+    }
+  }
+  function getCached(key, settings2, size) {
+    if (settings2.cacheBytes <= 0) return null;
+    const entry = entries.get(key);
+    if (!entry) return null;
+    if (!sameShape(entry.size, size)) return null;
+    entry.used = ++clock;
+    return entry.result;
+  }
+  function putCached(key, result, settings2, size) {
+    const limit = settings2.cacheBytes;
+    if (limit <= 0) return;
+    const bytes2 = weigh(result.blocks);
+    if (bytes2 > limit) return;
+    const existing = entries.get(key);
+    if (existing) totalBytes -= existing.bytes;
+    entries.set(key, { result, bytes: bytes2, used: ++clock, size });
+    totalBytes += bytes2;
+    evict(limit);
+  }
+  const SEPARATOR = String.fromCharCode(0);
+  const DRAWN = Object.keys({
+    fontFamily: 0,
+    drawBackground: 0,
+    verticalText: 0,
+    minReadablePx: 0,
+    supersample: 0,
+    mangaMode: 0,
+    mangaBoxGrowth: 0,
+    outlineScale: 0,
+    eraseMode: 0,
+    hullPadding: 0,
+    reflowHorizontal: 0,
+    fitToBox: 0,
+    lineSpacing: 0,
+    textAlign: 0
+  }).sort();
+  function renderKey(key, settings2, displayedWidth) {
+    const parts = [key];
+    for (const name of DRAWN) parts.push(`${name}=${String(settings2[name])}`);
+    parts.push(`w=${Math.round(displayedWidth / 50)}`);
+    return parts.join(SEPARATOR);
+  }
+  function getRender(key, settings2, size) {
+    if (settings2.cacheBytes <= 0) return null;
+    const entry = renders.get(key);
+    if (!entry) return null;
+    if (!sameShape(entry.size, size)) return null;
+    entry.used = ++clock;
+    return entry.blob;
+  }
+  function putRender(key, blob, settings2, size) {
+    const limit = settings2.cacheBytes;
+    if (limit <= 0 || blob.size > limit) return;
+    const existing = renders.get(key);
+    if (existing) totalBytes -= existing.blob.size;
+    renders.set(key, { blob, used: ++clock, size });
+    totalBytes += blob.size;
+    evict(limit);
+  }
+  function clearCache() {
+    const stats = cacheStats();
+    entries.clear();
+    renders.clear();
+    totalBytes = 0;
+    return stats;
+  }
+  const cacheStats = () => ({
+    entries: entries.size + renders.size,
+    bytes: totalBytes
+  });
+  const SETTLE_MS = 60;
+  const identityOf = (element) => normalizeUrl(classify(element)?.url ?? "");
+  const signatureOf = (element) => ["src", "srcset", "sizes"].map((name) => element.getAttribute(name) ?? "").join("\0");
+  function watchPicture(element, handlers) {
+    const ref = new WeakRef(element);
+    const isImage = element.tagName === "IMG";
+    const remembered = identityOf(element);
+    let signature = signatureOf(element);
+    let timer;
+    let stopped = false;
+    const stop = () => {
+      stopped = true;
+      window.clearTimeout(timer);
+      observer.disconnect();
+      element.removeEventListener("load", check);
+      element.removeEventListener("error", check);
+    };
+    function check() {
+      if (stopped) return;
+      window.clearTimeout(timer);
+      const current = ref.deref();
+      if (!current || !current.isConnected || identityOf(current) !== remembered) {
+        stop();
+        handlers.stale();
+        return;
+      }
+      signature = signatureOf(current);
+      handlers.pending(false);
+    }
+    const observer = new MutationObserver(() => {
+      if (stopped) return;
+      const current = ref.deref();
+      if (!current) return;
+      if (!isImage) {
+        check();
+        return;
+      }
+      const now = signatureOf(current);
+      if (now === signature) return;
+      handlers.pending(true);
+      window.clearTimeout(timer);
+      timer = window.setTimeout(check, SETTLE_MS);
+    });
+    observer.observe(element, {
+      attributes: true,
+      attributeFilter: isImage ? ["src", "srcset", "sizes"] : ["style", "class"]
+    });
+    element.addEventListener("load", check);
+    element.addEventListener("error", check);
+    return stop;
+  }
   const OVERLAY_CSS = `
 .lt-layer {
   position: absolute;
@@ -1827,7 +2019,7 @@
 }
 `;
   const overlays = /* @__PURE__ */ new WeakMap();
-  const live$1 = /* @__PURE__ */ new Set();
+  const live = /* @__PURE__ */ new Set();
   const pct = (value) => `${(value * 100).toFixed(4)}%`;
   function textShadow(radius, colour) {
     const r = radius.toFixed(2);
@@ -1847,10 +2039,22 @@
   function clearOverlay(img) {
     const entry = overlays.get(img);
     if (!entry) return false;
+    entry.stopWatching();
     for (const url of entry.objectUrls) URL.revokeObjectURL(url);
     entry.layer.remove();
     overlays.delete(img);
+    live.delete(entry.ref);
     return true;
+  }
+  function showOrHide$1(entry) {
+    entry.layer.style.visibility = entry.hiddenFor.size ? "hidden" : "";
+  }
+  function sweepOverlays() {
+    let removed = 0;
+    for (const img of overlaid()) {
+      if (!img.isConnected && clearOverlay(img)) removed += 1;
+    }
+    return removed;
   }
   function placeLayer(layer, img) {
     const rect = img.getBoundingClientRect();
@@ -1861,9 +2065,9 @@
   }
   function overlaid() {
     const out = [];
-    for (const ref of live$1) {
+    for (const ref of live) {
       const element = ref.deref();
-      if (!element || !overlays.has(element)) live$1.delete(ref);
+      if (!element || !overlays.has(element)) live.delete(ref);
       else out.push(element);
     }
     return out;
@@ -1904,7 +2108,7 @@
     ].join(";");
     layer.appendChild(patch);
   }
-  function renderTranslation(img, blocks, settings2, natural, root2) {
+  function renderTranslation(img, blocks, settings2, natural, root2, options = {}) {
     clearOverlay(img);
     const rect = img.getBoundingClientRect();
     const aspect = natural.width / natural.height;
@@ -1914,8 +2118,28 @@
     placeLayer(layer, img);
     root2.append(layer);
     const objectUrls = [];
-    overlays.set(img, { layer, objectUrls });
-    live$1.add(new WeakRef(img));
+    const ref = new WeakRef(img);
+    const entry = {
+      layer,
+      objectUrls,
+      ref,
+      hiddenFor: /* @__PURE__ */ new Set(),
+      stopWatching: () => {
+      }
+    };
+    entry.stopWatching = watchPicture(img, {
+      stale: () => {
+        const current = ref.deref();
+        if (current && clearOverlay(current)) options.onGone?.();
+      },
+      pending: (on) => {
+        if (on) entry.hiddenFor.add("pending");
+        else entry.hiddenFor.delete("pending");
+        showOrHide$1(entry);
+      }
+    });
+    overlays.set(img, entry);
+    live.add(ref);
     let rendered = 0;
     for (const block of blocks) {
       const rtl = isRtl(block);
@@ -2316,8 +2540,8 @@
     if (!blob) throw new Error("Could not encode the translated image");
     return blob;
   }
+  const registry = /* @__PURE__ */ new Map();
   const covers = /* @__PURE__ */ new WeakMap();
-  const live = /* @__PURE__ */ new Set();
   const isCovered = (img) => covers.has(img);
   const COVER_MARK = "data-lens-translate";
   const isCover = (node) => node.hasAttribute(COVER_MARK);
@@ -2327,10 +2551,17 @@
     cover.style.width = `${img.offsetWidth}px`;
     cover.style.height = `${img.offsetHeight}px`;
   }
-  function coverImage(img, blobUrl) {
+  function showOrHide(cover) {
+    if (cover.hiddenFor.size) cover.element.style.setProperty("visibility", "hidden", "important");
+    else cover.element.style.removeProperty("visibility");
+  }
+  function coverImage(img, blobUrl, options = {}) {
     uncoverImage(img);
     const parent = img.parentElement;
-    if (!parent) return false;
+    if (!parent) {
+      URL.revokeObjectURL(blobUrl);
+      return false;
+    }
     const element = document.createElement("img");
     element.src = blobUrl;
     element.setAttribute(COVER_MARK, "");
@@ -2358,30 +2589,83 @@
     }
     img.insertAdjacentElement("afterend", element);
     place(element, img);
-    const resize = new ResizeObserver(() => place(element, img));
+    const ref = new WeakRef(img);
+    const resize = new ResizeObserver(() => {
+      const current = ref.deref();
+      if (!current) return;
+      if (!current.isConnected) drop(current);
+      else place(element, current);
+    });
     resize.observe(img);
-    covers.set(img, { element, blobUrl, resize });
-    live.add(new WeakRef(img));
+    const cover = {
+      element,
+      blobUrl,
+      resize,
+      hiddenFor: /* @__PURE__ */ new Set(),
+      onGone: options.onGone,
+      stopWatching: () => {
+      }
+    };
+    cover.stopWatching = watchPicture(img, {
+      stale: () => {
+        const current = ref.deref();
+        if (current) drop(current);
+      },
+      pending: (on) => {
+        if (on) cover.hiddenFor.add("pending");
+        else cover.hiddenFor.delete("pending");
+        showOrHide(cover);
+      }
+    });
+    covers.set(img, cover);
+    registry.set(element, { image: ref, blobUrl });
     return true;
+  }
+  function drop(img) {
+    const onGone = covers.get(img)?.onGone;
+    if (uncoverImage(img)) onGone?.();
   }
   function uncoverImage(img) {
     const cover = covers.get(img);
     if (!cover) return false;
-    cover.resize.disconnect();
-    cover.element.remove();
-    URL.revokeObjectURL(cover.blobUrl);
+    release(cover);
     covers.delete(img);
     return true;
   }
+  function release(cover) {
+    cover.stopWatching();
+    cover.resize.disconnect();
+    cover.element.remove();
+    URL.revokeObjectURL(cover.blobUrl);
+    registry.delete(cover.element);
+  }
+  function sweepCovers() {
+    let removed = 0;
+    for (const [element, entry] of [...registry]) {
+      const img = entry.image.deref();
+      if (img?.isConnected) continue;
+      if (img) {
+        drop(img);
+      } else {
+        element.remove();
+        URL.revokeObjectURL(entry.blobUrl);
+        registry.delete(element);
+      }
+      removed += 1;
+    }
+    return removed;
+  }
   function uncoverAll() {
     let count = 0;
-    for (const ref of live) {
-      const img = ref.deref();
-      if (!img) {
-        live.delete(ref);
-        continue;
+    for (const [element, entry] of [...registry]) {
+      const img = entry.image.deref();
+      if (img && uncoverImage(img)) count += 1;
+      else {
+        element.remove();
+        URL.revokeObjectURL(entry.blobUrl);
+        registry.delete(element);
+        count += 1;
       }
-      if (uncoverImage(img)) count += 1;
     }
     for (const stray of Array.from(document.querySelectorAll("img[data-lens-translate]"))) {
       stray.remove();
@@ -2389,147 +2673,6 @@
     }
     return count;
   }
-  function weigh(blocks) {
-    let bytes2 = 0;
-    for (const block of blocks) {
-      bytes2 += block.translation.length * 2;
-      for (const line of block.lines) bytes2 += line.background?.bytes.byteLength ?? 0;
-    }
-    return bytes2;
-  }
-  const entries = /* @__PURE__ */ new Map();
-  const renders = /* @__PURE__ */ new Map();
-  let totalBytes = 0;
-  let clock = 0;
-  const SIZE_NAME = /^(thumb|tiny|small|medium|large|orig|original|\d{2,4}x\d{2,4}|\d{2,4})$/i;
-  const RENDITION_PARAMS = {
-    name: SIZE_NAME,
-    format: /^(jpe?g|png|webp|avif|gif|auto)$/i,
-    fm: /^(jpe?g|png|webp|avif|gif|auto)$/i,
-    q: /^\d+$/,
-    quality: /^\d+$/,
-    dpr: /^\d+(\.\d+)?$/,
-    auto: /^[a-z,]+$/i
-  };
-  function normalizeUrl(raw) {
-    if (!raw || raw.startsWith("data:") || raw.startsWith("blob:")) return raw;
-    try {
-      const url = new URL(raw, document.baseURI);
-      for (const [name, value] of [...url.searchParams]) {
-        if (RENDITION_PARAMS[name.toLowerCase()]?.test(value)) url.searchParams.delete(name);
-      }
-      url.hash = "";
-      const query = url.searchParams.toString();
-      return `${url.origin}${url.pathname}${query ? `?${query}` : ""}`;
-    } catch {
-      return raw;
-    }
-  }
-  function sameShape(a, b) {
-    if (!a || !b) return true;
-    if (!(a.width > 0 && a.height > 0 && b.width > 0 && b.height > 0)) return true;
-    const ratio = a.width / a.height / (b.width / b.height);
-    return Math.abs(ratio - 1) <= 0.02;
-  }
-  function cacheKey(url, settings2) {
-    return [normalizeUrl(url), settings2.targetLang, settings2.sourceLang, settings2.ocrLang].join("\0");
-  }
-  function evict(limit) {
-    while (totalBytes > limit && entries.size + renders.size > 1) {
-      let oldest = null;
-      let oldestUsed = Infinity;
-      for (const [key, entry] of entries) {
-        if (entry.used < oldestUsed) {
-          oldestUsed = entry.used;
-          oldest = { map: "response", key };
-        }
-      }
-      for (const [key, entry] of renders) {
-        if (entry.used < oldestUsed) {
-          oldestUsed = entry.used;
-          oldest = { map: "render", key };
-        }
-      }
-      if (!oldest) break;
-      if (oldest.map === "response") {
-        totalBytes -= entries.get(oldest.key)?.bytes ?? 0;
-        entries.delete(oldest.key);
-      } else {
-        totalBytes -= renders.get(oldest.key)?.blob.size ?? 0;
-        renders.delete(oldest.key);
-      }
-    }
-  }
-  function getCached(key, settings2, size) {
-    if (settings2.cacheBytes <= 0) return null;
-    const entry = entries.get(key);
-    if (!entry) return null;
-    if (!sameShape(entry.size, size)) return null;
-    entry.used = ++clock;
-    return entry.result;
-  }
-  function putCached(key, result, settings2, size) {
-    const limit = settings2.cacheBytes;
-    if (limit <= 0) return;
-    const bytes2 = weigh(result.blocks);
-    if (bytes2 > limit) return;
-    const existing = entries.get(key);
-    if (existing) totalBytes -= existing.bytes;
-    entries.set(key, { result, bytes: bytes2, used: ++clock, size });
-    totalBytes += bytes2;
-    evict(limit);
-  }
-  const SEPARATOR = String.fromCharCode(0);
-  const DRAWN = Object.keys({
-    fontFamily: 0,
-    drawBackground: 0,
-    verticalText: 0,
-    minReadablePx: 0,
-    supersample: 0,
-    mangaMode: 0,
-    mangaBoxGrowth: 0,
-    outlineScale: 0,
-    eraseMode: 0,
-    hullPadding: 0,
-    reflowHorizontal: 0,
-    fitToBox: 0,
-    lineSpacing: 0,
-    textAlign: 0
-  }).sort();
-  function renderKey(key, settings2, displayedWidth) {
-    const parts = [key];
-    for (const name of DRAWN) parts.push(`${name}=${String(settings2[name])}`);
-    parts.push(`w=${Math.round(displayedWidth / 50)}`);
-    return parts.join(SEPARATOR);
-  }
-  function getRender(key, settings2, size) {
-    if (settings2.cacheBytes <= 0) return null;
-    const entry = renders.get(key);
-    if (!entry) return null;
-    if (!sameShape(entry.size, size)) return null;
-    entry.used = ++clock;
-    return entry.blob;
-  }
-  function putRender(key, blob, settings2, size) {
-    const limit = settings2.cacheBytes;
-    if (limit <= 0 || blob.size > limit) return;
-    const existing = renders.get(key);
-    if (existing) totalBytes -= existing.blob.size;
-    renders.set(key, { blob, used: ++clock, size });
-    totalBytes += blob.size;
-    evict(limit);
-  }
-  function clearCache() {
-    const stats = cacheStats();
-    entries.clear();
-    renders.clear();
-    totalBytes = 0;
-    return stats;
-  }
-  const cacheStats = () => ({
-    entries: entries.size + renders.size,
-    bytes: totalBytes
-  });
   const styles = "/* Lives inside a shadow root, so these selectors compete with nothing. The\n   :host is a fixed, click-through, full-viewport layer; everything here is\n   positioned in viewport coordinates. */\n\n:host {\n  font: 14px/1.45 system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;\n  color: #1a1a1a;\n}\n\n#lt-button,\n#lt-gear {\n  position: absolute;\n  width: 32px;\n  height: 32px;\n  background: rgba(0, 0, 0, 0.6);\n  border-radius: 50%;\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  opacity: 0;\n  pointer-events: none;\n  cursor: pointer;\n  transition: opacity 0.2s ease-in-out, transform 0.15s ease-in-out, background 0.2s;\n  transform: scale(0.9);\n  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);\n  border: 1px solid rgba(255, 255, 255, 0.2);\n}\n#lt-button:hover,\n#lt-gear:hover {\n  background: rgba(0, 0, 0, 0.85);\n  transform: scale(1.05);\n}\n\n/* Appears a beat after the main button, so a passing cursor does not summon\n   two controls at once. */\n#lt-gear {\n  width: 26px;\n  height: 26px;\n}\n#lt-button.lt-busy svg {\n  animation: lt-spin 1s linear infinite;\n}\n#lt-button.lt-active {\n  background: rgba(20, 110, 60, 0.9);\n}\n#lt-button.lt-error {\n  background: rgba(170, 30, 30, 0.9);\n}\n@keyframes lt-spin {\n  to {\n    transform: rotate(360deg);\n  }\n}\n\n#lt-toast {\n  position: absolute;\n  bottom: 16px;\n  left: 50%;\n  transform: translateX(-50%);\n  background: rgba(0, 0, 0, 0.88);\n  color: #fff;\n  padding: 8px 16px;\n  border-radius: 8px;\n  font-size: 13px;\n  pointer-events: none;\n  opacity: 0;\n  transition: opacity 0.2s;\n  max-width: 70vw;\n}\n#lt-toast.lt-show {\n  opacity: 1;\n}\n\n/* ------------------------------------------------------------- settings */\n\n.lt-panel-backdrop {\n  position: absolute;\n  inset: 0;\n  background: rgba(0, 0, 0, 0.5);\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  pointer-events: auto;\n}\n.lt-panel {\n  background: #fff;\n  width: min(560px, 92vw);\n  max-height: 86vh;\n  display: flex;\n  flex-direction: column;\n  border-radius: 12px;\n  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.4);\n  overflow: hidden;\n}\n.lt-panel-head,\n.lt-panel-foot {\n  display: flex;\n  align-items: center;\n  gap: 8px;\n  padding: 12px 18px;\n  flex: none;\n}\n.lt-panel-head {\n  border-bottom: 1px solid #e6e6e6;\n  justify-content: space-between;\n  font-size: 15px;\n  font-weight: 600;\n}\n.lt-panel-foot {\n  border-top: 1px solid #e6e6e6;\n}\n.lt-spacer {\n  flex: 1;\n}\n.lt-panel-body {\n  padding: 10px 18px 16px;\n  overflow-y: auto;\n}\n\n.lt-row {\n  display: grid;\n  grid-template-columns: 190px minmax(0, 1fr);\n  align-items: center;\n  gap: 2px 14px;\n  padding: 7px 0;\n}\n.lt-label {\n  color: #333;\n}\n.lt-hint {\n  grid-column: 2;\n  color: #808080;\n  font-size: 12px;\n}\n.lt-input {\n  font: inherit;\n  padding: 7px 9px;\n  border: 1px solid #ccc;\n  border-radius: 6px;\n  background: #fff;\n  color: #1a1a1a;\n  min-width: 0;\n  width: 100%;\n  box-sizing: border-box;\n}\n.lt-input[type='checkbox'] {\n  justify-self: start;\n  width: 17px;\n  height: 17px;\n  padding: 0;\n}\n.lt-x {\n  border: 0;\n  background: transparent;\n  font-size: 22px;\n  line-height: 1;\n  cursor: pointer;\n  color: #666;\n  padding: 0 4px;\n}\n.lt-btn {\n  font: inherit;\n  padding: 7px 15px;\n  border-radius: 7px;\n  cursor: pointer;\n  border: 1px solid #ccc;\n  background: #f5f5f5;\n  color: #1a1a1a;\n}\n.lt-btn.lt-primary {\n  background: #1a73e8;\n  border-color: #1a73e8;\n  color: #fff;\n}\n.lt-btn.lt-ghost:hover {\n  background: #eaeaea;\n}\n\n@media (prefers-color-scheme: dark) {\n  .lt-panel {\n    background: #1f1f22;\n    color: #ececec;\n  }\n  .lt-panel-head,\n  .lt-panel-foot {\n    border-color: #35353a;\n  }\n  .lt-label {\n    color: #d6d6d6;\n  }\n  .lt-hint {\n    color: #9a9a9a;\n  }\n  .lt-input {\n    background: #2a2a2e;\n    border-color: #45454c;\n    color: #ececec;\n  }\n  .lt-btn {\n    background: #2e2e33;\n    border-color: #45454c;\n    color: #ececec;\n  }\n  .lt-btn.lt-ghost:hover {\n    background: #3a3a40;\n  }\n  .lt-x {\n    color: #bbb;\n  }\n}\n\n/* Outline slider with its live sample. */\n.lt-slider {\n  display: flex;\n  align-items: center;\n  gap: 10px;\n  min-width: 0;\n}\n.lt-slider input[type='range'] {\n  flex: 1;\n  width: auto;\n  padding: 0;\n  border: 0;\n  background: transparent;\n  accent-color: #1a73e8;\n}\n.lt-readout {\n  min-width: 42px;\n  text-align: right;\n  font-variant-numeric: tabular-nums;\n  color: #666;\n}\n.lt-preview {\n  grid-column: 2;\n  width: 100%;\n  height: auto;\n  border-radius: 6px;\n  border: 1px solid #ddd;\n  margin-top: 6px;\n}\n@media (prefers-color-scheme: dark) {\n  .lt-readout {\n    color: #aaa;\n  }\n  .lt-preview {\n    border-color: #45454c;\n  }\n}\n\n/* Section headings. */\n.lt-group {\n  grid-column: 1 / -1;\n  margin: 16px 0 4px;\n  padding-bottom: 5px;\n  border-bottom: 1px solid #e6e6e6;\n  font-size: 11px;\n  font-weight: 600;\n  letter-spacing: 0.07em;\n  text-transform: uppercase;\n  color: #888;\n}\n.lt-group:first-child {\n  margin-top: 4px;\n}\n@media (prefers-color-scheme: dark) {\n  .lt-group {\n    border-color: #35353a;\n    color: #8c8c96;\n  }\n}\n\n/* Menu commands, for a host that has no menu of its own. */\n.lt-actions {\n  display: flex;\n  flex-wrap: wrap;\n  gap: 8px;\n  padding: 4px 0 0;\n}\n.lt-note {\n  color: #808080;\n  font-size: 12px;\n  padding-top: 8px;\n}\n@media (prefers-color-scheme: dark) {\n  .lt-note {\n    color: #9a9a9a;\n  }\n}\n\n/* The diagnostics report: fixed width, so columns line up as written. */\n.lt-panel-report {\n  max-width: 560px;\n}\n.lt-report {\n  margin: 0;\n  padding: 14px 18px;\n  overflow: auto;\n  white-space: pre-wrap;\n  word-break: break-word;\n  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;\n  font-size: 12px;\n  line-height: 1.5;\n  user-select: text;\n  -webkit-user-select: text;\n}\n";
   const HOST_ID = "lens-translate-root";
   let shadow = null;
@@ -2911,6 +3054,20 @@ ${OVERLAY_CSS}`;
     const { naturalWidth, naturalHeight } = target.element;
     return naturalWidth && naturalHeight ? { width: naturalWidth, height: naturalHeight } : void 0;
   }
+  const forgetter = (img) => () => {
+    showing.delete(img);
+    if (currentTarget?.element === img) button.classList.remove("lt-active");
+  };
+  const SWEEP_MS = 3e3;
+  function sweep() {
+    if (document.hidden) return;
+    sweepCovers();
+    sweepOverlays();
+    for (const img of [...showing.keys()]) {
+      if (!img.isConnected || !isTranslated(img)) showing.delete(img);
+    }
+  }
+  window.setInterval(sweep, SWEEP_MS);
   const isTranslated = (img) => isCovered(img) || hasOverlay(img);
   function undo(img) {
     showing.delete(img);
@@ -2938,7 +3095,7 @@ ${OVERLAY_CSS}`;
           settings,
           naturalSizeOf(target)
         );
-        if (done && coverImage(img, URL.createObjectURL(done))) {
+        if (done && coverImage(img, URL.createObjectURL(done), { onGone: forgetter(img) })) {
           showing.set(img, target);
           if (currentTarget?.element === img) button.classList.add("lt-active");
           return;
@@ -2982,9 +3139,7 @@ ${OVERLAY_CSS}`;
           if (target.url) {
             putRender(renderKey(key, settings, displayedWidth), blob, settings, size);
           }
-          const url = URL.createObjectURL(blob);
-          if (!coverImage(img, url)) {
-            URL.revokeObjectURL(url);
+          if (!coverImage(img, URL.createObjectURL(blob), { onGone: forgetter(img) })) {
             toast("This image cannot be covered here");
             return;
           }
@@ -2993,7 +3148,8 @@ ${OVERLAY_CSS}`;
           result.blocks,
           settings,
           { width: prepared.width, height: prepared.height },
-          root
+          root,
+          { onGone: forgetter(img) }
         )) {
           toast("Nothing could be placed on this image");
           return;
@@ -3179,7 +3335,7 @@ ${OVERLAY_CSS}`;
     if (!targets2.length) return;
     for (const target of targets2) {
       undo(target.element);
-      await translate(target);
+      await translate(classify(target.element) ?? target);
     }
   }
   function onSaved(saved) {

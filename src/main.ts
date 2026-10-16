@@ -5,7 +5,7 @@ import { diagnose } from './diagnose.js';
 import { callLens } from './lens/client.js';
 import { acquireSource, encodeForUpload, fingerprint } from './image.js';
 import { clearStored, getStored, putStored, storedStats } from './store.js';
-import { collect, ignoreElements, isBigEnough, targetFromEvent } from './detect.js';
+import { classify, collect, ignoreElements, isBigEnough, targetFromEvent } from './detect.js';
 import type { Target } from './detect.js';
 import {
   clearAllOverlays,
@@ -13,9 +13,17 @@ import {
   hasOverlay,
   renderTranslation,
   repositionOverlays,
+  sweepOverlays,
 } from './render/overlay.js';
 import { renderToBlob } from './render/canvas.js';
-import { coverImage, isCover, isCovered, uncoverAll, uncoverImage } from './render/cover.js';
+import {
+  coverImage,
+  isCover,
+  isCovered,
+  sweepCovers,
+  uncoverAll,
+  uncoverImage,
+} from './render/cover.js';
 import { SETTINGS_KEYS, getSettings, reloadSettings, saveSettings } from './settings.js';
 import {
   cacheKey,
@@ -95,6 +103,40 @@ function naturalSizeOf(target: Target): { width: number; height: number } | unde
   return naturalWidth && naturalHeight ? { width: naturalWidth, height: naturalHeight } : undefined;
 }
 
+/**
+ * What to do when a translation is taken away by the picture changing under it.
+ *
+ * Without this the entry stayed in `showing` for good: a settings change would
+ * then translate it again by its old address, laying a translation of the
+ * previous photo over the new one.
+ */
+const forgetter = (img: HTMLElement) => (): void => {
+  showing.delete(img);
+  if (currentTarget?.element === img) button.classList.remove('lt-active');
+};
+
+/**
+ * Let go of what the page has thrown away.
+ *
+ * A feed that never ends discards images as fast as it makes them, and each
+ * translated one was held by `showing` (a strong reference to the element) and
+ * by an object URL nothing would revoke. The covers watch for most of this as
+ * it happens; this is the backstop, and the only thing that prunes `showing`
+ * of an entry whose translation was removed by somebody else.
+ */
+const SWEEP_MS = 3000;
+
+function sweep(): void {
+  if (document.hidden) return;
+  sweepCovers();
+  sweepOverlays();
+  for (const img of [...showing.keys()]) {
+    if (!img.isConnected || !isTranslated(img)) showing.delete(img);
+  }
+}
+
+window.setInterval(sweep, SWEEP_MS);
+
 const isTranslated = (img: HTMLElement): boolean => isCovered(img) || hasOverlay(img);
 
 function undo(img: HTMLElement): boolean {
@@ -130,7 +172,9 @@ async function translate(target: Target): Promise<void> {
         settings,
         naturalSizeOf(target)
       );
-      if (done && coverImage(img, URL.createObjectURL(done))) {
+      // coverImage owns the URL from here, so a cover that cannot be laid does
+      // not leave one behind.
+      if (done && coverImage(img, URL.createObjectURL(done), { onGone: forgetter(img) })) {
         showing.set(img, target);
         if (currentTarget?.element === img) button.classList.add('lt-active');
         return;
@@ -191,9 +235,7 @@ async function translate(target: Target): Promise<void> {
         if (target.url) {
           putRender(renderKey(key, settings, displayedWidth), blob, settings, size);
         }
-        const url = URL.createObjectURL(blob);
-        if (!coverImage(img, url)) {
-          URL.revokeObjectURL(url);
+        if (!coverImage(img, URL.createObjectURL(blob), { onGone: forgetter(img) })) {
           toast('This image cannot be covered here');
           return;
         }
@@ -203,7 +245,8 @@ async function translate(target: Target): Promise<void> {
           result.blocks,
           settings,
           { width: prepared.width, height: prepared.height },
-          root
+          root,
+          { onGone: forgetter(img) }
         )
       ) {
         toast('Nothing could be placed on this image');
@@ -496,7 +539,10 @@ async function redrawShowing(): Promise<void> {
   if (!targets.length) return;
   for (const target of targets) {
     undo(target.element);
-    await translate(target);
+    // Re-read what the element is now rather than trusting the address it had
+    // when it was translated: a picture that has been swapped since would
+    // otherwise be asked about, and drawn over, as the one that was there.
+    await translate(classify(target.element) ?? target);
   }
 }
 
