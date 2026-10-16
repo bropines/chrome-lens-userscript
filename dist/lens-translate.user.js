@@ -3321,7 +3321,7 @@ ${OVERLAY_CSS}`;
     menu = null;
   }
   const isMenuOpen = () => menu !== null;
-  function openMenu(at, items) {
+  function openMenu(at, items, opener) {
     closeMenu();
     const element = document.createElement("div");
     element.className = "lt-menu";
@@ -3349,7 +3349,8 @@ ${OVERLAY_CSS}`;
     element.style.left = `${left}px`;
     element.style.top = `${top}px`;
     const away = (event) => {
-      if (event.composedPath().includes(element)) return;
+      const path = event.composedPath();
+      if (path.includes(element) || opener && path.includes(opener)) return;
       closeMenu();
     };
     const escape = (event) => {
@@ -4023,7 +4024,7 @@ ${OVERLAY_CSS}`;
       { label: "Copy original text", run: () => void copyFrom("original", target.element), disabled: !words },
       { label: "Translate everything in view", run: () => void translateVisible() },
       { label: "Settings", run: () => openSettings(onSaved) }
-    ]);
+    ], more);
   }
   const peek = (element, peeking) => peekCover(element, peeking) || peekOverlay(element, peeking);
   const HOLD_MS = 350;

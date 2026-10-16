@@ -30,8 +30,18 @@ export function closeMenu(): void {
 
 export const isMenuOpen = (): boolean => menu !== null;
 
-/** Where the menu's corner goes, in viewport coordinates. */
-export function openMenu(at: { top: number; left: number }, items: MenuItem[]): void {
+/**
+ * Where the menu's corner goes, in viewport coordinates.
+ *
+ * `opener` is the control that opens it. A press on it must not count as
+ * "elsewhere": the menu would close on the press and the same click would open
+ * it again, so a button that is meant to toggle could only ever reopen.
+ */
+export function openMenu(
+  at: { top: number; left: number },
+  items: MenuItem[],
+  opener?: Element
+): void {
   closeMenu();
 
   const element = document.createElement('div');
@@ -67,7 +77,8 @@ export function openMenu(at: { top: number; left: number }, items: MenuItem[]): 
   const away = (event: Event): void => {
     // Inside the menu is the menu's own business; the shadow root retargets
     // the event, so the path is what says where it really landed.
-    if (event.composedPath().includes(element)) return;
+    const path = event.composedPath();
+    if (path.includes(element) || (opener && path.includes(opener))) return;
     closeMenu();
   };
   const escape = (event: KeyboardEvent): void => {

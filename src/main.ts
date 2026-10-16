@@ -977,7 +977,7 @@ function openActions(): void {
     { label: 'Copy original text', run: () => void copyFrom('original', target.element), disabled: !words },
     { label: 'Translate everything in view', run: () => void translateVisible() },
     { label: 'Settings', run: () => openSettings(onSaved) },
-  ]);
+  ], more);
 }
 
 /** Let the original show through one picture, or put the translation back. */
