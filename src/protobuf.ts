@@ -27,8 +27,18 @@ export type PbValue = bigint | number | Bytes;
 /** A decoded message: field number to the values seen for it. */
 export type PbMessage = Record<number, PbValue[] | undefined>;
 
-function encodeVarint(value: bigint | number): number[] {
-  let v = BigInt(value);
+/**
+ * A varint, the way the spec writes one.
+ *
+ * A negative `int32`/`int64` is sign-extended to 64 bits and so always takes
+ * ten bytes. Looping on the signed value instead never terminates for it:
+ * `-1n >> 7n` is `-1n`, which is still not under 128.
+ */
+export function encodeVarint(value: bigint | number): number[] {
+  if (typeof value === 'number' && !Number.isInteger(value)) {
+    throw new RangeError(`${value} is not an integer, so it has no varint encoding`);
+  }
+  let v = BigInt.asUintN(64, BigInt(value));
   const out: number[] = [];
   while (v > 127n) {
     out.push(Number(v & 127n) | 128);
@@ -97,7 +107,17 @@ export function writer(): Writer {
   return self;
 }
 
-/** Decode one message. Unknown fields come along rather than being dropped. */
+/** The longest a 64-bit value can take: ten groups of seven bits. */
+const MAX_VARINT_BYTES = 10;
+
+/**
+ * Decode one message. Unknown fields come along rather than being dropped.
+ *
+ * Input is a server's response, so it is not trusted to be well formed: every
+ * length is checked against what is actually left before it is used. Without
+ * that, `subarray` clamps silently and a lying length yields a short field that
+ * decodes as something else entirely, instead of an error that says why.
+ */
 export function decode(buf: Bytes): PbMessage {
   const view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
   const out: PbMessage = {};
@@ -106,12 +126,21 @@ export function decode(buf: Bytes): PbMessage {
   const readVarint = (): bigint => {
     let shift = 0n;
     let result = 0n;
-    for (;;) {
+    for (let read = 0; read < MAX_VARINT_BYTES; read += 1) {
       const byte = buf[p++];
       if (byte === undefined) throw new Error('Truncated protobuf varint');
       result |= BigInt(byte & 127) << shift;
       if (!(byte & 128)) return result;
       shift += 7n;
+    }
+    throw new Error(`Malformed protobuf varint at byte ${p}: longer than ${MAX_VARINT_BYTES} bytes`);
+  };
+
+  const need = (count: number, what: string): void => {
+    if (count < 0 || p + count > buf.length) {
+      throw new Error(
+        `Truncated protobuf ${what}: needs ${count} bytes at byte ${p}, ${buf.length - p} left`
+      );
     }
   };
 
@@ -126,16 +155,19 @@ export function decode(buf: Bytes): PbMessage {
         value = readVarint();
         break;
       case Wire.Fixed64:
+        need(8, 'fixed64');
         value = view.getFloat64(p, true);
         p += 8;
         break;
       case Wire.Length: {
         const length = Number(readVarint());
+        need(length, 'length-delimited field');
         value = buf.subarray(p, p + length);
         p += length;
         break;
       }
       case Wire.Fixed32:
+        need(4, 'fixed32');
         value = view.getFloat32(p, true);
         p += 4;
         break;

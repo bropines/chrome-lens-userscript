@@ -845,7 +845,10 @@
     Fixed32: 5
   };
   function encodeVarint(value) {
-    let v = BigInt(value);
+    if (typeof value === "number" && !Number.isInteger(value)) {
+      throw new RangeError(`${value} is not an integer, so it has no varint encoding`);
+    }
+    let v = BigInt.asUintN(64, BigInt(value));
     const out = [];
     while (v > 127n) {
       out.push(Number(v & 127n) | 128);
@@ -898,6 +901,7 @@
     };
     return self;
   }
+  const MAX_VARINT_BYTES = 10;
   function decode(buf) {
     const view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
     const out = {};
@@ -905,12 +909,20 @@
     const readVarint = () => {
       let shift = 0n;
       let result = 0n;
-      for (; ; ) {
+      for (let read = 0; read < MAX_VARINT_BYTES; read += 1) {
         const byte = buf[p++];
         if (byte === void 0) throw new Error("Truncated protobuf varint");
         result |= BigInt(byte & 127) << shift;
         if (!(byte & 128)) return result;
         shift += 7n;
+      }
+      throw new Error(`Malformed protobuf varint at byte ${p}: longer than ${MAX_VARINT_BYTES} bytes`);
+    };
+    const need = (count, what) => {
+      if (count < 0 || p + count > buf.length) {
+        throw new Error(
+          `Truncated protobuf ${what}: needs ${count} bytes at byte ${p}, ${buf.length - p} left`
+        );
       }
     };
     while (p < buf.length) {
@@ -923,16 +935,19 @@
           value = readVarint();
           break;
         case Wire.Fixed64:
+          need(8, "fixed64");
           value = view.getFloat64(p, true);
           p += 8;
           break;
         case Wire.Length: {
           const length = Number(readVarint());
+          need(length, "length-delimited field");
           value = buf.subarray(p, p + length);
           p += length;
           break;
         }
         case Wire.Fixed32:
+          need(4, "fixed32");
           value = view.getFloat32(p, true);
           p += 4;
           break;
