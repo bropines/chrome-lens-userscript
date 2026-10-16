@@ -88,6 +88,13 @@ const busy = new WeakSet<HTMLElement>();
  */
 const showing = new Map<HTMLElement, Target>();
 
+/** The natural size an <img> already knows, for checking a cache entry's frame. */
+function naturalSizeOf(target: Target): { width: number; height: number } | undefined {
+  if (target.kind !== 'img') return undefined;
+  const { naturalWidth, naturalHeight } = target.element as HTMLImageElement;
+  return naturalWidth && naturalHeight ? { width: naturalWidth, height: naturalHeight } : undefined;
+}
+
 const isTranslated = (img: HTMLElement): boolean => isCovered(img) || hasOverlay(img);
 
 function undo(img: HTMLElement): boolean {
@@ -118,7 +125,11 @@ async function translate(target: Target): Promise<void> {
     // A finished rendering short-circuits everything: no pixels to fetch, no
     // canvas to paint, no round trip. This is the path a repeat toggle takes.
     if (settings.renderMode === 'canvas' && target.url) {
-      const done = getRender(renderKey(key, settings, displayedWidth), settings);
+      const done = getRender(
+        renderKey(key, settings, displayedWidth),
+        settings,
+        naturalSizeOf(target)
+      );
       if (done && coverImage(img, URL.createObjectURL(done))) {
         showing.set(img, target);
         if (currentTarget?.element === img) button.classList.add('lt-active');
@@ -131,7 +142,11 @@ async function translate(target: Target): Promise<void> {
     // nobody sends was the expensive half of a cache hit.
     const prepared = await acquireSource(target);
     try {
-      let result = target.url ? getCached(key, settings) : undefined;
+      // What the pixels measure, so a cached answer for a different crop under
+      // the same address is a miss rather than a translation laid out for
+      // another frame.
+      const size = { width: prepared.width, height: prepared.height };
+      let result = target.url ? getCached(key, settings, size) : undefined;
 
       // The pixels are in hand but not yet encoded, which is the moment to ask
       // whether this picture has been answered before - under any address, and
@@ -142,14 +157,14 @@ async function translate(target: Target): Promise<void> {
         const remembered = await getStored(hash, settings);
         if (remembered) {
           result = remembered;
-          if (target.url) putCached(key, result, settings);
+          if (target.url) putCached(key, result, settings, size);
         }
       }
 
       if (!result) {
         const upload = await encodeForUpload(prepared.source, settings);
         result = await callLens(upload, settings);
-        if (target.url) putCached(key, result, settings);
+        if (target.url) putCached(key, result, settings, size);
         void putStored(hash, result, settings);
       }
 
@@ -173,7 +188,9 @@ async function translate(target: Target): Promise<void> {
           // The displayed width is what decides whether text will be legible.
           displayedWidth
         );
-        if (target.url) putRender(renderKey(key, settings, displayedWidth), blob, settings);
+        if (target.url) {
+          putRender(renderKey(key, settings, displayedWidth), blob, settings, size);
+        }
         const url = URL.createObjectURL(blob);
         if (!coverImage(img, url)) {
           URL.revokeObjectURL(url);

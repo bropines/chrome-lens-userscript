@@ -1461,9 +1461,9 @@
       used: Date.now()
     };
     await run("readwrite", (store) => store.put(entry));
-    await evict(settings2.cacheBytes);
+    await evict$1(settings2.cacheBytes);
   }
-  async function evict(budget) {
+  async function evict$1(budget) {
     const all2 = await run("readonly", (store) => store.getAll()) ?? [];
     let total = all2.reduce((sum, entry) => sum + entry.bytes, 0);
     if (total <= budget) return;
@@ -2283,32 +2283,25 @@
     return bytes2;
   }
   const entries = /* @__PURE__ */ new Map();
+  const renders = /* @__PURE__ */ new Map();
   let totalBytes = 0;
   let clock = 0;
-  const RENDITION_PARAMS = /* @__PURE__ */ new Set([
-    "name",
-    "format",
-    "fm",
-    "w",
-    "width",
-    "h",
-    "height",
-    "size",
-    "s",
-    "q",
-    "quality",
-    "dpr",
-    "resize",
-    "fit",
-    "crop",
-    "auto"
-  ]);
+  const SIZE_NAME = /^(thumb|tiny|small|medium|large|orig|original|\d{2,4}x\d{2,4}|\d{2,4})$/i;
+  const RENDITION_PARAMS = {
+    name: SIZE_NAME,
+    format: /^(jpe?g|png|webp|avif|gif|auto)$/i,
+    fm: /^(jpe?g|png|webp|avif|gif|auto)$/i,
+    q: /^\d+$/,
+    quality: /^\d+$/,
+    dpr: /^\d+(\.\d+)?$/,
+    auto: /^[a-z,]+$/i
+  };
   function normalizeUrl(raw) {
     if (!raw || raw.startsWith("data:") || raw.startsWith("blob:")) return raw;
     try {
       const url = new URL(raw, document.baseURI);
-      for (const name of [...url.searchParams.keys()]) {
-        if (RENDITION_PARAMS.has(name.toLowerCase())) url.searchParams.delete(name);
+      for (const [name, value] of [...url.searchParams]) {
+        if (RENDITION_PARAMS[name.toLowerCase()]?.test(value)) url.searchParams.delete(name);
       }
       url.hash = "";
       const query = url.searchParams.toString();
@@ -2317,38 +2310,59 @@
       return raw;
     }
   }
+  function sameShape(a, b) {
+    if (!a || !b) return true;
+    if (!(a.width > 0 && a.height > 0 && b.width > 0 && b.height > 0)) return true;
+    const ratio = a.width / a.height / (b.width / b.height);
+    return Math.abs(ratio - 1) <= 0.02;
+  }
   function cacheKey(url, settings2) {
     return [normalizeUrl(url), settings2.targetLang, settings2.sourceLang, settings2.ocrLang].join("\0");
   }
-  function getCached(key, settings2) {
+  function evict(limit) {
+    while (totalBytes > limit && entries.size + renders.size > 1) {
+      let oldest = null;
+      let oldestUsed = Infinity;
+      for (const [key, entry] of entries) {
+        if (entry.used < oldestUsed) {
+          oldestUsed = entry.used;
+          oldest = { map: "response", key };
+        }
+      }
+      for (const [key, entry] of renders) {
+        if (entry.used < oldestUsed) {
+          oldestUsed = entry.used;
+          oldest = { map: "render", key };
+        }
+      }
+      if (!oldest) break;
+      if (oldest.map === "response") {
+        totalBytes -= entries.get(oldest.key)?.bytes ?? 0;
+        entries.delete(oldest.key);
+      } else {
+        totalBytes -= renders.get(oldest.key)?.blob.size ?? 0;
+        renders.delete(oldest.key);
+      }
+    }
+  }
+  function getCached(key, settings2, size) {
     if (settings2.cacheBytes <= 0) return null;
     const entry = entries.get(key);
     if (!entry) return null;
+    if (!sameShape(entry.size, size)) return null;
     entry.used = ++clock;
     return entry.result;
   }
-  function putCached(key, result, settings2) {
+  function putCached(key, result, settings2, size) {
     const limit = settings2.cacheBytes;
     if (limit <= 0) return;
     const bytes2 = weigh(result.blocks);
     if (bytes2 > limit) return;
     const existing = entries.get(key);
     if (existing) totalBytes -= existing.bytes;
-    entries.set(key, { result, bytes: bytes2, used: ++clock });
+    entries.set(key, { result, bytes: bytes2, used: ++clock, size });
     totalBytes += bytes2;
-    while (totalBytes > limit && entries.size > 1) {
-      let oldestKey = null;
-      let oldestUsed = Infinity;
-      for (const [candidate, entry] of entries) {
-        if (entry.used < oldestUsed) {
-          oldestUsed = entry.used;
-          oldestKey = candidate;
-        }
-      }
-      if (oldestKey === null) break;
-      totalBytes -= entries.get(oldestKey)?.bytes ?? 0;
-      entries.delete(oldestKey);
-    }
+    evict(limit);
   }
   const SEPARATOR = String.fromCharCode(0);
   const DRAWN = Object.keys({
@@ -2373,47 +2387,33 @@
     parts.push(`w=${Math.round(displayedWidth / 50)}`);
     return parts.join(SEPARATOR);
   }
-  const renders = /* @__PURE__ */ new Map();
-  let renderBytes = 0;
-  function getRender(key, settings2) {
+  function getRender(key, settings2, size) {
     if (settings2.cacheBytes <= 0) return null;
     const entry = renders.get(key);
     if (!entry) return null;
+    if (!sameShape(entry.size, size)) return null;
     entry.used = ++clock;
     return entry.blob;
   }
-  function putRender(key, blob, settings2) {
+  function putRender(key, blob, settings2, size) {
     const limit = settings2.cacheBytes;
     if (limit <= 0 || blob.size > limit) return;
     const existing = renders.get(key);
-    if (existing) renderBytes -= existing.blob.size;
-    renders.set(key, { blob, used: ++clock });
-    renderBytes += blob.size;
-    while (renderBytes > limit && renders.size > 1) {
-      let oldestKey = null;
-      let oldestUsed = Infinity;
-      for (const [candidate, entry] of renders) {
-        if (entry.used < oldestUsed) {
-          oldestUsed = entry.used;
-          oldestKey = candidate;
-        }
-      }
-      if (oldestKey === null) break;
-      renderBytes -= renders.get(oldestKey)?.blob.size ?? 0;
-      renders.delete(oldestKey);
-    }
+    if (existing) totalBytes -= existing.blob.size;
+    renders.set(key, { blob, used: ++clock, size });
+    totalBytes += blob.size;
+    evict(limit);
   }
   function clearCache() {
-    const stats = { entries: entries.size + renders.size, bytes: totalBytes + renderBytes };
+    const stats = cacheStats();
     entries.clear();
     renders.clear();
     totalBytes = 0;
-    renderBytes = 0;
     return stats;
   }
   const cacheStats = () => ({
     entries: entries.size + renders.size,
-    bytes: totalBytes + renderBytes
+    bytes: totalBytes
   });
   const styles = "/* Lives inside a shadow root, so these selectors compete with nothing. The\n   :host is a fixed, click-through, full-viewport layer; everything here is\n   positioned in viewport coordinates. */\n\n:host {\n  font: 14px/1.45 system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;\n  color: #1a1a1a;\n}\n\n#lt-button,\n#lt-gear {\n  position: absolute;\n  width: 32px;\n  height: 32px;\n  background: rgba(0, 0, 0, 0.6);\n  border-radius: 50%;\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  opacity: 0;\n  pointer-events: none;\n  cursor: pointer;\n  transition: opacity 0.2s ease-in-out, transform 0.15s ease-in-out, background 0.2s;\n  transform: scale(0.9);\n  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);\n  border: 1px solid rgba(255, 255, 255, 0.2);\n}\n#lt-button:hover,\n#lt-gear:hover {\n  background: rgba(0, 0, 0, 0.85);\n  transform: scale(1.05);\n}\n\n/* Appears a beat after the main button, so a passing cursor does not summon\n   two controls at once. */\n#lt-gear {\n  width: 26px;\n  height: 26px;\n}\n#lt-button.lt-busy svg {\n  animation: lt-spin 1s linear infinite;\n}\n#lt-button.lt-active {\n  background: rgba(20, 110, 60, 0.9);\n}\n#lt-button.lt-error {\n  background: rgba(170, 30, 30, 0.9);\n}\n@keyframes lt-spin {\n  to {\n    transform: rotate(360deg);\n  }\n}\n\n#lt-toast {\n  position: absolute;\n  bottom: 16px;\n  left: 50%;\n  transform: translateX(-50%);\n  background: rgba(0, 0, 0, 0.88);\n  color: #fff;\n  padding: 8px 16px;\n  border-radius: 8px;\n  font-size: 13px;\n  pointer-events: none;\n  opacity: 0;\n  transition: opacity 0.2s;\n  max-width: 70vw;\n}\n#lt-toast.lt-show {\n  opacity: 1;\n}\n\n/* ------------------------------------------------------------- settings */\n\n.lt-panel-backdrop {\n  position: absolute;\n  inset: 0;\n  background: rgba(0, 0, 0, 0.5);\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  pointer-events: auto;\n}\n.lt-panel {\n  background: #fff;\n  width: min(560px, 92vw);\n  max-height: 86vh;\n  display: flex;\n  flex-direction: column;\n  border-radius: 12px;\n  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.4);\n  overflow: hidden;\n}\n.lt-panel-head,\n.lt-panel-foot {\n  display: flex;\n  align-items: center;\n  gap: 8px;\n  padding: 12px 18px;\n  flex: none;\n}\n.lt-panel-head {\n  border-bottom: 1px solid #e6e6e6;\n  justify-content: space-between;\n  font-size: 15px;\n  font-weight: 600;\n}\n.lt-panel-foot {\n  border-top: 1px solid #e6e6e6;\n}\n.lt-spacer {\n  flex: 1;\n}\n.lt-panel-body {\n  padding: 10px 18px 16px;\n  overflow-y: auto;\n}\n\n.lt-row {\n  display: grid;\n  grid-template-columns: 190px minmax(0, 1fr);\n  align-items: center;\n  gap: 2px 14px;\n  padding: 7px 0;\n}\n.lt-label {\n  color: #333;\n}\n.lt-hint {\n  grid-column: 2;\n  color: #808080;\n  font-size: 12px;\n}\n.lt-input {\n  font: inherit;\n  padding: 7px 9px;\n  border: 1px solid #ccc;\n  border-radius: 6px;\n  background: #fff;\n  color: #1a1a1a;\n  min-width: 0;\n  width: 100%;\n  box-sizing: border-box;\n}\n.lt-input[type='checkbox'] {\n  justify-self: start;\n  width: 17px;\n  height: 17px;\n  padding: 0;\n}\n.lt-x {\n  border: 0;\n  background: transparent;\n  font-size: 22px;\n  line-height: 1;\n  cursor: pointer;\n  color: #666;\n  padding: 0 4px;\n}\n.lt-btn {\n  font: inherit;\n  padding: 7px 15px;\n  border-radius: 7px;\n  cursor: pointer;\n  border: 1px solid #ccc;\n  background: #f5f5f5;\n  color: #1a1a1a;\n}\n.lt-btn.lt-primary {\n  background: #1a73e8;\n  border-color: #1a73e8;\n  color: #fff;\n}\n.lt-btn.lt-ghost:hover {\n  background: #eaeaea;\n}\n\n@media (prefers-color-scheme: dark) {\n  .lt-panel {\n    background: #1f1f22;\n    color: #ececec;\n  }\n  .lt-panel-head,\n  .lt-panel-foot {\n    border-color: #35353a;\n  }\n  .lt-label {\n    color: #d6d6d6;\n  }\n  .lt-hint {\n    color: #9a9a9a;\n  }\n  .lt-input {\n    background: #2a2a2e;\n    border-color: #45454c;\n    color: #ececec;\n  }\n  .lt-btn {\n    background: #2e2e33;\n    border-color: #45454c;\n    color: #ececec;\n  }\n  .lt-btn.lt-ghost:hover {\n    background: #3a3a40;\n  }\n  .lt-x {\n    color: #bbb;\n  }\n}\n\n/* Outline slider with its live sample. */\n.lt-slider {\n  display: flex;\n  align-items: center;\n  gap: 10px;\n  min-width: 0;\n}\n.lt-slider input[type='range'] {\n  flex: 1;\n  width: auto;\n  padding: 0;\n  border: 0;\n  background: transparent;\n  accent-color: #1a73e8;\n}\n.lt-readout {\n  min-width: 42px;\n  text-align: right;\n  font-variant-numeric: tabular-nums;\n  color: #666;\n}\n.lt-preview {\n  grid-column: 2;\n  width: 100%;\n  height: auto;\n  border-radius: 6px;\n  border: 1px solid #ddd;\n  margin-top: 6px;\n}\n@media (prefers-color-scheme: dark) {\n  .lt-readout {\n    color: #aaa;\n  }\n  .lt-preview {\n    border-color: #45454c;\n  }\n}\n\n/* Section headings. */\n.lt-group {\n  grid-column: 1 / -1;\n  margin: 16px 0 4px;\n  padding-bottom: 5px;\n  border-bottom: 1px solid #e6e6e6;\n  font-size: 11px;\n  font-weight: 600;\n  letter-spacing: 0.07em;\n  text-transform: uppercase;\n  color: #888;\n}\n.lt-group:first-child {\n  margin-top: 4px;\n}\n@media (prefers-color-scheme: dark) {\n  .lt-group {\n    border-color: #35353a;\n    color: #8c8c96;\n  }\n}\n\n/* Menu commands, for a host that has no menu of its own. */\n.lt-actions {\n  display: flex;\n  flex-wrap: wrap;\n  gap: 8px;\n  padding: 4px 0 0;\n}\n.lt-note {\n  color: #808080;\n  font-size: 12px;\n  padding-top: 8px;\n}\n@media (prefers-color-scheme: dark) {\n  .lt-note {\n    color: #9a9a9a;\n  }\n}\n\n/* The diagnostics report: fixed width, so columns line up as written. */\n.lt-panel-report {\n  max-width: 560px;\n}\n.lt-report {\n  margin: 0;\n  padding: 14px 18px;\n  overflow: auto;\n  white-space: pre-wrap;\n  word-break: break-word;\n  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;\n  font-size: 12px;\n  line-height: 1.5;\n  user-select: text;\n  -webkit-user-select: text;\n}\n";
   const HOST_ID = "lens-translate-root";
@@ -2791,6 +2791,11 @@ ${OVERLAY_CSS}`;
   }
   const busy = /* @__PURE__ */ new WeakSet();
   const showing = /* @__PURE__ */ new Map();
+  function naturalSizeOf(target) {
+    if (target.kind !== "img") return void 0;
+    const { naturalWidth, naturalHeight } = target.element;
+    return naturalWidth && naturalHeight ? { width: naturalWidth, height: naturalHeight } : void 0;
+  }
   const isTranslated = (img) => isCovered(img) || hasOverlay(img);
   function undo(img) {
     showing.delete(img);
@@ -2813,7 +2818,11 @@ ${OVERLAY_CSS}`;
       const key = cacheKey(target.url, settings);
       const displayedWidth = img.getBoundingClientRect().width;
       if (settings.renderMode === "canvas" && target.url) {
-        const done = getRender(renderKey(key, settings, displayedWidth), settings);
+        const done = getRender(
+          renderKey(key, settings, displayedWidth),
+          settings,
+          naturalSizeOf(target)
+        );
         if (done && coverImage(img, URL.createObjectURL(done))) {
           showing.set(img, target);
           if (currentTarget?.element === img) button.classList.add("lt-active");
@@ -2822,19 +2831,20 @@ ${OVERLAY_CSS}`;
       }
       const prepared = await acquireSource(target);
       try {
-        let result = target.url ? getCached(key, settings) : void 0;
+        const size = { width: prepared.width, height: prepared.height };
+        let result = target.url ? getCached(key, settings, size) : void 0;
         const hash = result ? "" : fingerprint(prepared.source, prepared.width, prepared.height);
         if (!result && hash) {
           const remembered = await getStored(hash, settings);
           if (remembered) {
             result = remembered;
-            if (target.url) putCached(key, result, settings);
+            if (target.url) putCached(key, result, settings, size);
           }
         }
         if (!result) {
           const upload = await encodeForUpload(prepared.source, settings);
           result = await callLens(upload, settings);
-          if (target.url) putCached(key, result, settings);
+          if (target.url) putCached(key, result, settings, size);
           void putStored(hash, result, settings);
         }
         if (!result.blocks.length) {
@@ -2854,7 +2864,9 @@ ${OVERLAY_CSS}`;
             // The displayed width is what decides whether text will be legible.
             displayedWidth
           );
-          if (target.url) putRender(renderKey(key, settings, displayedWidth), blob, settings);
+          if (target.url) {
+            putRender(renderKey(key, settings, displayedWidth), blob, settings, size);
+          }
           const url = URL.createObjectURL(blob);
           if (!coverImage(img, url)) {
             URL.revokeObjectURL(url);

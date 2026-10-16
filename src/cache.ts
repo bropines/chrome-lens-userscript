@@ -7,23 +7,37 @@ import type {
 } from './types.js';
 
 /**
- * Remember what Lens said about an image.
+ * Remember what Lens said about an image, and what it was drawn as.
  *
  * Toggling a translation off and back on, or coming back to a post further up
  * the feed, used to mean a fresh upload and a fresh round trip - slow, and it
- * spends quota on an answer we already had. Only the *response* is cached;
- * re-rendering from it is local work measured in milliseconds, so changing a
- * render setting still takes effect without invalidating anything.
+ * spends quota on an answer we already had. Two things are kept: the
+ * *response*, which is the expensive one, and the finished *rendering*, which
+ * saves the pixels and the canvas on a repeat toggle. Changing a render setting
+ * still takes effect without invalidating the response.
  *
- * Entries are evicted by total size rather than by count, because the weight is
- * almost entirely the inpainted WebP patches and those vary hugely between a
- * two-word sign and a page of manga.
+ * They share one byte budget (`cacheBytes`), and one clock: whichever entry was
+ * used longest ago goes first, from either map. Entries are weighed in bytes
+ * rather than counted, because the weight is almost entirely the inpainted WebP
+ * patches and the renderings, and those vary hugely between a two-word sign and
+ * a page of manga.
+ *
+ * This is the memory budget. `store.ts` keeps the responses across reloads in
+ * IndexedDB under a budget of the same size, which is a separate allowance:
+ * one is RAM that dies with the page, the other is disk that outlives it.
  */
+
+/** The picture an entry was made from, as the pixels that were actually read. */
+export interface PictureSize {
+  width: number;
+  height: number;
+}
 
 interface Entry {
   result: LensResult;
   bytes: number;
   used: number;
+  size: PictureSize | undefined;
 }
 
 /** Roughly the weight of one entry: the patches dominate, the strings do not. */
@@ -37,29 +51,46 @@ function weigh(blocks: TranslationBlock[]): number {
 }
 
 const entries = new Map<string, Entry>();
+const renders = new Map<string, { blob: Blob; used: number; size: PictureSize | undefined }>();
 let totalBytes = 0;
 let clock = 0;
 
+/** What a size name looks like on the CDNs that have them. */
+const SIZE_NAME = /^(thumb|tiny|small|medium|large|orig|original|\d{2,4}x\d{2,4}|\d{2,4})$/i;
+
 /**
- * Query parameters that select a rendition rather than identify the picture.
+ * Query parameters that select a rendition rather than identify the picture,
+ * and the values that make each one safe to drop.
  *
  * Twitter serves one photo as ?name=small / medium / large / orig, and React
  * rewrites `src` between them as the layout changes. Keying on the raw URL made
  * every such switch a miss, which is what "it requests again" turned out to be.
- * The path is the identity on essentially every image CDN; these are not.
+ *
+ * The list used to be longer, and the extra entries were wrong: `w`, `h`,
+ * `crop`, `fit`, `s` and `resize` do not pick a *resolution* of one picture,
+ * they pick which part of it, so two crops of one path collided and the second
+ * was shown the first one's translation, laid out for a different frame. What
+ * stays is what changes how many pixels the same frame has - and each is only
+ * dropped when its value looks like that kind of value, since `name` on another
+ * CDN can well be a filename.
  */
-const RENDITION_PARAMS = new Set([
-  'name', 'format', 'fm', 'w', 'width', 'h', 'height', 'size', 's',
-  'q', 'quality', 'dpr', 'resize', 'fit', 'crop', 'auto',
-]);
+const RENDITION_PARAMS: Record<string, RegExp> = {
+  name: SIZE_NAME,
+  format: /^(jpe?g|png|webp|avif|gif|auto)$/i,
+  fm: /^(jpe?g|png|webp|avif|gif|auto)$/i,
+  q: /^\d+$/,
+  quality: /^\d+$/,
+  dpr: /^\d+(\.\d+)?$/,
+  auto: /^[a-z,]+$/i,
+};
 
 export function normalizeUrl(raw: string): string {
   // data: and blob: URLs are already their own identity and carry no query.
   if (!raw || raw.startsWith('data:') || raw.startsWith('blob:')) return raw;
   try {
     const url = new URL(raw, document.baseURI);
-    for (const name of [...url.searchParams.keys()]) {
-      if (RENDITION_PARAMS.has(name.toLowerCase())) url.searchParams.delete(name);
+    for (const [name, value] of [...url.searchParams]) {
+      if (RENDITION_PARAMS[name.toLowerCase()]?.test(value)) url.searchParams.delete(name);
     }
     url.hash = '';
     const query = url.searchParams.toString();
@@ -70,6 +101,22 @@ export function normalizeUrl(raw: string): string {
 }
 
 /**
+ * Whether two sizes are the same frame at different resolutions.
+ *
+ * Exact equality would defeat the point of normalising: `small` and `orig` are
+ * different sizes of one picture. What a response is laid out against is the
+ * proportions - its geometry is fractions of the picture - so a different
+ * aspect ratio is a different crop and the answer does not apply. Two percent
+ * absorbs the rounding a CDN does to the short side.
+ */
+export function sameShape(a: PictureSize | undefined, b: PictureSize | undefined): boolean {
+  if (!a || !b) return true;
+  if (!(a.width > 0 && a.height > 0 && b.width > 0 && b.height > 0)) return true;
+  const ratio = a.width / a.height / (b.width / b.height);
+  return Math.abs(ratio - 1) <= 0.02;
+}
+
+/**
  * What the answer depends on. Render-time settings are deliberately absent:
  * they change how it is drawn, not what came back.
  */
@@ -77,15 +124,62 @@ export function cacheKey(url: string, settings: LensOptions): string {
   return [normalizeUrl(url), settings.targetLang, settings.sourceLang, settings.ocrLang].join('\u0000');
 }
 
-export function getCached(key: string, settings: CacheOptions): LensResult | null {
+/**
+ * The oldest entry in either map goes, until the two fit one budget together.
+ *
+ * Each map used to evict against the full limit on its own, so together they
+ * could hold twice what the setting said while the comments here claimed one
+ * shared budget.
+ */
+function evict(limit: number): void {
+  while (totalBytes > limit && entries.size + renders.size > 1) {
+    let oldest: { map: 'response' | 'render'; key: string } | null = null;
+    let oldestUsed = Infinity;
+    for (const [key, entry] of entries) {
+      if (entry.used < oldestUsed) {
+        oldestUsed = entry.used;
+        oldest = { map: 'response', key };
+      }
+    }
+    for (const [key, entry] of renders) {
+      if (entry.used < oldestUsed) {
+        oldestUsed = entry.used;
+        oldest = { map: 'render', key };
+      }
+    }
+    if (!oldest) break;
+    // The entry just written is the newest, so it only comes up when it is the
+    // last one standing - which the loop condition already excludes.
+    if (oldest.map === 'response') {
+      totalBytes -= entries.get(oldest.key)?.bytes ?? 0;
+      entries.delete(oldest.key);
+    } else {
+      totalBytes -= renders.get(oldest.key)?.blob.size ?? 0;
+      renders.delete(oldest.key);
+    }
+  }
+}
+
+export function getCached(
+  key: string,
+  settings: CacheOptions,
+  size?: PictureSize
+): LensResult | null {
   if (settings.cacheBytes <= 0) return null;
   const entry = entries.get(key);
   if (!entry) return null;
+  // A different frame under the same address is a miss, not a stale hit.
+  if (!sameShape(entry.size, size)) return null;
   entry.used = ++clock;
   return entry.result;
 }
 
-export function putCached(key: string, result: LensResult, settings: CacheOptions): void {
+export function putCached(
+  key: string,
+  result: LensResult,
+  settings: CacheOptions,
+  size?: PictureSize
+): void {
   const limit = settings.cacheBytes;
   if (limit <= 0) return;
 
@@ -96,22 +190,9 @@ export function putCached(key: string, result: LensResult, settings: CacheOption
 
   const existing = entries.get(key);
   if (existing) totalBytes -= existing.bytes;
-  entries.set(key, { result, bytes, used: ++clock });
+  entries.set(key, { result, bytes, used: ++clock, size });
   totalBytes += bytes;
-
-  while (totalBytes > limit && entries.size > 1) {
-    let oldestKey: string | null = null;
-    let oldestUsed = Infinity;
-    for (const [candidate, entry] of entries) {
-      if (entry.used < oldestUsed) {
-        oldestUsed = entry.used;
-        oldestKey = candidate;
-      }
-    }
-    if (oldestKey === null) break;
-    totalBytes -= entries.get(oldestKey)?.bytes ?? 0;
-    entries.delete(oldestKey);
-  }
+  evict(limit);
 }
 
 /** A byte no setting value contains, so two fields cannot run together. */
@@ -168,51 +249,40 @@ export function renderKey(key: string, settings: RenderOptions, displayedWidth: 
  * The displayed width is bucketed: it decides the readable-text floor, but a
  * few pixels of layout jitter should not throw the cache away.
  */
-const renders = new Map<string, { blob: Blob; used: number }>();
-let renderBytes = 0;
-
-export function getRender(key: string, settings: CacheOptions): Blob | null {
+export function getRender(key: string, settings: CacheOptions, size?: PictureSize): Blob | null {
   if (settings.cacheBytes <= 0) return null;
   const entry = renders.get(key);
   if (!entry) return null;
+  if (!sameShape(entry.size, size)) return null;
   entry.used = ++clock;
   return entry.blob;
 }
 
-export function putRender(key: string, blob: Blob, settings: CacheOptions): void {
+export function putRender(
+  key: string,
+  blob: Blob,
+  settings: CacheOptions,
+  size?: PictureSize
+): void {
   const limit = settings.cacheBytes;
   if (limit <= 0 || blob.size > limit) return;
 
   const existing = renders.get(key);
-  if (existing) renderBytes -= existing.blob.size;
-  renders.set(key, { blob, used: ++clock });
-  renderBytes += blob.size;
-
-  while (renderBytes > limit && renders.size > 1) {
-    let oldestKey: string | null = null;
-    let oldestUsed = Infinity;
-    for (const [candidate, entry] of renders) {
-      if (entry.used < oldestUsed) {
-        oldestUsed = entry.used;
-        oldestKey = candidate;
-      }
-    }
-    if (oldestKey === null) break;
-    renderBytes -= renders.get(oldestKey)?.blob.size ?? 0;
-    renders.delete(oldestKey);
-  }
+  if (existing) totalBytes -= existing.blob.size;
+  renders.set(key, { blob, used: ++clock, size });
+  totalBytes += blob.size;
+  evict(limit);
 }
 
 export function clearCache(): { entries: number; bytes: number } {
-  const stats = { entries: entries.size + renders.size, bytes: totalBytes + renderBytes };
+  const stats = cacheStats();
   entries.clear();
   renders.clear();
   totalBytes = 0;
-  renderBytes = 0;
   return stats;
 }
 
 export const cacheStats = (): { entries: number; bytes: number } => ({
   entries: entries.size + renders.size,
-  bytes: totalBytes + renderBytes,
+  bytes: totalBytes,
 });
