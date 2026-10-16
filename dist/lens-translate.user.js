@@ -133,7 +133,7 @@
     return error;
   }
   function sendViaGm(attempt) {
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve2, reject) => {
       if (!request) {
         reject(new Error(`${hostName()} has no GM_xmlhttpRequest`));
         return;
@@ -145,7 +145,7 @@
             reject(new Error(`${hostName()} returned a response this script cannot read`));
             return;
           }
-          resolve({
+          resolve2({
             status: response.status,
             bytes: bytes2,
             contentType: contentTypeOf(response.responseHeaders)
@@ -299,16 +299,175 @@
     }
     return installed;
   }
+  function splitList(value) {
+    const parts = [];
+    let depth = 0;
+    let quote = "";
+    let start = 0;
+    for (let at = 0; at < value.length; at += 1) {
+      const char = value.charAt(at);
+      if (quote) {
+        if (char === quote) quote = "";
+      } else if (char === '"' || char === "'") quote = char;
+      else if (char === "(") depth += 1;
+      else if (char === ")") depth -= 1;
+      else if (char === "," && depth === 0) {
+        parts.push(value.slice(start, at).trim());
+        start = at + 1;
+      }
+    }
+    parts.push(value.slice(start).trim());
+    return parts;
+  }
+  function urlOf(layer) {
+    const match = /^url\((['"]?)(.*?)\1\)$/.exec(layer.trim());
+    return match?.[2] ?? "";
+  }
+  const NUMBER = "(-?\\d*\\.?\\d+)";
+  const PLAIN = new RegExp(`^${NUMBER}(px|%)?$`);
+  const CALC = new RegExp(`^calc\\(\\s*${NUMBER}(px|%)\\s*([+-])\\s*${NUMBER}(px|%)\\s*\\)$`);
+  function lengthOf(value) {
+    const text2 = value.trim();
+    const plain = PLAIN.exec(text2);
+    if (plain) {
+      const amount = Number(plain[1]);
+      return plain[2] === "%" ? { px: 0, pct: amount } : { px: amount, pct: 0 };
+    }
+    const calc = CALC.exec(text2);
+    if (calc) {
+      const first = Number(calc[1]);
+      const sign = calc[3] === "-" ? -1 : 1;
+      const second = sign * Number(calc[4]);
+      if (calc[2] === calc[5]) return null;
+      return calc[2] === "%" ? { pct: first, px: second } : { px: first, pct: second };
+    }
+    return null;
+  }
+  function dimensionOf(value) {
+    const text2 = value.trim();
+    if (text2 === "auto") return "auto";
+    const plain = PLAIN.exec(text2);
+    if (!plain) return null;
+    const amount = Number(plain[1]);
+    return plain[2] === "%" ? { pct: amount } : { px: amount };
+  }
+  const boxOf = (value, fallback) => value === "border-box" || value === "padding-box" || value === "content-box" ? value : fallback;
+  function parseBackground$1(raw) {
+    const layers = splitList(raw.image);
+    const index = layers.findIndex((layer) => {
+      const url2 = urlOf(layer);
+      return url2 !== "" && !url2.startsWith("#");
+    });
+    if (index < 0) return null;
+    const url = urlOf(layers[index] ?? "");
+    const at = (list) => {
+      const entries2 = splitList(list);
+      return entries2[index % Math.max(1, entries2.length)] ?? "";
+    };
+    if (at(raw.attachment) === "fixed") return null;
+    const clipValue = at(raw.clip);
+    if (clipValue === "text") return null;
+    const sizeText = at(raw.size).trim() || "auto";
+    let size;
+    if (sizeText === "cover" || sizeText === "contain") size = { kind: sizeText };
+    else {
+      const tokens = sizeText.split(/\s+(?![^(]*\))/);
+      const width = dimensionOf(tokens[0] ?? "auto");
+      const height = dimensionOf(tokens[1] ?? "auto");
+      if (!width || !height) return null;
+      size = { kind: "lengths", width, height };
+    }
+    const x = lengthOf(at(raw.positionX));
+    const y = lengthOf(at(raw.positionY));
+    if (!x || !y) return null;
+    const [first = "repeat", second] = at(raw.repeat).trim().split(/\s+/);
+    if ([first, second].some((word) => word === "space" || word === "round")) return null;
+    const repeatX = second === void 0 ? first === "repeat" || first === "repeat-x" : first === "repeat";
+    const repeatY = second === void 0 ? first === "repeat" || first === "repeat-y" : second === "repeat";
+    return {
+      url,
+      spec: {
+        size,
+        x,
+        y,
+        repeatX,
+        repeatY,
+        origin: boxOf(at(raw.origin), "padding-box"),
+        clip: boxOf(clipValue, "border-box")
+      }
+    };
+  }
+  const resolve = (dimension, of) => dimension === "auto" ? null : "px" in dimension ? dimension.px : dimension.pct / 100 * of;
+  function paintedSize(spec, area, natural) {
+    if (!(natural.width > 0 && natural.height > 0)) return null;
+    if (spec.size.kind !== "lengths") {
+      const fit = spec.size.kind === "cover" ? Math.max : Math.min;
+      const scale = fit(area.width / natural.width, area.height / natural.height);
+      return { width: natural.width * scale, height: natural.height * scale };
+    }
+    const width = resolve(spec.size.width, area.width);
+    const height = resolve(spec.size.height, area.height);
+    if (width !== null && height !== null) return { width, height };
+    if (width !== null) return { width, height: width * natural.height / natural.width };
+    if (height !== null) return { width: height * natural.width / natural.height, height };
+    return { width: natural.width, height: natural.height };
+  }
+  function paintRect(spec, area, natural) {
+    const size = paintedSize(spec, area, natural);
+    if (!size || !(size.width > 0 && size.height > 0)) return null;
+    return {
+      x: (area.width - size.width) * spec.x.pct / 100 + spec.x.px,
+      y: (area.height - size.height) * spec.y.pct / 100 + spec.y.px,
+      width: size.width,
+      height: size.height
+    };
+  }
+  const EPSILON = 1;
+  function tilesVisibly(spec, rect, area) {
+    const coversX = rect.x <= EPSILON && rect.x + rect.width >= area.width - EPSILON;
+    const coversY = rect.y <= EPSILON && rect.y + rect.height >= area.height - EPSILON;
+    return spec.repeatX && !coversX || spec.repeatY && !coversY;
+  }
+  function mayBePicture(spec, area) {
+    if (!spec.repeatX && !spec.repeatY) return true;
+    if (spec.size.kind === "cover") return true;
+    if (spec.size.kind === "contain") return false;
+    const { width, height } = spec.size;
+    const fills = (dimension, of) => {
+      const length = resolve(dimension, of);
+      return length !== null && length >= of - EPSILON;
+    };
+    return (!spec.repeatX || fills(width, area.width)) && (!spec.repeatY || fills(height, area.height));
+  }
+  function knownPaintedSize(spec, area) {
+    if (spec.size.kind === "lengths") {
+      const width = resolve(spec.size.width, area.width);
+      const height = resolve(spec.size.height, area.height);
+      if (width !== null && height !== null) return { width, height };
+    }
+    return null;
+  }
   let ignored = () => false;
   function ignoreElements(predicate) {
     ignored = predicate;
   }
-  function backgroundUrl(element) {
-    const value = window.getComputedStyle(element).backgroundImage;
-    if (!value || value === "none") return "";
-    const match = /url\((['"]?)(.*?)\1\)/.exec(value);
-    const url = match?.[2] ?? "";
-    return url && !url.startsWith("#") ? url : "";
+  function backgroundOf(element) {
+    if (element.tagName === "BODY" || element.tagName === "HTML") return null;
+    const style = window.getComputedStyle(element);
+    const image = style.backgroundImage;
+    if (!image || image === "none") return null;
+    const parsed = parseBackground$1({
+      image,
+      size: style.backgroundSize,
+      positionX: style.backgroundPositionX,
+      positionY: style.backgroundPositionY,
+      repeat: style.backgroundRepeat,
+      origin: style.backgroundOrigin,
+      clip: style.backgroundClip,
+      attachment: style.backgroundAttachment
+    });
+    if (!parsed) return null;
+    return mayBePicture(parsed.spec, { width: element.offsetWidth, height: element.offsetHeight }) ? parsed : null;
   }
   function classify(node) {
     if (!node || typeof node !== "object") return null;
@@ -326,14 +485,16 @@
       case "VIDEO":
         return { element, kind: "video", url: "", pointable };
       default: {
-        const url = backgroundUrl(element);
-        return url ? { element, kind: "background", url, pointable } : null;
+        const background = backgroundOf(element);
+        return background ? { element, kind: "background", url: background.url, pointable, background: background.spec } : null;
       }
     }
   }
   function isBigEnough(target, minSize) {
     const rect = target.element.getBoundingClientRect();
-    return rect.width >= minSize && rect.height >= minSize;
+    if (!(rect.width >= minSize && rect.height >= minSize)) return false;
+    const painted = target.background && knownPaintedSize(target.background, { width: rect.width, height: rect.height });
+    return !painted || painted.width >= minSize && painted.height >= minSize;
   }
   function* walk(root2) {
     for (const element of root2.querySelectorAll("*")) {
@@ -1360,9 +1521,9 @@
     ctx.fillStyle = "#ffffff";
     ctx.fillRect(0, 0, width, height);
     ctx.drawImage(source, 0, 0, width, height);
-    const jpeg = await new Promise((resolve, reject) => {
+    const jpeg = await new Promise((resolve2, reject) => {
       try {
-        canvas.toBlob(resolve, "image/jpeg", settings2.jpegQuality);
+        canvas.toBlob(resolve2, "image/jpeg", settings2.jpegQuality);
       } catch (e) {
         reject(e);
       }
@@ -1379,11 +1540,11 @@
     };
   }
   function loadWithCors(url) {
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve2, reject) => {
       const probe2 = new Image();
       probe2.crossOrigin = "anonymous";
       probe2.decoding = "sync";
-      probe2.onload = () => resolve(probe2);
+      probe2.onload = () => resolve2(probe2);
       probe2.onerror = () => reject(new Error("CORS load failed"));
       probe2.src = url;
     });
@@ -1440,12 +1601,12 @@
   let open = null;
   function database() {
     if (open) return open;
-    open = new Promise((resolve) => {
+    open = new Promise((resolve2) => {
       let request2;
       try {
         request2 = indexedDB.open(DB_NAME, DB_VERSION);
       } catch {
-        resolve(null);
+        resolve2(null);
         return;
       }
       request2.onupgradeneeded = () => {
@@ -1461,28 +1622,28 @@
           db.close();
           open = null;
         };
-        resolve(db);
+        resolve2(db);
       };
-      request2.onerror = () => resolve(null);
-      request2.onblocked = () => resolve(null);
+      request2.onerror = () => resolve2(null);
+      request2.onblocked = () => resolve2(null);
     });
     return open;
   }
   function transact(mode, stores, body2) {
     return database().then(
-      (db) => new Promise((resolve) => {
+      (db) => new Promise((resolve2) => {
         if (!db) {
-          resolve(false);
+          resolve2(false);
           return;
         }
         try {
           const tx = db.transaction(stores, mode);
-          tx.oncomplete = () => resolve(true);
-          tx.onabort = () => resolve(false);
-          tx.onerror = () => resolve(false);
+          tx.oncomplete = () => resolve2(true);
+          tx.onabort = () => resolve2(false);
+          tx.onerror = () => resolve2(false);
           body2(tx);
         } catch {
-          resolve(false);
+          resolve2(false);
         }
       })
     );
@@ -2332,13 +2493,13 @@
     const spacing = settings2.lineSpacing > 0 ? settings2.lineSpacing : 1.25;
     const perCharacter = wrapsPerCharacter(block);
     const measure = (candidate) => ctx.measureText(candidate).width;
-    const setFont = (px) => {
-      ctx.font = `${px}px ${fontFamily}`;
+    const setFont = (px2) => {
+      ctx.font = `${px2}px ${fontFamily}`;
     };
     const { size } = fitTextBlock(
       setFont,
       measure,
-      (px) => px * spacing,
+      (px2) => px2 * spacing,
       text2,
       boxW,
       boxH,
@@ -2536,7 +2697,7 @@
         }
       }
     }
-    const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+    const blob = await new Promise((resolve2) => canvas.toBlob(resolve2, "image/png"));
     if (!blob) throw new Error("Could not encode the translated image");
     return blob;
   }
@@ -2545,11 +2706,74 @@
   const isCovered = (img) => covers.has(img);
   const COVER_MARK = "data-lens-translate";
   const isCover = (node) => node.hasAttribute(COVER_MARK);
+  const px = (value) => Number.parseFloat(value) || 0;
+  const borderOf = (style) => ({
+    top: px(style.borderTopWidth),
+    right: px(style.borderRightWidth),
+    bottom: px(style.borderBottomWidth),
+    left: px(style.borderLeftWidth)
+  });
+  const paddingOf = (style) => ({
+    top: px(style.paddingTop),
+    right: px(style.paddingRight),
+    bottom: px(style.paddingBottom),
+    left: px(style.paddingLeft)
+  });
+  function inset(style, box) {
+    const border = borderOf(style);
+    if (box === "border-box") return { top: 0, right: 0, bottom: 0, left: 0 };
+    if (box === "padding-box") return border;
+    const padding = paddingOf(style);
+    return {
+      top: border.top + padding.top,
+      right: border.right + padding.right,
+      bottom: border.bottom + padding.bottom,
+      left: border.left + padding.left
+    };
+  }
   function place(cover, img) {
-    cover.style.left = `${img.offsetLeft}px`;
-    cover.style.top = `${img.offsetTop}px`;
-    cover.style.width = `${img.offsetWidth}px`;
-    cover.style.height = `${img.offsetHeight}px`;
+    const target = cover.element;
+    const style = getComputedStyle(img);
+    if (!cover.background) {
+      const border = borderOf(style);
+      const padding = paddingOf(style);
+      const left = border.left + padding.left;
+      const top = border.top + padding.top;
+      target.style.left = `${img.offsetLeft + left}px`;
+      target.style.top = `${img.offsetTop + top}px`;
+      target.style.width = `${img.offsetWidth - left - border.right - padding.right}px`;
+      target.style.height = `${img.offsetHeight - top - border.bottom - padding.bottom}px`;
+      return true;
+    }
+    const { spec, natural } = cover.background;
+    const width = img.offsetWidth;
+    const height = img.offsetHeight;
+    const origin = inset(style, spec.origin);
+    const area = {
+      width: width - origin.left - origin.right,
+      height: height - origin.top - origin.bottom
+    };
+    const rect = paintRect(spec, area, natural);
+    if (!rect || tilesVisibly(spec, rect, area)) return false;
+    const x = origin.left + rect.x;
+    const y = origin.top + rect.y;
+    const clip = inset(style, spec.clip);
+    const cut = {
+      top: Math.max(0, clip.top - y),
+      right: Math.max(0, x + rect.width - (width - clip.right)),
+      bottom: Math.max(0, y + rect.height - (height - clip.bottom)),
+      left: Math.max(0, clip.left - x)
+    };
+    if (cut.left + cut.right >= rect.width || cut.top + cut.bottom >= rect.height) return false;
+    target.style.left = `${img.offsetLeft + x}px`;
+    target.style.top = `${img.offsetTop + y}px`;
+    target.style.width = `${rect.width}px`;
+    target.style.height = `${rect.height}px`;
+    const radius = style.borderRadius.trim();
+    const round = radius && !/^0(px)?$/.test(radius) ? ` round ${radius}` : "";
+    const visible = `inset(${cut.top}px ${cut.right}px ${cut.bottom}px ${cut.left}px${round})`;
+    target.style.setProperty("clip-path", visible, "important");
+    return true;
   }
   function showOrHide(cover) {
     if (cover.hiddenFor.size) cover.element.style.setProperty("visibility", "hidden", "important");
@@ -2579,33 +2803,44 @@
         "pointer-events: none",
         // Above the image, below anything the page floats on top of it.
         "z-index: 1",
-        // Inherit the shape so rounded media does not get square corners.
-        `border-radius: ${getComputedStyle(img).borderRadius}`,
-        `object-fit: ${getComputedStyle(img).objectFit || "fill"}`
+        // A background's window, corners included, is cut out by place().
+        ...options.background ? ["border-radius: 0", "object-fit: fill"] : [
+          // Inherit the shape so rounded media does not get square corners.
+          `border-radius: ${getComputedStyle(img).borderRadius}`,
+          // And how the picture sits in its box: `contain` letterboxes it,
+          // and where in the box it lands is object-position's to say.
+          `object-fit: ${getComputedStyle(img).objectFit || "fill"}`,
+          `object-position: ${getComputedStyle(img).objectPosition || "50% 50%"}`
+        ]
       ].map((rule) => `${rule} !important`).join(";")
     );
     if (getComputedStyle(parent).position === "static") {
       parent.style.setProperty("position", "relative", "important");
     }
-    img.insertAdjacentElement("afterend", element);
-    place(element, img);
-    const ref = new WeakRef(img);
-    const resize = new ResizeObserver(() => {
-      const current = ref.deref();
-      if (!current) return;
-      if (!current.isConnected) drop(current);
-      else place(element, current);
-    });
-    resize.observe(img);
     const cover = {
       element,
       blobUrl,
-      resize,
-      hiddenFor: /* @__PURE__ */ new Set(),
-      onGone: options.onGone,
+      background: options.background,
+      // Both are filled in below, once what they need exists.
+      resize: void 0,
       stopWatching: () => {
-      }
+      },
+      hiddenFor: /* @__PURE__ */ new Set(),
+      onGone: options.onGone
     };
+    img.insertAdjacentElement("afterend", element);
+    if (!place(cover, img)) {
+      element.remove();
+      URL.revokeObjectURL(blobUrl);
+      return false;
+    }
+    const ref = new WeakRef(img);
+    cover.resize = new ResizeObserver(() => {
+      const current = ref.deref();
+      if (!current) return;
+      if (!current.isConnected || !place(cover, current)) drop(current);
+    });
+    cover.resize.observe(img);
     cover.stopWatching = watchPicture(img, {
       stale: () => {
         const current = ref.deref();
@@ -3089,7 +3324,7 @@ ${OVERLAY_CSS}`;
     try {
       const key = cacheKey(target.url, settings);
       const displayedWidth = img.getBoundingClientRect().width;
-      if (settings.renderMode === "canvas" && target.url) {
+      if (settings.renderMode === "canvas" && target.url && target.kind !== "background") {
         const done = getRender(
           renderKey(key, settings, displayedWidth),
           settings,
@@ -3139,10 +3374,24 @@ ${OVERLAY_CSS}`;
           if (target.url) {
             putRender(renderKey(key, settings, displayedWidth), blob, settings, size);
           }
-          if (!coverImage(img, URL.createObjectURL(blob), { onGone: forgetter(img) })) {
-            toast("This image cannot be covered here");
+          const covered = coverImage(img, URL.createObjectURL(blob), {
+            onGone: forgetter(img),
+            ...target.background ? {
+              background: {
+                spec: target.background,
+                natural: { width: prepared.width, height: prepared.height }
+              }
+            } : {}
+          });
+          if (!covered) {
+            toast(
+              target.kind === "background" ? "This background is tiled or clipped in a way a translation cannot follow" : "This image cannot be covered here"
+            );
             return;
           }
+        } else if (target.kind === "background") {
+          toast("Backgrounds need the canvas renderer (Render as, in settings)");
+          return;
         } else if (!renderTranslation(
           img,
           result.blocks,

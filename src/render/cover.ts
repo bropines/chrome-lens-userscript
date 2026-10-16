@@ -1,3 +1,5 @@
+import { paintRect, tilesVisibly } from './background.js';
+import type { BackgroundSpec } from './background.js';
 import { watchPicture } from './watch.js';
 
 /**
@@ -28,6 +30,8 @@ import { watchPicture } from './watch.js';
 interface Cover {
   element: HTMLImageElement;
   blobUrl: string;
+  /** Set for a CSS background: where, inside the element, the picture is painted. */
+  background: BackgroundOptions | undefined;
   resize: ResizeObserver;
   stopWatching: () => void;
   /** Why the cover is currently out of sight; empty when it is showing. */
@@ -65,23 +69,127 @@ export const COVER_MARK = 'data-lens-translate';
 
 export const isCover = (node: Element): boolean => node.hasAttribute(COVER_MARK);
 
+const px = (value: string): number => Number.parseFloat(value) || 0;
+
+/** The widths of one kind of edge on an element, in pixels. */
+interface Edges {
+  top: number;
+  right: number;
+  bottom: number;
+  left: number;
+}
+
+const borderOf = (style: CSSStyleDeclaration): Edges => ({
+  top: px(style.borderTopWidth),
+  right: px(style.borderRightWidth),
+  bottom: px(style.borderBottomWidth),
+  left: px(style.borderLeftWidth),
+});
+
+const paddingOf = (style: CSSStyleDeclaration): Edges => ({
+  top: px(style.paddingTop),
+  right: px(style.paddingRight),
+  bottom: px(style.paddingBottom),
+  left: px(style.paddingLeft),
+});
+
+/** How far inside the border box each named box starts. */
+function inset(style: CSSStyleDeclaration, box: BackgroundSpec['origin']): Edges {
+  const border = borderOf(style);
+  if (box === 'border-box') return { top: 0, right: 0, bottom: 0, left: 0 };
+  if (box === 'padding-box') return border;
+  const padding = paddingOf(style);
+  return {
+    top: border.top + padding.top,
+    right: border.right + padding.right,
+    bottom: border.bottom + padding.bottom,
+    left: border.left + padding.left,
+  };
+}
+
 /**
- * Match the image's box.
+ * Put the cover where the picture is painted.
  *
  * offsetLeft/offsetTop are measured against the same offsetParent an absolutely
  * positioned sibling resolves against, so these numbers need no correction for
  * scrolling or for where the page happens to be.
+ *
+ * For a replaced element (`<img>`, `<canvas>`, `<video>`) the picture is its
+ * *content* box, because that is what `object-fit` fits into: with padding or a
+ * border, the whole box was a few pixels too big on each side. For a background
+ * it is wherever `background-size` and `-position` put it inside the positioning
+ * area, clipped to the box the background is clipped to - an element with
+ * `background-size: cover` paints a picture far bigger than itself and shows a
+ * window onto it, and a cover the size of the element would show all of it.
+ *
+ * Returns false when there is nowhere sensible to put it, which for a
+ * background means the browser tiled it.
  */
-function place(cover: HTMLImageElement, img: HTMLElement): void {
-  cover.style.left = `${img.offsetLeft}px`;
-  cover.style.top = `${img.offsetTop}px`;
-  cover.style.width = `${img.offsetWidth}px`;
-  cover.style.height = `${img.offsetHeight}px`;
+function place(cover: Cover, img: HTMLElement): boolean {
+  const target = cover.element;
+  const style = getComputedStyle(img);
+
+  if (!cover.background) {
+    const border = borderOf(style);
+    const padding = paddingOf(style);
+    const left = border.left + padding.left;
+    const top = border.top + padding.top;
+    target.style.left = `${img.offsetLeft + left}px`;
+    target.style.top = `${img.offsetTop + top}px`;
+    target.style.width = `${img.offsetWidth - left - border.right - padding.right}px`;
+    target.style.height = `${img.offsetHeight - top - border.bottom - padding.bottom}px`;
+    return true;
+  }
+
+  const { spec, natural } = cover.background;
+  const width = img.offsetWidth;
+  const height = img.offsetHeight;
+  const origin = inset(style, spec.origin);
+  const area = {
+    width: width - origin.left - origin.right,
+    height: height - origin.top - origin.bottom,
+  };
+
+  const rect = paintRect(spec, area, natural);
+  if (!rect || tilesVisibly(spec, rect, area)) return false;
+
+  // Relative to the border box, which is what offsetLeft/offsetTop name.
+  const x = origin.left + rect.x;
+  const y = origin.top + rect.y;
+  const clip = inset(style, spec.clip);
+  const cut = {
+    top: Math.max(0, clip.top - y),
+    right: Math.max(0, x + rect.width - (width - clip.right)),
+    bottom: Math.max(0, y + rect.height - (height - clip.bottom)),
+    left: Math.max(0, clip.left - x),
+  };
+  // Nothing of it is inside what the background is clipped to.
+  if (cut.left + cut.right >= rect.width || cut.top + cut.bottom >= rect.height) return false;
+
+  target.style.left = `${img.offsetLeft + x}px`;
+  target.style.top = `${img.offsetTop + y}px`;
+  target.style.width = `${rect.width}px`;
+  target.style.height = `${rect.height}px`;
+
+  // The element's rounded corners clip its background, so they are applied to
+  // the visible window to stay where the page drew them.
+  const radius = style.borderRadius.trim();
+  const round = radius && !/^0(px)?$/.test(radius) ? ` round ${radius}` : '';
+  const visible = `inset(${cut.top}px ${cut.right}px ${cut.bottom}px ${cut.left}px${round})`;
+  target.style.setProperty('clip-path', visible, 'important');
+  return true;
 }
 
 function showOrHide(cover: Cover): void {
   if (cover.hiddenFor.size) cover.element.style.setProperty('visibility', 'hidden', 'important');
   else cover.element.style.removeProperty('visibility');
+}
+
+/** What a background cover needs to know that the element's own style does not say. */
+export interface BackgroundOptions {
+  spec: BackgroundSpec;
+  /** The picture's own size - the original, not the supersampled rendering. */
+  natural: { width: number; height: number };
 }
 
 export interface CoverOptions {
@@ -92,6 +200,12 @@ export interface CoverOptions {
    * is stale.
    */
   onGone?: () => void;
+  /**
+   * Present for a CSS background. Without it the cover assumes a replaced
+   * element and fills its content box, which is wrong for a background twice
+   * over: the picture is usually not the element's size, and it can be tiled.
+   */
+  background?: BackgroundOptions;
 }
 
 /**
@@ -131,9 +245,17 @@ export function coverImage(
       'pointer-events: none',
       // Above the image, below anything the page floats on top of it.
       'z-index: 1',
-      // Inherit the shape so rounded media does not get square corners.
-      `border-radius: ${getComputedStyle(img).borderRadius}`,
-      `object-fit: ${getComputedStyle(img).objectFit || 'fill'}`,
+      // A background's window, corners included, is cut out by place().
+      ...(options.background
+        ? ['border-radius: 0', 'object-fit: fill']
+        : [
+            // Inherit the shape so rounded media does not get square corners.
+            `border-radius: ${getComputedStyle(img).borderRadius}`,
+            // And how the picture sits in its box: `contain` letterboxes it,
+            // and where in the box it lands is object-position's to say.
+            `object-fit: ${getComputedStyle(img).objectFit || 'fill'}`,
+            `object-position: ${getComputedStyle(img).objectPosition || '50% 50%'}`,
+          ]),
     ]
       .map((rule) => `${rule} !important`)
       .join(';')
@@ -145,31 +267,37 @@ export function coverImage(
     parent.style.setProperty('position', 'relative', 'important');
   }
 
+  const cover: Cover = {
+    element,
+    blobUrl,
+    background: options.background,
+    // Both are filled in below, once what they need exists.
+    resize: undefined as unknown as ResizeObserver,
+    stopWatching: () => {},
+    hiddenFor: new Set(),
+    onGone: options.onGone,
+  };
+
   img.insertAdjacentElement('afterend', element);
-  place(element, img);
+  if (!place(cover, img)) {
+    element.remove();
+    URL.revokeObjectURL(blobUrl);
+    return false;
+  }
 
   // The callbacks hold a weak reference, not the image: the cover is kept in a
   // registry that outlives the image, and a closure here would make that
   // registry the thing keeping a discarded element in memory.
   const ref = new WeakRef(img);
-  const resize = new ResizeObserver(() => {
+  cover.resize = new ResizeObserver(() => {
     const current = ref.deref();
     if (!current) return;
     // An element that leaves the document is reported as having shrunk to
-    // nothing, which is the earliest anyone is told.
-    if (!current.isConnected) drop(current);
-    else place(element, current);
+    // nothing, which is the earliest anyone is told. A background that has
+    // since been tiled by a resize has nowhere to be either.
+    if (!current.isConnected || !place(cover, current)) drop(current);
   });
-  resize.observe(img);
-
-  const cover: Cover = {
-    element,
-    blobUrl,
-    resize,
-    hiddenFor: new Set(),
-    onGone: options.onGone,
-    stopWatching: () => {},
-  };
+  cover.resize.observe(img);
   cover.stopWatching = watchPicture(img, {
     stale: () => {
       const current = ref.deref();

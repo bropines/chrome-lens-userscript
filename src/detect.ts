@@ -13,6 +13,9 @@
  * into open shadow roots, which `document.images` does not.
  */
 
+import { knownPaintedSize, mayBePicture, parseBackground } from './render/background.js';
+import type { BackgroundSpec } from './render/background.js';
+
 export type TargetKind = 'img' | 'canvas' | 'video' | 'background';
 
 export interface Target {
@@ -40,6 +43,12 @@ export interface Target {
    * the pinned one should not prefer it.
    */
   pointable: boolean;
+  /**
+   * How a background is painted: its size, position, repeat and the box it is
+   * positioned against. Only a `background` has one, and it is what lets the
+   * cover land where the browser put the picture instead of on the whole box.
+   */
+  background?: BackgroundSpec;
 }
 
 /**
@@ -62,15 +71,39 @@ export function ignoreElements(predicate: (element: Element) => boolean): void {
   ignored = predicate;
 }
 
-/** The first `url()` in a computed background, if it is an image at all. */
-function backgroundUrl(element: Element): string {
-  const value = window.getComputedStyle(element).backgroundImage;
-  if (!value || value === 'none') return '';
-  const match = /url\((['"]?)(.*?)\1\)/.exec(value);
-  const url = match?.[2] ?? '';
-  // A gradient is a background image too, and there is nothing to translate in
-  // one; so is a 1x1 spacer, which the size test below throws out anyway.
-  return url && !url.startsWith('#') ? url : '';
+/**
+ * The picture in an element's background, if it has one worth the name.
+ *
+ * A gradient has nothing to translate, a `url(#id)` is a paint server, and a
+ * 1x1 spacer is thrown out by the size test. What this adds is the question of
+ * whether the background is *one picture*: a pattern that tiles, a sprite, a
+ * texture behind a wrapper are all `background-image: url()` and none of them
+ * has text in it to translate.
+ */
+function backgroundOf(element: HTMLElement): { url: string; spec: BackgroundSpec } | null {
+  // The root and the body are not pictures whatever they are painted with. A
+  // site that tiles a texture behind everything puts it on one of them, and
+  // because a hover takes the nearest picture up the tree, that made every spot
+  // of the page without a picture of its own offer to translate the texture.
+  if (element.tagName === 'BODY' || element.tagName === 'HTML') return null;
+  const style = window.getComputedStyle(element);
+  const image = style.backgroundImage;
+  if (!image || image === 'none') return null;
+
+  const parsed = parseBackground({
+    image,
+    size: style.backgroundSize,
+    positionX: style.backgroundPositionX,
+    positionY: style.backgroundPositionY,
+    repeat: style.backgroundRepeat,
+    origin: style.backgroundOrigin,
+    clip: style.backgroundClip,
+    attachment: style.backgroundAttachment,
+  });
+  if (!parsed) return null;
+  return mayBePicture(parsed.spec, { width: element.offsetWidth, height: element.offsetHeight })
+    ? parsed
+    : null;
 }
 
 /**
@@ -101,8 +134,10 @@ export function classify(node: unknown): Target | null {
     case 'VIDEO':
       return { element, kind: 'video', url: '', pointable };
     default: {
-      const url = backgroundUrl(element);
-      return url ? { element, kind: 'background', url, pointable } : null;
+      const background = backgroundOf(element);
+      return background
+        ? { element, kind: 'background', url: background.url, pointable, background: background.spec }
+        : null;
     }
   }
 }
@@ -110,7 +145,12 @@ export function classify(node: unknown): Target | null {
 /** Rendered size, which is what decides whether this is a picture or an icon. */
 export function isBigEnough(target: Target, minSize: number): boolean {
   const rect = target.element.getBoundingClientRect();
-  return rect.width >= minSize && rect.height >= minSize;
+  if (!(rect.width >= minSize && rect.height >= minSize)) return false;
+  // A background is painted at its own size, not the element's: a 24px icon
+  // on a full-width button is a big element and a tiny picture.
+  const painted =
+    target.background && knownPaintedSize(target.background, { width: rect.width, height: rect.height });
+  return !painted || (painted.width >= minSize && painted.height >= minSize);
 }
 
 /**

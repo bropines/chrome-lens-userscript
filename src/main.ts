@@ -166,7 +166,10 @@ async function translate(target: Target): Promise<void> {
 
     // A finished rendering short-circuits everything: no pixels to fetch, no
     // canvas to paint, no round trip. This is the path a repeat toggle takes.
-    if (settings.renderMode === 'canvas' && target.url) {
+    //
+    // Not for a background: where its cover goes depends on the picture's own
+    // size, which a stored rendering does not carry and the pixels do.
+    if (settings.renderMode === 'canvas' && target.url && target.kind !== 'background') {
       const done = getRender(
         renderKey(key, settings, displayedWidth),
         settings,
@@ -235,10 +238,30 @@ async function translate(target: Target): Promise<void> {
         if (target.url) {
           putRender(renderKey(key, settings, displayedWidth), blob, settings, size);
         }
-        if (!coverImage(img, URL.createObjectURL(blob), { onGone: forgetter(img) })) {
-          toast('This image cannot be covered here');
+        const covered = coverImage(img, URL.createObjectURL(blob), {
+          onGone: forgetter(img),
+          ...(target.background
+            ? {
+                background: {
+                  spec: target.background,
+                  natural: { width: prepared.width, height: prepared.height },
+                },
+              }
+            : {}),
+        });
+        if (!covered) {
+          toast(
+            target.kind === 'background'
+              ? 'This background is tiled or clipped in a way a translation cannot follow'
+              : 'This image cannot be covered here'
+          );
           return;
         }
+      } else if (target.kind === 'background') {
+        // The DOM renderer lays its lines over the element's whole box, which is
+        // only where the picture is for a replaced element.
+        toast('Backgrounds need the canvas renderer (Render as, in settings)');
+        return;
       } else if (
         !renderTranslation(
           img,
