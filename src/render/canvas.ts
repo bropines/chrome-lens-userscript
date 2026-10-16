@@ -2,18 +2,24 @@ import {
   MIN_FONT_SIZE,
   OUTLINE_RATIO,
   argbToCss,
+  CORNER_PUNCT,
   buildLineText,
   fitFontSize,
+  fitInside,
   fitTextBlock,
   isRtl,
   justification,
+  rectOf,
+  roomFor,
   shouldStayVertical,
+  verticalRuns,
   wrapText,
   wrapsPerCharacter,
 } from './layout.js';
+import type { Rect } from './layout.js';
 import { boxCorners, convexHull, fillHull } from './hull.js';
 import type { Point } from './hull.js';
-import type { Geometry, RenderOptions, TranslatedLine, TranslationBlock } from '../types.js';
+import type { RenderOptions, TranslatedLine, TranslationBlock } from '../types.js';
 
 /**
  * Bake the translation into a bitmap that replaces the image.
@@ -28,33 +34,6 @@ import type { Geometry, RenderOptions, TranslatedLine, TranslationBlock } from '
  */
 
 const DEG = Math.PI / 180;
-
-/** Ranges CSS text-orientation: mixed keeps upright in vertical writing. */
-const UPRIGHT_RANGES: ReadonlyArray<readonly [number, number]> = [
-  [0x1100, 0x11ff], [0x2e80, 0x303f], [0x3041, 0x33ff], [0x3400, 0x4dbf],
-  [0x4e00, 0x9fff], [0xac00, 0xd7af], [0xf900, 0xfaff], [0xfe10, 0xfe4f],
-  [0xff00, 0xff60], [0xffe0, 0xffe6],
-];
-
-const isUpright = (char: string): boolean => {
-  const code = char.codePointAt(0) ?? 0;
-  return UPRIGHT_RANGES.some(([low, high]) => code >= low && code <= high);
-};
-
-/** Small punctuation hangs in the upper right of its em square. */
-const CORNER_PUNCT = new Set('、。，．');
-
-function verticalRuns(text: string): Array<[boolean, string]> {
-  const runs: Array<[boolean, string]> = [];
-  for (const char of text) {
-    let upright = isUpright(char);
-    const last = runs[runs.length - 1];
-    if (/\s/.test(char) && last) upright = last[0];
-    if (last && last[0] === upright) last[1] += char;
-    else runs.push([upright, char]);
-  }
-  return runs;
-}
 
 interface DrawContext {
   ctx: CanvasRenderingContext2D;
@@ -155,106 +134,6 @@ function drawVertical(
  * the translation is not itself going to be set vertically, the paragraph box
  * becomes one text area and the text is re-wrapped into it.
  */
-/**
- * Bring a box inside the image, by the cheapest means that works.
- *
- * The bound is the picture itself: nothing may be drawn where the canvas will
- * only clip it. There are two ways back in and they are not equal - moving the
- * box changes nothing about the text, while shrinking it costs a smaller font.
- * So shrink only by what no amount of moving could fix, then move.
- *
- * For a rotated box the bound is its axis-aligned extent, because that is the
- * shape the canvas actually clips against: `w * |cos| + h * |sin|` is how far a
- * rotated rectangle really reaches.
- */
-function fitInside(
-  box: { cx: number; cy: number; w: number; h: number; angle: number },
-  width: number,
-  height: number
-): { cx: number; cy: number; w: number; h: number } {
-  const radians = box.angle * DEG;
-  const cos = Math.abs(Math.cos(radians));
-  const sin = Math.abs(Math.sin(radians));
-
-  const spanX = box.w * cos + box.h * sin;
-  const spanY = box.w * sin + box.h * cos;
-  // Only as far as it takes to fit at all; a box that already fits is untouched.
-  const scale = Math.min(1, width / spanX, height / spanY);
-  const w = box.w * scale;
-  const h = box.h * scale;
-
-  const halfX = (w * cos + h * sin) / 2;
-  const halfY = (w * sin + h * cos) / 2;
-  const place = (centre: number, half: number, limit: number): number =>
-    half * 2 >= limit ? limit / 2 : Math.min(Math.max(centre, half), limit - half);
-
-  return { cx: place(box.cx, halfX, width), cy: place(box.cy, halfY, height), w, h };
-}
-
-interface Rect {
-  left: number;
-  top: number;
-  right: number;
-  bottom: number;
-}
-
-const rectOf = (geometry: Geometry, width: number, height: number): Rect => ({
-  left: (geometry.cx - geometry.w / 2) * width,
-  right: (geometry.cx + geometry.w / 2) * width,
-  top: (geometry.cy - geometry.h / 2) * height,
-  bottom: (geometry.cy + geometry.h / 2) * height,
-});
-
-/** Never let two paragraphs share an edge; a pixel of daylight reads as one. */
-const GAP = 2;
-
-/**
- * How much room a paragraph actually has.
- *
- * The detected box hugs the glyphs, so it has to grow - a bubble is round and
- * has space the box does not describe. Growing by a fixed multiple is a guess
- * that is wrong in both directions at once: too little where a bubble is
- * generous, and too much where the next one is close, which is how a
- * translation ends up written across its neighbour.
- *
- * The real limit is the neighbours. Each side grows until it would reach
- * another paragraph, capped by the multiple and by the picture. Only a
- * paragraph that actually shares the band on the perpendicular axis can block a
- * side: one diagonally away is not in the way.
- *
- * Rotation is ignored here, deliberately. These are axis-aligned extents of
- * boxes that come back within a tenth of a degree of upright in practice, and
- * an approximation that errs towards less room cannot cause an overlap.
- */
-function roomFor(own: Rect, others: Rect[], growth: number, width: number, height: number): Rect {
-  const growX = ((own.right - own.left) * (growth - 1)) / 2;
-  const growY = ((own.bottom - own.top) * (growth - 1)) / 2;
-
-  let left = Math.max(0, own.left - growX);
-  let right = Math.min(width, own.right + growX);
-  let top = Math.max(0, own.top - growY);
-  let bottom = Math.min(height, own.bottom + growY);
-
-  for (const other of others) {
-    if (other.bottom > own.top && other.top < own.bottom) {
-      if (other.right <= own.left) left = Math.max(left, other.right + GAP);
-      if (other.left >= own.right) right = Math.min(right, other.left - GAP);
-    }
-    if (other.right > own.left && other.left < own.right) {
-      if (other.bottom <= own.top) top = Math.max(top, other.bottom + GAP);
-      if (other.top >= own.bottom) bottom = Math.min(bottom, other.top - GAP);
-    }
-  }
-
-  // A neighbour closer than the box itself would invert it; the box wins.
-  return {
-    left: Math.min(left, own.left),
-    right: Math.max(right, own.right),
-    top: Math.min(top, own.top),
-    bottom: Math.max(bottom, own.bottom),
-  };
-}
-
 function drawReflowedParagraph(
   draw: DrawContext,
   block: TranslationBlock,

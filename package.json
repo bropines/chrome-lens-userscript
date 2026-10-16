@@ -20,13 +20,16 @@
     "dev": "vite",
     "build": "tsc --noEmit && bun scripts/check-layers.ts && vite build",
     "typecheck": "tsc --noEmit",
+    "test": "bun test",
     "check": "bun scripts/check-layers.ts"
   },
   "devDependencies": {
     "@bufbuild/buf": "^1.73.0",
-    "@bufbuild/protoc-gen-es": "^2.15.0",
     "@bufbuild/protobuf": "^2.15.0",
+    "@bufbuild/protoc-gen-es": "^2.15.0",
+    "@types/bun": "^1.4.3",
     "@types/node": "^22.20.3",
+    "fake-indexeddb": "^6.2.6",
     "typescript": "^7.0.2",
     "vite": "^7.1.0",
     "vite-plugin-monkey": "^5.0.0"

@@ -1,0 +1,5 @@
+[test]
+# The page is stubbed rather than emulated: what the tests exercise is the
+# arithmetic, and a stand-in with a predictable ruler says more about it than a
+# DOM implementation whose text metrics nobody can reason about.
+preload = ["./test/setup.ts"]

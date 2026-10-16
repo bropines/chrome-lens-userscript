@@ -18,9 +18,16 @@ jobs:
 
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          # Pinned, not `latest`: dist/ is compared byte for byte below, and a
+          # bundler or runtime upgrade that changes the output would fail every
+          # pull request at once for a reason that is in nobody's diff. Bump it
+          # on purpose, together with a rebuilt dist/.
+          bun-version: 1.3.14
 
       - run: bun install --frozen-lockfile
+
+      - name: tests
+        run: bun test
 
       # dist/ is committed so the script installs straight from the repo, which
       # means a stale one ships silently: @version says the new number and the

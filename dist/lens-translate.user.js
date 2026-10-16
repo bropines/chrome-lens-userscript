@@ -1494,21 +1494,29 @@
     "yi"
   ]);
   const CJK_LANGS = /* @__PURE__ */ new Set(["ja", "zh", "ko", "yue"]);
-  const measureCtx = document.createElement("canvas").getContext("2d");
+  const DEG$1 = Math.PI / 180;
+  let measureCtx;
+  function measurer() {
+    if (measureCtx === void 0) {
+      measureCtx = typeof document === "undefined" ? null : document.createElement("canvas").getContext("2d");
+    }
+    return measureCtx;
+  }
   const baseLang = (tag) => tag.split("-")[0]?.toLowerCase() ?? "";
-  function fitFontSize(str, boxWidth, boxHeight, fontFamily) {
-    if (!measureCtx) return MIN_FONT_SIZE;
+  function fitFontSize(str, boxWidth, boxHeight, fontFamily, maxSize = MAX_FONT_SIZE) {
+    const ctx = measurer();
+    if (!ctx) return MIN_FONT_SIZE;
     let low = MIN_FONT_SIZE;
-    let high = MAX_FONT_SIZE;
+    let high = maxSize;
     while (low <= high) {
       const mid = low + high >> 1;
-      measureCtx.font = `${mid}px ${fontFamily}`;
-      const metrics = measureCtx.measureText(str);
+      ctx.font = `${mid}px ${fontFamily}`;
+      const metrics = ctx.measureText(str);
       const height = metrics.fontBoundingBoxAscent + metrics.fontBoundingBoxDescent;
       if (metrics.width >= boxWidth || height >= boxHeight) high = mid - 1;
       else low = mid + 1;
     }
-    return Math.max(MIN_FONT_SIZE, Math.min(low - 1, MAX_FONT_SIZE));
+    return Math.max(MIN_FONT_SIZE, Math.min(low - 1, maxSize));
   }
   function buildLineText(translation, line, nextLine) {
     let out = "";
@@ -1542,9 +1550,9 @@
     }
     return lines;
   }
-  function fitTextBlock(setFont, measure, lineHeight, text2, boxWidth, boxHeight, perCharacter = false) {
+  function fitTextBlock(setFont, measure, lineHeight, text2, boxWidth, boxHeight, perCharacter = false, maxSize = MAX_FONT_SIZE) {
     let low = MIN_FONT_SIZE;
-    let high = MAX_FONT_SIZE;
+    let high = maxSize;
     let best = [];
     while (low <= high) {
       const mid = low + high >> 1;
@@ -1557,7 +1565,7 @@
         best = lines;
       }
     }
-    const size = Math.max(MIN_FONT_SIZE, Math.min(low - 1, MAX_FONT_SIZE));
+    const size = Math.max(MIN_FONT_SIZE, Math.min(low - 1, maxSize));
     if (!best.length) {
       setFont(size);
       best = wrapText(measure, text2, boxWidth, perCharacter);
@@ -1592,6 +1600,79 @@
     };
     const value = map[alignment] ?? "center";
     return rtl && value === "flex-start" ? "flex-end" : value;
+  }
+  const UPRIGHT_RANGES = [
+    [4352, 4607],
+    [11904, 12351],
+    [12353, 13311],
+    [13312, 19903],
+    [19968, 40959],
+    [44032, 55215],
+    [63744, 64255],
+    [65040, 65103],
+    [65280, 65376],
+    [65504, 65510]
+  ];
+  const isUpright = (char) => {
+    const code = char.codePointAt(0) ?? 0;
+    return UPRIGHT_RANGES.some(([low, high]) => code >= low && code <= high);
+  };
+  const CORNER_PUNCT = new Set("、。，．");
+  function verticalRuns(text2) {
+    const runs = [];
+    for (const char of text2) {
+      let upright = isUpright(char);
+      const last = runs[runs.length - 1];
+      if (/\s/.test(char) && last) upright = last[0];
+      if (last && last[0] === upright) last[1] += char;
+      else runs.push([upright, char]);
+    }
+    return runs;
+  }
+  function fitInside(box, width, height) {
+    const radians = box.angle * DEG$1;
+    const cos = Math.abs(Math.cos(radians));
+    const sin = Math.abs(Math.sin(radians));
+    const spanX = box.w * cos + box.h * sin;
+    const spanY = box.w * sin + box.h * cos;
+    const scale = Math.min(1, width / spanX, height / spanY);
+    const w = box.w * scale;
+    const h = box.h * scale;
+    const halfX = (w * cos + h * sin) / 2;
+    const halfY = (w * sin + h * cos) / 2;
+    const place2 = (centre, half, limit) => half * 2 >= limit ? limit / 2 : Math.min(Math.max(centre, half), limit - half);
+    return { cx: place2(box.cx, halfX, width), cy: place2(box.cy, halfY, height), w, h };
+  }
+  const rectOf = (geometry, width, height) => ({
+    left: (geometry.cx - geometry.w / 2) * width,
+    right: (geometry.cx + geometry.w / 2) * width,
+    top: (geometry.cy - geometry.h / 2) * height,
+    bottom: (geometry.cy + geometry.h / 2) * height
+  });
+  const GAP = 2;
+  function roomFor(own, others, growth, width, height) {
+    const growX = (own.right - own.left) * (growth - 1) / 2;
+    const growY = (own.bottom - own.top) * (growth - 1) / 2;
+    let left = Math.max(0, own.left - growX);
+    let right = Math.min(width, own.right + growX);
+    let top = Math.max(0, own.top - growY);
+    let bottom = Math.min(height, own.bottom + growY);
+    for (const other of others) {
+      if (other.bottom > own.top && other.top < own.bottom) {
+        if (other.right <= own.left) left = Math.max(left, other.right + GAP);
+        if (other.left >= own.right) right = Math.min(right, other.left - GAP);
+      }
+      if (other.right > own.left && other.left < own.right) {
+        if (other.bottom <= own.top) top = Math.max(top, other.bottom + GAP);
+        if (other.top >= own.bottom) bottom = Math.min(bottom, other.top - GAP);
+      }
+    }
+    return {
+      left: Math.min(left, own.left),
+      right: Math.max(right, own.right),
+      top: Math.min(top, own.top),
+      bottom: Math.max(bottom, own.bottom)
+    };
   }
   const OVERLAY_CSS = `
 .lt-layer {
@@ -1810,34 +1891,6 @@
     ctx.restore();
   }
   const DEG = Math.PI / 180;
-  const UPRIGHT_RANGES = [
-    [4352, 4607],
-    [11904, 12351],
-    [12353, 13311],
-    [13312, 19903],
-    [19968, 40959],
-    [44032, 55215],
-    [63744, 64255],
-    [65040, 65103],
-    [65280, 65376],
-    [65504, 65510]
-  ];
-  const isUpright = (char) => {
-    const code = char.codePointAt(0) ?? 0;
-    return UPRIGHT_RANGES.some(([low, high]) => code >= low && code <= high);
-  };
-  const CORNER_PUNCT = new Set("、。，．");
-  function verticalRuns(text2) {
-    const runs = [];
-    for (const char of text2) {
-      let upright = isUpright(char);
-      const last = runs[runs.length - 1];
-      if (/\s/.test(char) && last) upright = last[0];
-      if (last && last[0] === upright) last[1] += char;
-      else runs.push([upright, char]);
-    }
-    return runs;
-  }
   function strokeThenFill(ctx, text2, x, y, outline, outlineColor) {
     if (outline <= 0 || !outlineColor) return;
     ctx.save();
@@ -1882,51 +1935,6 @@
         y += advance;
       }
     }
-  }
-  function fitInside(box, width, height) {
-    const radians = box.angle * DEG;
-    const cos = Math.abs(Math.cos(radians));
-    const sin = Math.abs(Math.sin(radians));
-    const spanX = box.w * cos + box.h * sin;
-    const spanY = box.w * sin + box.h * cos;
-    const scale = Math.min(1, width / spanX, height / spanY);
-    const w = box.w * scale;
-    const h = box.h * scale;
-    const halfX = (w * cos + h * sin) / 2;
-    const halfY = (w * sin + h * cos) / 2;
-    const place2 = (centre, half, limit) => half * 2 >= limit ? limit / 2 : Math.min(Math.max(centre, half), limit - half);
-    return { cx: place2(box.cx, halfX, width), cy: place2(box.cy, halfY, height), w, h };
-  }
-  const rectOf = (geometry, width, height) => ({
-    left: (geometry.cx - geometry.w / 2) * width,
-    right: (geometry.cx + geometry.w / 2) * width,
-    top: (geometry.cy - geometry.h / 2) * height,
-    bottom: (geometry.cy + geometry.h / 2) * height
-  });
-  const GAP = 2;
-  function roomFor(own, others, growth, width, height) {
-    const growX = (own.right - own.left) * (growth - 1) / 2;
-    const growY = (own.bottom - own.top) * (growth - 1) / 2;
-    let left = Math.max(0, own.left - growX);
-    let right = Math.min(width, own.right + growX);
-    let top = Math.max(0, own.top - growY);
-    let bottom = Math.min(height, own.bottom + growY);
-    for (const other of others) {
-      if (other.bottom > own.top && other.top < own.bottom) {
-        if (other.right <= own.left) left = Math.max(left, other.right + GAP);
-        if (other.left >= own.right) right = Math.min(right, other.left - GAP);
-      }
-      if (other.right > own.left && other.left < own.right) {
-        if (other.bottom <= own.top) top = Math.max(top, other.bottom + GAP);
-        if (other.top >= own.bottom) bottom = Math.min(bottom, other.top - GAP);
-      }
-    }
-    return {
-      left: Math.min(left, own.left),
-      right: Math.max(right, own.right),
-      top: Math.min(top, own.top),
-      bottom: Math.max(bottom, own.bottom)
-    };
   }
   function drawReflowedParagraph(draw, block, settings2, room) {
     const geometry = block.geometry;
