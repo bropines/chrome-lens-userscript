@@ -580,7 +580,8 @@ registerCommand({
   menuLabel: 'Lens Translate: clear cache',
   label: 'Clear cache',
   run: () => {
-    // Two stores with one budget between them, so they are reported as one.
+    // The memory cache and the stored one are separate allowances, but to the
+    // person pressing the button they are one cache, so they are reported as one.
     const memory = cacheStats();
     clearCache();
     void storedStats().then(({ entries, bytes }) => {

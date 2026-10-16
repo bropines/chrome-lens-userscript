@@ -665,15 +665,15 @@
   let cache = null;
   function getSettings() {
     if (!cache) {
-      let stored = {};
+      let stored2 = {};
       try {
         const raw = readStored(STORAGE_KEY);
-        if (typeof raw === "string") stored = JSON.parse(raw);
-        else if (raw && typeof raw === "object") stored = raw;
+        if (typeof raw === "string") stored2 = JSON.parse(raw);
+        else if (raw && typeof raw === "object") stored2 = raw;
       } catch {
-        stored = {};
+        stored2 = {};
       }
-      cache = { ...DEFAULTS, ...stored };
+      cache = { ...DEFAULTS, ...stored2 };
     }
     return cache;
   }
@@ -1391,8 +1391,9 @@
     };
   }
   const DB_NAME = "lens-translate";
-  const DB_VERSION = 1;
-  const STORE = "responses";
+  const DB_VERSION = 2;
+  const RESPONSES = "responses";
+  const META = "meta";
   let open = null;
   function database() {
     if (open) return open;
@@ -1406,36 +1407,45 @@
       }
       request2.onupgradeneeded = () => {
         const db = request2.result;
-        if (!db.objectStoreNames.contains(STORE)) {
-          db.createObjectStore(STORE, { keyPath: "hash" }).createIndex("used", "used");
-        }
+        if (db.objectStoreNames.contains(RESPONSES)) db.deleteObjectStore(RESPONSES);
+        if (db.objectStoreNames.contains(META)) db.deleteObjectStore(META);
+        db.createObjectStore(RESPONSES, { keyPath: "key" });
+        db.createObjectStore(META, { keyPath: "key" }).createIndex("used", "used");
       };
-      request2.onsuccess = () => resolve(request2.result);
+      request2.onsuccess = () => {
+        const db = request2.result;
+        db.onversionchange = () => {
+          db.close();
+          open = null;
+        };
+        resolve(db);
+      };
       request2.onerror = () => resolve(null);
       request2.onblocked = () => resolve(null);
     });
     return open;
   }
-  function run(mode, body2) {
+  function transact(mode, stores, body2) {
     return database().then(
       (db) => new Promise((resolve) => {
         if (!db) {
-          resolve(null);
+          resolve(false);
           return;
         }
         try {
-          const transaction = db.transaction(STORE, mode);
-          const request2 = body2(transaction.objectStore(STORE));
-          request2.onsuccess = () => resolve(request2.result);
-          request2.onerror = () => resolve(null);
-          transaction.onabort = () => resolve(null);
+          const tx = db.transaction(stores, mode);
+          tx.oncomplete = () => resolve(true);
+          tx.onabort = () => resolve(false);
+          tx.onerror = () => resolve(false);
+          body2(tx);
         } catch {
-          resolve(null);
+          resolve(false);
         }
       })
     );
   }
   const languagesOf = (settings2) => [settings2.targetLang, settings2.sourceLang, settings2.ocrLang].join("|");
+  const entryKey = (hash, settings2) => `${hash}\0${languagesOf(settings2)}`;
   function weigh$1(result) {
     let bytes2 = 0;
     for (const block of result.blocks) {
@@ -1444,41 +1454,103 @@
     }
     return bytes2;
   }
+  const TOUCH_INTERVAL_MS = 6e4;
+  const lastTouched = /* @__PURE__ */ new Map();
   async function getStored(hash, settings2) {
     if (!hash || !settings2.persistCache) return null;
-    const entry = await run("readonly", (store) => store.get(hash)) ?? null;
-    if (!entry || entry.languages !== languagesOf(settings2)) return null;
-    void run("readwrite", (store) => store.put({ ...entry, used: Date.now() }));
+    const key = entryKey(hash, settings2);
+    let entry;
+    await transact("readonly", [RESPONSES], (tx) => {
+      const request2 = tx.objectStore(RESPONSES).get(key);
+      request2.onsuccess = () => {
+        entry = request2.result;
+      };
+    });
+    if (!entry) return null;
+    const now = Date.now();
+    if (now - (lastTouched.get(key) ?? 0) >= TOUCH_INTERVAL_MS) {
+      lastTouched.set(key, now);
+      const meta = { key, used: now, bytes: entry.bytes };
+      void transact("readwrite", [META], (tx) => {
+        tx.objectStore(META).put(meta);
+      });
+    }
     return entry.result;
+  }
+  let total = null;
+  let writesSinceCount = 0;
+  const RECOUNT_EVERY = 50;
+  async function stored() {
+    let all2 = [];
+    await transact("readonly", [META], (tx) => {
+      const request2 = tx.objectStore(META).getAll();
+      request2.onsuccess = () => {
+        all2 = request2.result;
+      };
+    });
+    return all2;
   }
   async function putStored(hash, result, settings2) {
     if (!hash || !settings2.persistCache || settings2.cacheBytes <= 0) return;
-    const entry = {
-      hash,
-      languages: languagesOf(settings2),
-      result,
-      bytes: weigh$1(result),
-      used: Date.now()
-    };
-    await run("readwrite", (store) => store.put(entry));
+    const bytes2 = weigh$1(result);
+    if (bytes2 > settings2.cacheBytes) return;
+    const key = entryKey(hash, settings2);
+    const now = Date.now();
+    const entry = { key, hash, languages: languagesOf(settings2), result, bytes: bytes2 };
+    let delta = bytes2;
+    const written = await transact("readwrite", [RESPONSES, META], (tx) => {
+      const metas = tx.objectStore(META);
+      const previous = metas.get(key);
+      previous.onsuccess = () => {
+        delta = bytes2 - (previous.result?.bytes ?? 0);
+        tx.objectStore(RESPONSES).put(entry);
+        const meta = { key, used: now, bytes: bytes2 };
+        metas.put(meta);
+      };
+    });
+    if (!written) return;
+    lastTouched.set(key, now);
+    writesSinceCount += 1;
+    if (writesSinceCount >= RECOUNT_EVERY) total = null;
+    if (total !== null) total += delta;
     await evict$1(settings2.cacheBytes);
   }
   async function evict$1(budget) {
-    const all2 = await run("readonly", (store) => store.getAll()) ?? [];
-    let total = all2.reduce((sum, entry) => sum + entry.bytes, 0);
-    if (total <= budget) return;
-    for (const entry of [...all2].sort((a, b) => a.used - b.used)) {
-      if (total <= budget) break;
-      total -= entry.bytes;
-      await run("readwrite", (store) => store.delete(entry.hash));
+    if (total === null) {
+      total = (await stored()).reduce((sum, meta) => sum + meta.bytes, 0);
+      writesSinceCount = 0;
     }
+    if (total <= budget) return;
+    let remaining = total;
+    const done = await transact("readwrite", [RESPONSES, META], (tx) => {
+      const metas = tx.objectStore(META);
+      const responses = tx.objectStore(RESPONSES);
+      const cursor = metas.index("used").openCursor();
+      cursor.onsuccess = () => {
+        const at = cursor.result;
+        if (!at || remaining <= budget) return;
+        const meta = at.value;
+        remaining -= meta.bytes;
+        responses.delete(meta.key);
+        lastTouched.delete(meta.key);
+        at.delete();
+        at.continue();
+      };
+    });
+    total = done ? remaining : null;
   }
   async function clearStored() {
-    await run("readwrite", (store) => store.clear());
+    await transact("readwrite", [RESPONSES, META], (tx) => {
+      tx.objectStore(RESPONSES).clear();
+      tx.objectStore(META).clear();
+    });
+    lastTouched.clear();
+    total = 0;
+    writesSinceCount = 0;
   }
   async function storedStats() {
-    const all2 = await run("readonly", (store) => store.getAll()) ?? [];
-    return { entries: all2.length, bytes: all2.reduce((sum, entry) => sum + entry.bytes, 0) };
+    const all2 = await stored();
+    return { entries: all2.length, bytes: all2.reduce((sum, meta) => sum + meta.bytes, 0) };
   }
   const WritingDirection = {
     RightToLeft: 1,
@@ -1920,16 +1992,16 @@
   }
   function drawVertical({ ctx }, text2, boxW, boxH, size, fill, outline, outlineColor) {
     const em = size * 1.16;
-    let total = 0;
-    for (const [upright, run2] of verticalRuns(text2)) {
-      total += upright ? em * [...run2].length : ctx.measureText(run2).width;
+    let total2 = 0;
+    for (const [upright, run] of verticalRuns(text2)) {
+      total2 += upright ? em * [...run].length : ctx.measureText(run).width;
     }
-    let y = (boxH - total) / 2;
+    let y = (boxH - total2) / 2;
     ctx.textBaseline = "top";
     ctx.textAlign = "left";
-    for (const [upright, run2] of verticalRuns(text2)) {
+    for (const [upright, run] of verticalRuns(text2)) {
       if (upright) {
-        for (const char of run2) {
+        for (const char of run) {
           const advance = ctx.measureText(char).width;
           if (ROTATED_PUNCT.has(char)) {
             ctx.save();
@@ -1953,13 +2025,13 @@
           y += em;
         }
       } else {
-        const advance = ctx.measureText(run2).width;
+        const advance = ctx.measureText(run).width;
         ctx.save();
         ctx.translate(boxW / 2, y);
         ctx.rotate(90 * DEG);
-        strokeThenFill(ctx, run2, 0, -size / 2, outline, outlineColor);
+        strokeThenFill(ctx, run, 0, -size / 2, outline, outlineColor);
         ctx.fillStyle = fill;
-        ctx.fillText(run2, 0, -size / 2);
+        ctx.fillText(run, 0, -size / 2);
         ctx.restore();
         y += advance;
       }
@@ -3134,9 +3206,9 @@ ${OVERLAY_CSS}`;
       clearCache();
       void storedStats().then(({ entries: entries2, bytes: bytes2 }) => {
         void clearStored();
-        const total = memory.entries + entries2;
+        const total2 = memory.entries + entries2;
         toast(
-          total ? `Cleared ${total} cached result${total === 1 ? "" : "s"} (${((memory.bytes + bytes2) / 1048576).toFixed(1)} MB)` : "The cache was already empty"
+          total2 ? `Cleared ${total2} cached result${total2 === 1 ? "" : "s"} (${((memory.bytes + bytes2) / 1048576).toFixed(1)} MB)` : "The cache was already empty"
         );
       });
     }
