@@ -16,11 +16,13 @@
 // @connect      lensfrontend-pa.googleapis.com
 // @connect      *
 // @grant        GM.getValue
+// @grant        GM.setClipboard
 // @grant        GM.setValue
 // @grant        GM.xmlHttpRequest
 // @grant        GM_getValue
 // @grant        GM_info
 // @grant        GM_registerMenuCommand
+// @grant        GM_setClipboard
 // @grant        GM_setValue
 // @grant        GM_xmlhttpRequest
 // @grant        unsafeWindow

@@ -16,11 +16,13 @@
 // @connect      lensfrontend-pa.googleapis.com
 // @connect      *
 // @grant        GM.getValue
+// @grant        GM.setClipboard
 // @grant        GM.setValue
 // @grant        GM.xmlHttpRequest
 // @grant        GM_getValue
 // @grant        GM_info
 // @grant        GM_registerMenuCommand
+// @grant        GM_setClipboard
 // @grant        GM_setValue
 // @grant        GM_xmlhttpRequest
 // @grant        unsafeWindow
@@ -35,6 +37,7 @@
   var _GM_getValue = /* @__PURE__ */ (() => typeof GM_getValue != "undefined" ? GM_getValue : void 0)();
   var _GM_info = /* @__PURE__ */ (() => typeof GM_info != "undefined" ? GM_info : void 0)();
   var _GM_registerMenuCommand = /* @__PURE__ */ (() => typeof GM_registerMenuCommand != "undefined" ? GM_registerMenuCommand : void 0)();
+  var _GM_setClipboard = /* @__PURE__ */ (() => typeof GM_setClipboard != "undefined" ? GM_setClipboard : void 0)();
   var _GM_setValue = /* @__PURE__ */ (() => typeof GM_setValue != "undefined" ? GM_setValue : void 0)();
   var _GM_xmlhttpRequest = /* @__PURE__ */ (() => typeof GM_xmlhttpRequest != "undefined" ? GM_xmlhttpRequest : void 0)();
   var _unsafeWindow = /* @__PURE__ */ (() => typeof unsafeWindow != "undefined" ? unsafeWindow : void 0)();
@@ -81,6 +84,39 @@
     try {
       window.localStorage.setItem(LOCAL_PREFIX + key, encoded);
     } catch {
+    }
+  }
+  async function copyText(text2) {
+    try {
+      if (typeof _GM_setClipboard === "function") {
+        _GM_setClipboard(text2, "text");
+        return true;
+      }
+      if (typeof _GM?.setClipboard === "function") {
+        await _GM.setClipboard(text2, "text");
+        return true;
+      }
+    } catch {
+    }
+    try {
+      if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text2);
+        return true;
+      }
+    } catch {
+    }
+    try {
+      const area = document.createElement("textarea");
+      area.value = text2;
+      area.setAttribute("readonly", "");
+      area.style.cssText = "position:fixed;top:0;left:0;opacity:0;pointer-events:none";
+      document.body.appendChild(area);
+      area.select();
+      const copied = document.execCommand("copy");
+      area.remove();
+      return copied;
+    } catch {
+      return false;
     }
   }
   const commands = [];
@@ -644,6 +680,8 @@
     showButton: true,
     buttonMode: "auto",
     hotkey: "alt",
+    batchHotkey: true,
+    peekKey: "off",
     fontFamily: "",
     drawBackground: true,
     verticalText: "auto",
@@ -782,6 +820,26 @@
         ["shift", "Shift + click"],
         ["none", "off"]
       ]
+    },
+    {
+      key: "batchHotkey",
+      group: "Behaviour",
+      label: "Alt + Shift + T translates all in view",
+      type: "checkbox",
+      hint: "every picture currently on screen; also in the userscript menu and Actions below"
+    },
+    {
+      key: "peekKey",
+      group: "Behaviour",
+      label: "Hold to see the original",
+      type: "select",
+      options: [
+        ["off", "off - holding the button down still works"],
+        ["backquote", "` (backtick), held"],
+        ["shift", "Shift, held"],
+        ["control", "Ctrl, held"]
+      ],
+      hint: "while held, every translation steps aside; let go and it is back"
     },
     {
       key: "reflowHorizontal",
@@ -1400,10 +1458,10 @@
     ];
   }
   const answered = (result) => result.startsWith("HTTP");
-  function verdict(results) {
-    const gmLens = answered(results.get("gm -> lens") ?? "");
-    const fetchLens = answered(results.get("fetch -> lens") ?? "");
-    const anyControl = answered(results.get("gm -> control") ?? "") || answered(results.get("fetch -> control") ?? "");
+  function verdict(results2) {
+    const gmLens = answered(results2.get("gm -> lens") ?? "");
+    const fetchLens = answered(results2.get("fetch -> lens") ?? "");
+    const anyControl = answered(results2.get("gm -> control") ?? "") || answered(results2.get("fetch -> control") ?? "");
     if (gmLens && fetchLens) {
       return "Lens is reachable both ways. If translating still fails, the problem is past the transport - send this report with the exact error the toast shows.";
     }
@@ -1444,17 +1502,25 @@
   }
   async function diagnose(context) {
     const lines = [...hostFacts(), ...pageFacts(context), ""];
-    const results = /* @__PURE__ */ new Map();
+    const results2 = /* @__PURE__ */ new Map();
     for (const [label, target] of targets()) {
       for (const transport of TRANSPORTS) {
         const key = `${transport} -> ${label}`;
         const result = await probe(transport, target, PROBE_TIMEOUT_MS);
-        results.set(key, result);
+        results2.set(key, result);
         lines.push(`${key.padEnd(16)} ${result}`);
       }
     }
-    lines.push("", verdict(results));
+    lines.push("", verdict(results2));
     return lines.join("\n");
+  }
+  function translationText(result) {
+    return result.blocks.map((block) => block.translation.trim()).filter(Boolean).join("\n\n");
+  }
+  function ocrText(result) {
+    return result.ocr.map(
+      (paragraph) => paragraph.lines.map((line) => line.text.trim()).filter(Boolean).join("\n")
+    ).filter(Boolean).join("\n\n");
   }
   function targetSize(width, height, { maxArea, maxSide }) {
     if (width * height <= maxArea || width <= maxSide && height <= maxSide) {
@@ -2210,6 +2276,17 @@
   function showOrHide$1(entry) {
     entry.layer.style.visibility = entry.hiddenFor.size ? "hidden" : "";
   }
+  function peekOverlay(img, peeking) {
+    const entry = overlays.get(img);
+    if (!entry) return false;
+    if (peeking) entry.hiddenFor.add("peek");
+    else entry.hiddenFor.delete("peek");
+    showOrHide$1(entry);
+    return true;
+  }
+  function peekAllOverlays(peeking) {
+    for (const img of overlaid()) peekOverlay(img, peeking);
+  }
   function sweepOverlays() {
     let removed = 0;
     for (const img of overlaid()) {
@@ -2908,7 +2985,52 @@
     }
     return count;
   }
-  const styles = "/* Lives inside a shadow root, so these selectors compete with nothing. The\n   :host is a fixed, click-through, full-viewport layer; everything here is\n   positioned in viewport coordinates. */\n\n:host {\n  font: 14px/1.45 system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;\n  color: #1a1a1a;\n}\n\n#lt-button,\n#lt-gear {\n  position: absolute;\n  width: 32px;\n  height: 32px;\n  background: rgba(0, 0, 0, 0.6);\n  border-radius: 50%;\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  opacity: 0;\n  pointer-events: none;\n  cursor: pointer;\n  transition: opacity 0.2s ease-in-out, transform 0.15s ease-in-out, background 0.2s;\n  transform: scale(0.9);\n  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);\n  border: 1px solid rgba(255, 255, 255, 0.2);\n}\n#lt-button:hover,\n#lt-gear:hover {\n  background: rgba(0, 0, 0, 0.85);\n  transform: scale(1.05);\n}\n\n/* Appears a beat after the main button, so a passing cursor does not summon\n   two controls at once. */\n#lt-gear {\n  width: 26px;\n  height: 26px;\n}\n#lt-button.lt-busy svg {\n  animation: lt-spin 1s linear infinite;\n}\n#lt-button.lt-active {\n  background: rgba(20, 110, 60, 0.9);\n}\n#lt-button.lt-error {\n  background: rgba(170, 30, 30, 0.9);\n}\n@keyframes lt-spin {\n  to {\n    transform: rotate(360deg);\n  }\n}\n\n#lt-toast {\n  position: absolute;\n  bottom: 16px;\n  left: 50%;\n  transform: translateX(-50%);\n  background: rgba(0, 0, 0, 0.88);\n  color: #fff;\n  padding: 8px 16px;\n  border-radius: 8px;\n  font-size: 13px;\n  pointer-events: none;\n  opacity: 0;\n  transition: opacity 0.2s;\n  max-width: 70vw;\n}\n#lt-toast.lt-show {\n  opacity: 1;\n}\n\n/* ------------------------------------------------------------- settings */\n\n.lt-panel-backdrop {\n  position: absolute;\n  inset: 0;\n  background: rgba(0, 0, 0, 0.5);\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  pointer-events: auto;\n}\n.lt-panel {\n  background: #fff;\n  width: min(560px, 92vw);\n  max-height: 86vh;\n  display: flex;\n  flex-direction: column;\n  border-radius: 12px;\n  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.4);\n  overflow: hidden;\n}\n.lt-panel-head,\n.lt-panel-foot {\n  display: flex;\n  align-items: center;\n  gap: 8px;\n  padding: 12px 18px;\n  flex: none;\n}\n.lt-panel-head {\n  border-bottom: 1px solid #e6e6e6;\n  justify-content: space-between;\n  font-size: 15px;\n  font-weight: 600;\n}\n.lt-panel-foot {\n  border-top: 1px solid #e6e6e6;\n}\n.lt-spacer {\n  flex: 1;\n}\n.lt-panel-body {\n  padding: 10px 18px 16px;\n  overflow-y: auto;\n}\n\n.lt-row {\n  display: grid;\n  grid-template-columns: 190px minmax(0, 1fr);\n  align-items: center;\n  gap: 2px 14px;\n  padding: 7px 0;\n}\n.lt-label {\n  color: #333;\n}\n.lt-hint {\n  grid-column: 2;\n  color: #808080;\n  font-size: 12px;\n}\n.lt-input {\n  font: inherit;\n  padding: 7px 9px;\n  border: 1px solid #ccc;\n  border-radius: 6px;\n  background: #fff;\n  color: #1a1a1a;\n  min-width: 0;\n  width: 100%;\n  box-sizing: border-box;\n}\n.lt-input[type='checkbox'] {\n  justify-self: start;\n  width: 17px;\n  height: 17px;\n  padding: 0;\n}\n.lt-x {\n  border: 0;\n  background: transparent;\n  font-size: 22px;\n  line-height: 1;\n  cursor: pointer;\n  color: #666;\n  padding: 0 4px;\n}\n.lt-btn {\n  font: inherit;\n  padding: 7px 15px;\n  border-radius: 7px;\n  cursor: pointer;\n  border: 1px solid #ccc;\n  background: #f5f5f5;\n  color: #1a1a1a;\n}\n.lt-btn.lt-primary {\n  background: #1a73e8;\n  border-color: #1a73e8;\n  color: #fff;\n}\n.lt-btn.lt-ghost:hover {\n  background: #eaeaea;\n}\n\n@media (prefers-color-scheme: dark) {\n  .lt-panel {\n    background: #1f1f22;\n    color: #ececec;\n  }\n  .lt-panel-head,\n  .lt-panel-foot {\n    border-color: #35353a;\n  }\n  .lt-label {\n    color: #d6d6d6;\n  }\n  .lt-hint {\n    color: #9a9a9a;\n  }\n  .lt-input {\n    background: #2a2a2e;\n    border-color: #45454c;\n    color: #ececec;\n  }\n  .lt-btn {\n    background: #2e2e33;\n    border-color: #45454c;\n    color: #ececec;\n  }\n  .lt-btn.lt-ghost:hover {\n    background: #3a3a40;\n  }\n  .lt-x {\n    color: #bbb;\n  }\n}\n\n/* Outline slider with its live sample. */\n.lt-slider {\n  display: flex;\n  align-items: center;\n  gap: 10px;\n  min-width: 0;\n}\n.lt-slider input[type='range'] {\n  flex: 1;\n  width: auto;\n  padding: 0;\n  border: 0;\n  background: transparent;\n  accent-color: #1a73e8;\n}\n.lt-readout {\n  min-width: 42px;\n  text-align: right;\n  font-variant-numeric: tabular-nums;\n  color: #666;\n}\n.lt-preview {\n  grid-column: 2;\n  width: 100%;\n  height: auto;\n  border-radius: 6px;\n  border: 1px solid #ddd;\n  margin-top: 6px;\n}\n@media (prefers-color-scheme: dark) {\n  .lt-readout {\n    color: #aaa;\n  }\n  .lt-preview {\n    border-color: #45454c;\n  }\n}\n\n/* Section headings. */\n.lt-group {\n  grid-column: 1 / -1;\n  margin: 16px 0 4px;\n  padding-bottom: 5px;\n  border-bottom: 1px solid #e6e6e6;\n  font-size: 11px;\n  font-weight: 600;\n  letter-spacing: 0.07em;\n  text-transform: uppercase;\n  color: #888;\n}\n.lt-group:first-child {\n  margin-top: 4px;\n}\n@media (prefers-color-scheme: dark) {\n  .lt-group {\n    border-color: #35353a;\n    color: #8c8c96;\n  }\n}\n\n/* Menu commands, for a host that has no menu of its own. */\n.lt-actions {\n  display: flex;\n  flex-wrap: wrap;\n  gap: 8px;\n  padding: 4px 0 0;\n}\n.lt-note {\n  color: #808080;\n  font-size: 12px;\n  padding-top: 8px;\n}\n@media (prefers-color-scheme: dark) {\n  .lt-note {\n    color: #9a9a9a;\n  }\n}\n\n/* The diagnostics report: fixed width, so columns line up as written. */\n.lt-panel-report {\n  max-width: 560px;\n}\n.lt-report {\n  margin: 0;\n  padding: 14px 18px;\n  overflow: auto;\n  white-space: pre-wrap;\n  word-break: break-word;\n  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;\n  font-size: 12px;\n  line-height: 1.5;\n  user-select: text;\n  -webkit-user-select: text;\n}\n";
+  function peekCover(img, peeking) {
+    const cover = covers.get(img);
+    if (!cover) return false;
+    if (peeking) cover.hiddenFor.add("peek");
+    else cover.hiddenFor.delete("peek");
+    showOrHide(cover);
+    return true;
+  }
+  function peekAllCovers(peeking) {
+    for (const entry of registry.values()) {
+      const img = entry.image.deref();
+      if (img) peekCover(img, peeking);
+    }
+  }
+  const SITES_KEY = "lens-translate:sites";
+  const hostOf = (hostname = window.location.hostname) => hostname.toLowerCase().replace(/^www\./, "");
+  let rules = null;
+  function load() {
+    if (rules) return rules;
+    rules = {};
+    try {
+      const raw = readStored(SITES_KEY);
+      const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+      if (parsed && typeof parsed === "object") {
+        for (const [host, mode] of Object.entries(parsed)) {
+          if (mode === "off" || mode === "auto") rules[host] = mode;
+        }
+      }
+    } catch {
+    }
+    return rules;
+  }
+  function reloadSites() {
+    rules = null;
+  }
+  function siteMode(host = hostOf()) {
+    return load()[host] ?? "default";
+  }
+  function setSiteMode(mode, host = hostOf()) {
+    const next = { ...load() };
+    if (mode === "default") delete next[host];
+    else next[host] = mode;
+    rules = next;
+    writeStored(SITES_KEY, next);
+  }
+  const styles = "/* Lives inside a shadow root, so these selectors compete with nothing. The\n   :host is a fixed, click-through, full-viewport layer; everything here is\n   positioned in viewport coordinates. */\n\n:host {\n  font: 14px/1.45 system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;\n  color: #1a1a1a;\n}\n\n#lt-button,\n#lt-gear,\n#lt-more {\n  position: absolute;\n  width: 32px;\n  height: 32px;\n  background: rgba(0, 0, 0, 0.6);\n  border-radius: 50%;\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  opacity: 0;\n  pointer-events: none;\n  cursor: pointer;\n  transition: opacity 0.2s ease-in-out, transform 0.15s ease-in-out, background 0.2s;\n  transform: scale(0.9);\n  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);\n  border: 1px solid rgba(255, 255, 255, 0.2);\n}\n#lt-button:hover,\n#lt-gear:hover,\n#lt-more:hover {\n  background: rgba(0, 0, 0, 0.85);\n  transform: scale(1.05);\n}\n\n/* Appears a beat after the main button, so a passing cursor does not summon\n   two controls at once. */\n#lt-gear,\n#lt-more {\n  width: 26px;\n  height: 26px;\n}\n/* Held down to look at the original: the button says so by dimming. */\n#lt-button.lt-peeking {\n  background: rgba(60, 60, 60, 0.9);\n  box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.55);\n}\n/* Held down to peek, and on a touch screen a long press: the browser must not\n   take either for a scroll or a text selection. */\n#lt-button {\n  touch-action: none;\n  -webkit-user-select: none;\n  user-select: none;\n  -webkit-touch-callout: none;\n}\n#lt-button.lt-busy svg {\n  animation: lt-spin 1s linear infinite;\n}\n#lt-button.lt-active {\n  background: rgba(20, 110, 60, 0.9);\n}\n#lt-button.lt-error {\n  background: rgba(170, 30, 30, 0.9);\n}\n@keyframes lt-spin {\n  to {\n    transform: rotate(360deg);\n  }\n}\n\n/* ----------------------------------------------------------------- menu */\n\n.lt-menu {\n  position: absolute;\n  min-width: 190px;\n  padding: 4px;\n  display: flex;\n  flex-direction: column;\n  background: #fff;\n  color: #1a1a1a;\n  border-radius: 10px;\n  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.35);\n  border: 1px solid rgba(0, 0, 0, 0.12);\n  pointer-events: auto;\n}\n.lt-menu-item {\n  font: inherit;\n  text-align: left;\n  padding: 8px 12px;\n  border: 0;\n  border-radius: 6px;\n  background: transparent;\n  color: inherit;\n  cursor: pointer;\n}\n.lt-menu-item:hover:not(:disabled),\n.lt-menu-item:focus-visible {\n  background: #eaeaea;\n  outline: none;\n}\n.lt-menu-item:disabled {\n  color: #909090;\n  cursor: default;\n}\n@media (prefers-color-scheme: dark) {\n  .lt-menu {\n    background: #1f1f22;\n    color: #ececec;\n    border-color: #35353a;\n  }\n  .lt-menu-item:hover:not(:disabled),\n  .lt-menu-item:focus-visible {\n    background: #3a3a40;\n  }\n  .lt-menu-item:disabled {\n    color: #7c7c84;\n  }\n}\n\n#lt-toast {\n  position: absolute;\n  bottom: 16px;\n  left: 50%;\n  transform: translateX(-50%);\n  background: rgba(0, 0, 0, 0.88);\n  color: #fff;\n  padding: 8px 16px;\n  border-radius: 8px;\n  font-size: 13px;\n  pointer-events: none;\n  opacity: 0;\n  transition: opacity 0.2s;\n  max-width: 70vw;\n}\n#lt-toast.lt-show {\n  opacity: 1;\n}\n\n/* ------------------------------------------------------------- settings */\n\n.lt-panel-backdrop {\n  position: absolute;\n  inset: 0;\n  background: rgba(0, 0, 0, 0.5);\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  pointer-events: auto;\n}\n.lt-panel {\n  background: #fff;\n  width: min(560px, 92vw);\n  max-height: 86vh;\n  display: flex;\n  flex-direction: column;\n  border-radius: 12px;\n  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.4);\n  overflow: hidden;\n}\n.lt-panel-head,\n.lt-panel-foot {\n  display: flex;\n  align-items: center;\n  gap: 8px;\n  padding: 12px 18px;\n  flex: none;\n}\n.lt-panel-head {\n  border-bottom: 1px solid #e6e6e6;\n  justify-content: space-between;\n  font-size: 15px;\n  font-weight: 600;\n}\n.lt-panel-foot {\n  border-top: 1px solid #e6e6e6;\n}\n.lt-spacer {\n  flex: 1;\n}\n.lt-panel-body {\n  padding: 10px 18px 16px;\n  overflow-y: auto;\n}\n\n.lt-row {\n  display: grid;\n  grid-template-columns: 190px minmax(0, 1fr);\n  align-items: center;\n  gap: 2px 14px;\n  padding: 7px 0;\n}\n.lt-label {\n  color: #333;\n}\n.lt-hint {\n  grid-column: 2;\n  color: #808080;\n  font-size: 12px;\n}\n.lt-input {\n  font: inherit;\n  padding: 7px 9px;\n  border: 1px solid #ccc;\n  border-radius: 6px;\n  background: #fff;\n  color: #1a1a1a;\n  min-width: 0;\n  width: 100%;\n  box-sizing: border-box;\n}\n.lt-input[type='checkbox'] {\n  justify-self: start;\n  width: 17px;\n  height: 17px;\n  padding: 0;\n}\n.lt-x {\n  border: 0;\n  background: transparent;\n  font-size: 22px;\n  line-height: 1;\n  cursor: pointer;\n  color: #666;\n  padding: 0 4px;\n}\n.lt-btn {\n  font: inherit;\n  padding: 7px 15px;\n  border-radius: 7px;\n  cursor: pointer;\n  border: 1px solid #ccc;\n  background: #f5f5f5;\n  color: #1a1a1a;\n}\n.lt-btn.lt-primary {\n  background: #1a73e8;\n  border-color: #1a73e8;\n  color: #fff;\n}\n.lt-btn.lt-ghost:hover {\n  background: #eaeaea;\n}\n\n@media (prefers-color-scheme: dark) {\n  .lt-panel {\n    background: #1f1f22;\n    color: #ececec;\n  }\n  .lt-panel-head,\n  .lt-panel-foot {\n    border-color: #35353a;\n  }\n  .lt-label {\n    color: #d6d6d6;\n  }\n  .lt-hint {\n    color: #9a9a9a;\n  }\n  .lt-input {\n    background: #2a2a2e;\n    border-color: #45454c;\n    color: #ececec;\n  }\n  .lt-btn {\n    background: #2e2e33;\n    border-color: #45454c;\n    color: #ececec;\n  }\n  .lt-btn.lt-ghost:hover {\n    background: #3a3a40;\n  }\n  .lt-x {\n    color: #bbb;\n  }\n}\n\n/* Outline slider with its live sample. */\n.lt-slider {\n  display: flex;\n  align-items: center;\n  gap: 10px;\n  min-width: 0;\n}\n.lt-slider input[type='range'] {\n  flex: 1;\n  width: auto;\n  padding: 0;\n  border: 0;\n  background: transparent;\n  accent-color: #1a73e8;\n}\n.lt-readout {\n  min-width: 42px;\n  text-align: right;\n  font-variant-numeric: tabular-nums;\n  color: #666;\n}\n.lt-preview {\n  grid-column: 2;\n  width: 100%;\n  height: auto;\n  border-radius: 6px;\n  border: 1px solid #ddd;\n  margin-top: 6px;\n}\n@media (prefers-color-scheme: dark) {\n  .lt-readout {\n    color: #aaa;\n  }\n  .lt-preview {\n    border-color: #45454c;\n  }\n}\n\n/* Section headings. */\n.lt-group {\n  grid-column: 1 / -1;\n  margin: 16px 0 4px;\n  padding-bottom: 5px;\n  border-bottom: 1px solid #e6e6e6;\n  font-size: 11px;\n  font-weight: 600;\n  letter-spacing: 0.07em;\n  text-transform: uppercase;\n  color: #888;\n}\n.lt-group:first-child {\n  margin-top: 4px;\n}\n@media (prefers-color-scheme: dark) {\n  .lt-group {\n    border-color: #35353a;\n    color: #8c8c96;\n  }\n}\n\n/* Menu commands, for a host that has no menu of its own. */\n.lt-actions {\n  display: flex;\n  flex-wrap: wrap;\n  gap: 8px;\n  padding: 4px 0 0;\n}\n.lt-note {\n  color: #808080;\n  font-size: 12px;\n  padding-top: 8px;\n}\n@media (prefers-color-scheme: dark) {\n  .lt-note {\n    color: #9a9a9a;\n  }\n}\n\n/* The diagnostics report: fixed width, so columns line up as written. */\n.lt-panel-report {\n  max-width: 560px;\n}\n.lt-report {\n  margin: 0;\n  padding: 14px 18px;\n  overflow: auto;\n  white-space: pre-wrap;\n  word-break: break-word;\n  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;\n  font-size: 12px;\n  line-height: 1.5;\n  user-select: text;\n  -webkit-user-select: text;\n}\n";
   const HOST_ID = "lens-translate-root";
   let shadow = null;
   function uiRoot() {
@@ -3190,6 +3312,63 @@ ${OVERLAY_CSS}`;
     uiRoot().appendChild(backdrop);
     backdrop.querySelector(".lt-input")?.focus();
   }
+  let menu = null;
+  let teardown = null;
+  function closeMenu() {
+    teardown?.();
+    teardown = null;
+    menu?.remove();
+    menu = null;
+  }
+  const isMenuOpen = () => menu !== null;
+  function openMenu(at, items) {
+    closeMenu();
+    const element = document.createElement("div");
+    element.className = "lt-menu";
+    element.setAttribute("role", "menu");
+    for (const item of items) {
+      const entry = document.createElement("button");
+      entry.type = "button";
+      entry.className = "lt-menu-item";
+      entry.setAttribute("role", "menuitem");
+      entry.textContent = item.label;
+      if (item.disabled) entry.disabled = true;
+      entry.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        closeMenu();
+        item.run();
+      });
+      element.appendChild(entry);
+    }
+    uiRoot().appendChild(element);
+    menu = element;
+    const box = element.getBoundingClientRect();
+    const left = Math.max(4, Math.min(at.left, window.innerWidth - box.width - 4));
+    const top = Math.max(4, Math.min(at.top, window.innerHeight - box.height - 4));
+    element.style.left = `${left}px`;
+    element.style.top = `${top}px`;
+    const away = (event) => {
+      if (event.composedPath().includes(element)) return;
+      closeMenu();
+    };
+    const escape = (event) => {
+      if (event.key !== "Escape") return;
+      event.stopPropagation();
+      closeMenu();
+    };
+    document.addEventListener("pointerdown", away, true);
+    document.addEventListener("keydown", escape, true);
+    window.addEventListener("scroll", closeMenu, true);
+    window.addEventListener("blur", closeMenu);
+    teardown = () => {
+      document.removeEventListener("pointerdown", away, true);
+      document.removeEventListener("keydown", escape, true);
+      window.removeEventListener("scroll", closeMenu, true);
+      window.removeEventListener("blur", closeMenu);
+    };
+    element.querySelector(".lt-menu-item:not(:disabled)")?.focus();
+  }
   let panel = null;
   let body = null;
   let onSettings = null;
@@ -3257,8 +3436,11 @@ ${OVERLAY_CSS}`;
     uiRoot().appendChild(backdrop);
   }
   const ICON = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="white" width="20" height="20"><path d="M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M12,4A8,8 0 0,1 20,12H18A6,6 0 0,0 12,6V4M12,8A4,4 0 0,1 16,12A4,4 0 0,1 12,16A4,4 0 0,1 8,12A4,4 0 0,1 12,8Z"/></svg>`;
+  const MORE = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="white" width="15" height="15"><path d="M6,10A2,2 0 0,0 4,12A2,2 0 0,0 6,14A2,2 0 0,0 8,12A2,2 0 0,0 6,10M12,10A2,2 0 0,0 10,12A2,2 0 0,0 12,14A2,2 0 0,0 14,12A2,2 0 0,0 12,10M18,10A2,2 0 0,0 16,12A2,2 0 0,0 18,14A2,2 0 0,0 20,12A2,2 0 0,0 18,10Z"/></svg>`;
   const GEAR = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="white" width="15" height="15"><path d="M12,15.5A3.5,3.5 0 0,1 8.5,12A3.5,3.5 0 0,1 12,8.5A3.5,3.5 0 0,1 15.5,12A3.5,3.5 0 0,1 12,15.5M19.43,12.97C19.47,12.65 19.5,12.33 19.5,12C19.5,11.67 19.47,11.34 19.43,11L21.54,9.37C21.73,9.22 21.78,8.95 21.66,8.73L19.66,5.27C19.54,5.05 19.27,4.96 19.05,5.05L16.56,6.05C16.04,5.66 15.5,5.32 14.87,5.07L14.5,2.42C14.46,2.18 14.25,2 14,2H10C9.75,2 9.54,2.18 9.5,2.42L9.13,5.07C8.5,5.32 7.96,5.66 7.44,6.05L4.95,5.05C4.73,4.96 4.46,5.05 4.34,5.27L2.34,8.73C2.21,8.95 2.27,9.22 2.46,9.37L4.57,11C4.53,11.34 4.5,11.67 4.5,12C4.5,12.33 4.53,12.65 4.57,12.97L2.46,14.63C2.27,14.78 2.21,15.05 2.34,15.27L4.34,18.73C4.46,18.95 4.73,19.03 4.95,18.95L7.44,17.94C7.96,18.34 8.5,18.68 9.13,18.93L9.5,21.58C9.54,21.82 9.75,22 10,22H14C14.25,22 14.46,21.82 14.5,21.58L14.87,18.93C15.5,18.67 16.04,18.34 16.56,17.94L19.05,18.95C19.27,19.03 19.54,18.95 19.66,18.73L21.66,15.27C21.78,15.05 21.73,14.78 21.54,14.63L19.43,12.97Z"/></svg>`;
   let settings = getSettings();
+  let site = siteMode();
+  const active = () => settings.enabled && site !== "off";
   setTransport(gmTransport);
   ignoreElements((element) => element.id === HOST_ID || isCover(element));
   const root = uiRoot();
@@ -3272,6 +3454,11 @@ ${OVERLAY_CSS}`;
   gear.innerHTML = GEAR;
   gear.title = "Lens Translate settings";
   root.appendChild(gear);
+  const more = document.createElement("div");
+  more.id = "lt-more";
+  more.innerHTML = MORE;
+  more.title = "Copy text, undo, and more";
+  root.appendChild(more);
   const toastEl = document.createElement("div");
   toastEl.id = "lt-toast";
   root.appendChild(toastEl);
@@ -3306,20 +3493,36 @@ ${OVERLAY_CSS}`;
   const isTranslated = (img) => isCovered(img) || hasOverlay(img);
   function undo(img) {
     showing.delete(img);
+    results.delete(img);
     const restored = uncoverImage(img) || clearOverlay(img);
     if (restored) button.classList.remove("lt-active");
     return restored;
   }
-  async function translate(target) {
+  const results = /* @__PURE__ */ new WeakMap();
+  let lastShown = null;
+  let working = 0;
+  function setWorking(delta) {
+    working += delta;
+    button.classList.toggle("lt-busy", working > 0);
+  }
+  let lastFailure = "";
+  async function translate(target, options = {}) {
     const img = target.element;
-    if (busy.has(img)) return;
+    const say = (message, ms) => {
+      if (!options.quiet) toast(message, ms);
+    };
+    if (busy.has(img)) return "skipped";
     if (!settings.enabled) {
-      toast("Translation is switched off in settings");
-      return;
+      say("Translation is switched off in settings");
+      return "skipped";
     }
-    if (undo(img)) return;
+    if (site === "off") {
+      say(`Lens Translate is switched off on ${hostOf()} (userscript menu: toggle for this site)`);
+      return "skipped";
+    }
+    if (undo(img)) return "undone";
     busy.add(img);
-    button.classList.add("lt-busy");
+    setWorking(1);
     button.classList.remove("lt-error");
     try {
       const key = cacheKey(target.url, settings);
@@ -3331,9 +3534,8 @@ ${OVERLAY_CSS}`;
           naturalSizeOf(target)
         );
         if (done && coverImage(img, URL.createObjectURL(done), { onGone: forgetter(img) })) {
-          showing.set(img, target);
-          if (currentTarget?.element === img) button.classList.add("lt-active");
-          return;
+          shown(img, target, getCached(key, settings, naturalSizeOf(target)));
+          return "shown";
         }
       }
       const prepared = await acquireSource(target);
@@ -3356,10 +3558,11 @@ ${OVERLAY_CSS}`;
         }
         if (!result.blocks.length) {
           const detected = result.ocr.some((p) => p.lines.length > 0);
-          toast(
+          results.set(img, result);
+          say(
             detected ? "Lens read the text but returned no translation (same language?)" : "Lens found no text in this image"
           );
-          return;
+          return "empty";
         }
         if (settings.renderMode === "canvas") {
           const blob = await renderToBlob(
@@ -3384,14 +3587,16 @@ ${OVERLAY_CSS}`;
             } : {}
           });
           if (!covered) {
-            toast(
+            lastFailure = "it cannot be covered here";
+            say(
               target.kind === "background" ? "This background is tiled or clipped in a way a translation cannot follow" : "This image cannot be covered here"
             );
-            return;
+            return "failed";
           }
         } else if (target.kind === "background") {
-          toast("Backgrounds need the canvas renderer (Render as, in settings)");
-          return;
+          lastFailure = "backgrounds need the canvas renderer";
+          say("Backgrounds need the canvas renderer (Render as, in settings)");
+          return "failed";
         } else if (!renderTranslation(
           img,
           result.blocks,
@@ -3400,22 +3605,123 @@ ${OVERLAY_CSS}`;
           root,
           { onGone: forgetter(img) }
         )) {
-          toast("Nothing could be placed on this image");
-          return;
+          lastFailure = "nothing could be placed on it";
+          say("Nothing could be placed on this image");
+          return "failed";
         }
-        showing.set(img, target);
-        if (currentTarget?.element === img) button.classList.add("lt-active");
+        shown(img, target, result);
+        return "shown";
       } finally {
         prepared.release();
       }
     } catch (error) {
+      lastFailure = error.message;
       button.classList.add("lt-error");
-      toast(`Lens: ${error.message}`, 5e3);
+      say(`Lens: ${lastFailure}`, 5e3);
       window.setTimeout(() => button.classList.remove("lt-error"), 3e3);
+      return "failed";
     } finally {
       busy.delete(img);
-      button.classList.remove("lt-busy");
+      setWorking(-1);
     }
+  }
+  function shown(img, target, result) {
+    showing.set(img, target);
+    if (result) results.set(img, result);
+    lastShown = new WeakRef(img);
+    if (currentTarget?.element === img) button.classList.add("lt-active");
+  }
+  const CONCURRENCY = 2;
+  const queued = [];
+  let running = 0;
+  function pump() {
+    while (running < CONCURRENCY) {
+      const start = queued.shift();
+      if (!start) return;
+      running += 1;
+      start();
+    }
+  }
+  function schedule(job) {
+    return new Promise((resolve2, reject) => {
+      queued.push(() => {
+        void job().then(resolve2, reject).finally(() => {
+          running -= 1;
+          pump();
+        });
+      });
+      pump();
+    });
+  }
+  async function translateAll(targets2) {
+    const tally = { shown: 0, empty: 0, failed: 0 };
+    await Promise.all(
+      targets2.map(
+        (target) => schedule(async () => {
+          const outcome = await translate(target, { quiet: true });
+          if (outcome === "shown") tally.shown += 1;
+          else if (outcome === "empty") tally.empty += 1;
+          else if (outcome === "failed") tally.failed += 1;
+        })
+      )
+    );
+    return tally;
+  }
+  const plural = (count, word) => `${count} ${word}${count === 1 ? "" : "s"}`;
+  function inView(target) {
+    if (!target.element.isConnected) return false;
+    const part = visiblePart(target.element);
+    return part.width * part.height > 0 && isBigEnough(target, settings.minImageSize);
+  }
+  function untranslatedInView(candidates) {
+    return candidates.filter(
+      (target) => target.kind !== "video" && inView(target) && !isTranslated(target.element) && !busy.has(target.element)
+    );
+  }
+  function summarise(tally, total2) {
+    const parts = [`Translated ${tally.shown} of ${plural(total2, "image")}`];
+    if (tally.empty) parts.push(`${tally.empty} had no text`);
+    if (tally.failed) parts.push(`${tally.failed} failed (${lastFailure})`);
+    return parts.join("; ");
+  }
+  async function translateVisible() {
+    if (!settings.enabled || site === "off") {
+      toast(
+        site === "off" ? `Lens Translate is switched off on ${hostOf()}` : "Translation is switched off in settings"
+      );
+      return;
+    }
+    const targets2 = untranslatedInView(collect$1(settings.minImageSize));
+    if (!targets2.length) {
+      toast("Nothing left to translate in view");
+      return;
+    }
+    toast(`Translating ${plural(targets2.length, "image")}...`, 12e4);
+    toast(summarise(await translateAll(targets2), targets2.length), 5e3);
+  }
+  const autoTried = /* @__PURE__ */ new WeakMap();
+  let autoTimer = 0;
+  let lastAutoComplaint = 0;
+  function autoTranslate() {
+    if (site !== "auto" || !active()) return;
+    const targets2 = untranslatedInView(known).filter(
+      (target) => autoTried.get(target.element) !== target.url
+    );
+    if (!targets2.length) return;
+    for (const target of targets2) autoTried.set(target.element, target.url);
+    void translateAll(targets2).then((tally) => {
+      if (tally.failed && Date.now() - lastAutoComplaint > 3e4) {
+        lastAutoComplaint = Date.now();
+        toast(`Auto-translate: ${plural(tally.failed, "image")} failed (${lastFailure})`, 5e3);
+      }
+    });
+  }
+  function scheduleAuto() {
+    if (autoTimer || site !== "auto") return;
+    autoTimer = window.setTimeout(() => {
+      autoTimer = 0;
+      autoTranslate();
+    }, 250);
   }
   let currentTarget = null;
   let hideTimer;
@@ -3425,18 +3731,24 @@ ${OVERLAY_CSS}`;
     const rect = anchor ?? target.element.getBoundingClientRect();
     gear.style.top = `${rect.top + 8}px`;
     gear.style.left = `${rect.left + rect.width - 69}px`;
-    gear.style.opacity = "1";
-    gear.style.transform = "scale(1)";
-    gear.style.pointerEvents = "auto";
+    more.style.top = `${rect.top + 8}px`;
+    more.style.left = `${rect.left + rect.width - 101}px`;
+    for (const control of [gear, more]) {
+      control.style.opacity = "1";
+      control.style.transform = "scale(1)";
+      control.style.pointerEvents = "auto";
+    }
   }
   function hideGear() {
     window.clearTimeout(gearTimer);
-    gear.style.opacity = "0";
-    gear.style.transform = "scale(0.9)";
-    gear.style.pointerEvents = "none";
+    for (const control of [gear, more]) {
+      control.style.opacity = "0";
+      control.style.transform = "scale(0.9)";
+      control.style.pointerEvents = "none";
+    }
   }
   function showButton(target, anchor) {
-    if (!settings.showButton) return;
+    if (!settings.showButton || site === "off") return;
     const img = target.element;
     currentTarget = target;
     const rect = anchor ?? img.getBoundingClientRect();
@@ -3468,6 +3780,7 @@ ${OVERLAY_CSS}`;
   function refresh() {
     known = collect$1(settings.minImageSize);
     updatePinned();
+    autoTranslate();
   }
   function somethingChanged() {
     emptyRetries = 0;
@@ -3511,7 +3824,7 @@ ${OVERLAY_CSS}`;
     pinnedFrame = window.requestAnimationFrame(() => {
       pinnedFrame = 0;
       if (!pinned) return;
-      const found = settings.showButton ? mostVisible() : null;
+      const found = settings.showButton && site !== "off" ? mostVisible() : null;
       if (!found) {
         hideButton();
         if (emptyRetries < EMPTY_RETRIES) {
@@ -3529,11 +3842,12 @@ ${OVERLAY_CSS}`;
     if (event.target?.tagName === "IMG") somethingChanged();
   }
   const TOUCH_QUERY = "(hover: none), (pointer: coarse)";
-  function applyButtonMode() {
-    const wanted = settings.buttonMode === "pinned" || settings.buttonMode === "auto" && window.matchMedia(TOUCH_QUERY).matches;
-    if (wanted === pinned) return;
-    pinned = wanted;
-    if (pinned) {
+  let watching = false;
+  function syncWatchers() {
+    const wanted = pinned || site === "auto";
+    if (wanted === watching) return false;
+    watching = wanted;
+    if (watching) {
       document.addEventListener("load", onImageLoad, true);
       tree = new MutationObserver(somethingChanged);
       tree.observe(document.documentElement, {
@@ -3549,8 +3863,18 @@ ${OVERLAY_CSS}`;
       document.removeEventListener("load", onImageLoad, true);
       tree?.disconnect();
       tree = null;
-      hideButton();
     }
+    return watching;
+  }
+  function applyButtonMode() {
+    const wanted = settings.buttonMode === "pinned" || settings.buttonMode === "auto" && window.matchMedia(TOUCH_QUERY).matches;
+    const turnedOn = wanted && !pinned;
+    if (wanted !== pinned) {
+      pinned = wanted;
+      if (!pinned) hideButton();
+    }
+    const started = syncWatchers();
+    if (turnedOn && !started) refresh();
   }
   document.addEventListener(
     "mouseover",
@@ -3572,7 +3896,7 @@ ${OVERLAY_CSS}`;
     },
     true
   );
-  for (const control of [button, gear]) {
+  for (const control of [button, gear, more]) {
     control.addEventListener("mouseover", () => window.clearTimeout(hideTimer));
     control.addEventListener("mouseout", () => {
       if (pinned) return;
@@ -3602,15 +3926,34 @@ ${OVERLAY_CSS}`;
     },
     true
   );
+  more.addEventListener(
+    "click",
+    (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (isMenuOpen()) closeMenu();
+      else openActions();
+    },
+    true
+  );
   button.addEventListener(
     "click",
     (event) => {
       event.preventDefault();
       event.stopPropagation();
+      if (swallowClick) {
+        swallowClick = false;
+        return;
+      }
       if (currentTarget) void translate(currentTarget);
     },
     true
   );
+  button.addEventListener("contextmenu", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!holding && !swallowClick) openActions();
+  });
   document.addEventListener(
     "click",
     (event) => {
@@ -3618,6 +3961,7 @@ ${OVERLAY_CSS}`;
       if (modifier === "none") return;
       const pressed = modifier === "alt" && event.altKey || modifier === "ctrl" && event.ctrlKey || modifier === "shift" && event.shiftKey;
       if (!pressed) return;
+      if (site === "off") return;
       const found = targetFromEvent(event, settings.minImageSize, isOurs);
       if (!found) return;
       event.preventDefault();
@@ -3628,6 +3972,7 @@ ${OVERLAY_CSS}`;
   );
   function reposition() {
     repositionOverlays();
+    scheduleAuto();
     if (pinned) {
       emptyRetries = 0;
       updatePinned();
@@ -3640,6 +3985,123 @@ ${OVERLAY_CSS}`;
   }
   window.addEventListener("resize", reposition);
   window.addEventListener("scroll", reposition, true);
+  function subject() {
+    const current = currentTarget?.element;
+    if (current && results.has(current)) return current;
+    const last = lastShown?.deref();
+    if (last?.isConnected && results.has(last)) return last;
+    return current ?? null;
+  }
+  async function copyFrom(kind, element = subject()) {
+    const result = element ? results.get(element) : void 0;
+    if (!result) {
+      toast("Translate an image first, then its text can be copied");
+      return;
+    }
+    const text2 = kind === "translation" ? translationText(result) : ocrText(result);
+    const what = kind === "translation" ? "the translation" : "the original text";
+    if (!text2) {
+      toast(`There is no text to copy from ${what}`);
+      return;
+    }
+    toast(
+      await copyText(text2) ? `Copied ${what} (${plural(text2.length, "character")})` : "The browser would not let the script use the clipboard"
+    );
+  }
+  function openActions() {
+    const target = currentTarget;
+    if (!target) return;
+    const translated = isTranslated(target.element);
+    const words = results.has(target.element);
+    const rect = more.getBoundingClientRect();
+    openMenu({ top: rect.bottom + 6, left: rect.right - 220 }, [
+      {
+        label: translated ? "Show the original (undo)" : "Translate this image",
+        run: () => void translate(target)
+      },
+      { label: "Copy translation", run: () => void copyFrom("translation", target.element), disabled: !words },
+      { label: "Copy original text", run: () => void copyFrom("original", target.element), disabled: !words },
+      { label: "Translate everything in view", run: () => void translateVisible() },
+      { label: "Settings", run: () => openSettings(onSaved) }
+    ]);
+  }
+  const peek = (element, peeking) => peekCover(element, peeking) || peekOverlay(element, peeking);
+  const HOLD_MS = 350;
+  let holdTimer = 0;
+  let holding = null;
+  let swallowClick = false;
+  function startHold(event) {
+    if (event.button !== 0 || !currentTarget || !isTranslated(currentTarget.element)) return;
+    const element = currentTarget.element;
+    window.clearTimeout(holdTimer);
+    holdTimer = window.setTimeout(() => {
+      holding = element;
+      swallowClick = true;
+      peek(element, true);
+      button.classList.add("lt-peeking");
+    }, HOLD_MS);
+    try {
+      button.setPointerCapture(event.pointerId);
+    } catch {
+    }
+  }
+  function endHold() {
+    window.clearTimeout(holdTimer);
+    if (holding) {
+      peek(holding, false);
+      holding = null;
+      button.classList.remove("lt-peeking");
+    }
+    window.setTimeout(() => {
+      swallowClick = false;
+    }, 0);
+  }
+  button.addEventListener("pointerdown", startHold);
+  for (const type of ["pointerup", "pointercancel"]) button.addEventListener(type, endHold);
+  const PEEK_CODES = {
+    backquote: ["Backquote"],
+    shift: ["ShiftLeft", "ShiftRight"],
+    control: ["ControlLeft", "ControlRight"]
+  };
+  let keyPeeking = false;
+  function isTyping(event) {
+    const node = event.composedPath()[0];
+    if (!node?.tagName) return false;
+    return node.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(node.tagName);
+  }
+  function endKeyPeek() {
+    if (!keyPeeking) return;
+    keyPeeking = false;
+    peekAllCovers(false);
+    peekAllOverlays(false);
+  }
+  document.addEventListener(
+    "keydown",
+    (event) => {
+      if (isTyping(event)) return;
+      if (settings.batchHotkey && event.altKey && event.shiftKey && !event.ctrlKey && !event.metaKey && event.code === "KeyT") {
+        event.preventDefault();
+        void translateVisible();
+        return;
+      }
+      if (settings.peekKey === "off" || event.repeat || keyPeeking) return;
+      if (!PEEK_CODES[settings.peekKey].includes(event.code)) return;
+      keyPeeking = true;
+      peekAllCovers(true);
+      peekAllOverlays(true);
+    },
+    true
+  );
+  document.addEventListener(
+    "keyup",
+    (event) => {
+      if (settings.peekKey !== "off" && PEEK_CODES[settings.peekKey].includes(event.code)) {
+        endKeyPeek();
+      }
+    },
+    true
+  );
+  window.addEventListener("blur", endKeyPeek);
   registerCommand({
     menuLabel: "Lens Translate: settings",
     // The panel is where these are drawn, so it does not offer to open itself.
@@ -3669,6 +4131,47 @@ ${OVERLAY_CSS}`;
       const restored = uncoverAll() + clearAllOverlays();
       toast(restored ? `Restored ${restored} image${restored === 1 ? "" : "s"}` : "Nothing to restore");
     }
+  });
+  registerCommand({
+    menuLabel: "Lens Translate: translate all visible images",
+    label: "Translate all in view",
+    run: () => void translateVisible()
+  });
+  registerCommand({
+    menuLabel: "Lens Translate: copy translation",
+    label: null,
+    run: () => void copyFrom("translation")
+  });
+  registerCommand({
+    menuLabel: "Lens Translate: copy original text",
+    label: null,
+    run: () => void copyFrom("original")
+  });
+  function chooseSite(next) {
+    site = next;
+    setSiteMode(next);
+    if (next === "off") {
+      showing.clear();
+      uncoverAll();
+      clearAllOverlays();
+      hideButton();
+    }
+    const started = syncWatchers();
+    if (next === "auto" && !started) refresh();
+    const host = hostOf();
+    toast(
+      next === "off" ? `Lens Translate is off on ${host}` : next === "auto" ? `Images on ${host} will be translated as they come into view` : `${host} is back to the default`
+    );
+  }
+  registerCommand({
+    menuLabel: "Lens Translate: toggle on/off for this site",
+    label: "Toggle for this site",
+    run: () => chooseSite(site === "off" ? "default" : "off")
+  });
+  registerCommand({
+    menuLabel: "Lens Translate: toggle auto-translate for this site",
+    label: "Toggle auto-translate here",
+    run: () => chooseSite(site === "auto" ? "default" : "auto")
   });
   registerCommand({
     menuLabel: "Lens Translate: diagnostics",
@@ -3704,9 +4207,11 @@ ${OVERLAY_CSS}`;
   window.addEventListener("hashchange", checkDebugHash);
   applyButtonMode();
   checkDebugHash();
-  void preloadStored(SETTINGS_KEYS).then((arrived) => {
+  void preloadStored([...SETTINGS_KEYS, SITES_KEY]).then((arrived) => {
     if (!arrived) return;
     settings = reloadSettings();
+    reloadSites();
+    site = siteMode();
     applyButtonMode();
   });
   window.matchMedia(TOUCH_QUERY).addEventListener("change", applyButtonMode);

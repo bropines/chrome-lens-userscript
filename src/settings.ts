@@ -24,6 +24,8 @@ export const DEFAULTS: Settings = {
   showButton: true,
   buttonMode: 'auto',
   hotkey: 'alt',
+  batchHotkey: true,
+  peekKey: 'off',
   fontFamily: '',
   drawBackground: true,
   verticalText: 'auto',
@@ -171,6 +173,24 @@ export const FIELDS: ReadonlyArray<Field> = [
       ['shift', 'Shift + click'],
       ['none', 'off'],
     ],
+  },
+  {
+    key: 'batchHotkey', group: 'Behaviour',
+    label: 'Alt + Shift + T translates all in view',
+    type: 'checkbox',
+    hint: 'every picture currently on screen; also in the userscript menu and Actions below',
+  },
+  {
+    key: 'peekKey', group: 'Behaviour',
+    label: 'Hold to see the original',
+    type: 'select',
+    options: [
+      ['off', 'off - holding the button down still works'],
+      ['backquote', '` (backtick), held'],
+      ['shift', 'Shift, held'],
+      ['control', 'Ctrl, held'],
+    ],
+    hint: 'while held, every translation steps aside; let go and it is back',
   },
   {
     key: 'reflowHorizontal', group: 'Layout',

@@ -50,6 +50,9 @@ export default defineConfig({
           // Userscripts, which publish nothing synchronous.
           'GM.getValue',
           'GM.setValue',
+          // For "copy translation" and "copy original text".
+          'GM_setClipboard',
+          'GM.setClipboard',
           'GM_registerMenuCommand',
           'GM_info',
           'unsafeWindow',

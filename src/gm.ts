@@ -3,6 +3,7 @@ import {
   GM_getValue,
   GM_info,
   GM_registerMenuCommand,
+  GM_setClipboard,
   GM_setValue,
   GM_xmlhttpRequest,
   unsafeWindow,
@@ -131,6 +132,54 @@ export function writeStored(key: string, value: unknown): void {
     window.localStorage.setItem(LOCAL_PREFIX + key, encoded);
   } catch {
     // Private mode, or a quota that a page has already filled. Nothing to do.
+  }
+}
+
+// --- Clipboard --------------------------------------------------------------
+
+/**
+ * Put text on the clipboard by whichever way this host allows.
+ *
+ * The host's own call comes first because it asks nothing of the page: the
+ * asynchronous clipboard API wants a secure context and a focused document, and
+ * fails on plain-http pages and when the click that led here landed in a shadow
+ * root the page does not consider focused. The old `execCommand` is last and
+ * works nearly everywhere a user gesture is in flight, which is why it is still
+ * there. Resolves false, rather than throwing, when nothing took it.
+ */
+export async function copyText(text: string): Promise<boolean> {
+  try {
+    if (typeof GM_setClipboard === 'function') {
+      GM_setClipboard(text, 'text');
+      return true;
+    }
+    if (typeof GM?.setClipboard === 'function') {
+      await GM.setClipboard(text, 'text');
+      return true;
+    }
+  } catch {
+    // Fall through to the page's own.
+  }
+  try {
+    if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    // Refused for want of focus or a gesture; the textarea route may not be.
+  }
+  try {
+    const area = document.createElement('textarea');
+    area.value = text;
+    area.setAttribute('readonly', '');
+    area.style.cssText = 'position:fixed;top:0;left:0;opacity:0;pointer-events:none';
+    document.body.appendChild(area);
+    area.select();
+    const copied = document.execCommand('copy');
+    area.remove();
+    return copied;
+  } catch {
+    return false;
   }
 }
 

@@ -8,7 +8,8 @@
 }
 
 #lt-button,
-#lt-gear {
+#lt-gear,
+#lt-more {
   position: absolute;
   width: 32px;
   height: 32px;
@@ -26,16 +27,31 @@
   border: 1px solid rgba(255, 255, 255, 0.2);
 }
 #lt-button:hover,
-#lt-gear:hover {
+#lt-gear:hover,
+#lt-more:hover {
   background: rgba(0, 0, 0, 0.85);
   transform: scale(1.05);
 }
 
 /* Appears a beat after the main button, so a passing cursor does not summon
    two controls at once. */
-#lt-gear {
+#lt-gear,
+#lt-more {
   width: 26px;
   height: 26px;
+}
+/* Held down to look at the original: the button says so by dimming. */
+#lt-button.lt-peeking {
+  background: rgba(60, 60, 60, 0.9);
+  box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.55);
+}
+/* Held down to peek, and on a touch screen a long press: the browser must not
+   take either for a scroll or a text selection. */
+#lt-button {
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
 }
 #lt-button.lt-busy svg {
   animation: lt-spin 1s linear infinite;
@@ -49,6 +65,55 @@
 @keyframes lt-spin {
   to {
     transform: rotate(360deg);
+  }
+}
+
+/* ----------------------------------------------------------------- menu */
+
+.lt-menu {
+  position: absolute;
+  min-width: 190px;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+  color: #1a1a1a;
+  border-radius: 10px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  pointer-events: auto;
+}
+.lt-menu-item {
+  font: inherit;
+  text-align: left;
+  padding: 8px 12px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+.lt-menu-item:hover:not(:disabled),
+.lt-menu-item:focus-visible {
+  background: #eaeaea;
+  outline: none;
+}
+.lt-menu-item:disabled {
+  color: #909090;
+  cursor: default;
+}
+@media (prefers-color-scheme: dark) {
+  .lt-menu {
+    background: #1f1f22;
+    color: #ececec;
+    border-color: #35353a;
+  }
+  .lt-menu-item:hover:not(:disabled),
+  .lt-menu-item:focus-visible {
+    background: #3a3a40;
+  }
+  .lt-menu-item:disabled {
+    color: #7c7c84;
   }
 }
 

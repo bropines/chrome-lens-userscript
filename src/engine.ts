@@ -50,6 +50,7 @@ export { getTransport, setTransport } from './transport.js';
 export { LENS_ENDPOINT, callLens, fetchImageBlob } from './lens/client.js';
 export { buildRequest } from './lens/request.js';
 export { parseResponse } from './lens/response.js';
+export { ocrText, translationText } from './lens/text.js';
 
 export type { Source } from './image.js';
 export { acquireSource, encodeForUpload, fingerprint, prepareImage } from './image.js';

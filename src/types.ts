@@ -102,6 +102,7 @@ export type Alignment = (typeof Alignment)[keyof typeof Alignment];
 export type VerticalTextMode = 'auto' | 'keep' | 'horizontal';
 export type HotkeyModifier = 'alt' | 'ctrl' | 'shift' | 'none';
 export type ButtonMode = 'auto' | 'hover' | 'pinned';
+export type PeekKey = 'off' | 'backquote' | 'shift' | 'control';
 
 /**
  * What is asked of Lens, and what is sent to ask it.
@@ -247,6 +248,19 @@ export interface AppSettings {
    */
   buttonMode: ButtonMode;
   hotkey: HotkeyModifier;
+  /**
+   * Alt+Shift+T translates every picture in view.
+   *
+   * A setting rather than a fixed binding because a key chord nobody asked for
+   * is exactly what a page's own shortcuts collide with, and Option+Shift+T
+   * types a character on a Mac.
+   */
+  batchHotkey: boolean;
+  /**
+   * A key that, while held, shows the original under every translation.
+   * Holding the button down does the same for one picture and needs no key.
+   */
+  peekKey: PeekKey;
   /** Smallest rendered box, in CSS pixels, that counts as a picture. */
   minImageSize: number;
   renderMode: RenderMode;

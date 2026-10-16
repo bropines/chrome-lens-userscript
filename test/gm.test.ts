@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, mock, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
 
 /**
  * gm.ts against fake hosts.
@@ -17,6 +17,7 @@ const NO_HOST = {
   GM_setValue: undefined,
   GM_info: undefined,
   GM_registerMenuCommand: undefined,
+  GM_setClipboard: undefined,
   GM_xmlhttpRequest: undefined,
   unsafeWindow: undefined,
 };
@@ -127,6 +128,67 @@ describe('storage on a host with neither', () => {
     const gm = await loadWith({});
     expect(() => gm.writeStored('k', 'v')).not.toThrow();
     expect(gm.readStored('k')).toBeNull();
+  });
+});
+
+describe('the clipboard', () => {
+  // The page is replaced for these, and the layout tests that run after them
+  // want the one test/setup.ts made.
+  const original = { document: globalThis.document, navigator: globalThis.navigator };
+  afterEach(() => {
+    Object.assign(globalThis, original);
+  });
+
+  const page = (clipboard: unknown, execCommand?: () => boolean): { appended: unknown[] } => {
+    const appended: unknown[] = [];
+    Object.assign(globalThis, {
+      navigator: { clipboard },
+      document: {
+        createElement: () => ({ style: {}, setAttribute() {}, select() {}, remove() {} }),
+        body: { appendChild: (node: unknown) => appended.push(node) },
+        execCommand: execCommand ?? (() => false),
+      },
+    });
+    return { appended };
+  };
+
+  test('the host comes first: it asks nothing of the page', async () => {
+    const copied: Array<[string, string]> = [];
+    const gm = await loadWith({
+      GM_setClipboard: (text: string, type: string) => void copied.push([text, type]),
+    });
+    page({ writeText: () => Promise.reject(new Error('should not be reached')) });
+    expect(await gm.copyText('hello')).toBe(true);
+    expect(copied).toEqual([['hello', 'text']]);
+  });
+
+  test('the promise spelling counts as the host', async () => {
+    const copied: string[] = [];
+    const gm = await loadWith({
+      GM: { setClipboard: async (text: string) => void copied.push(text) },
+    });
+    expect(await gm.copyText('hi')).toBe(true);
+    expect(copied).toEqual(['hi']);
+  });
+
+  test('with no host call, the page clipboard', async () => {
+    const written: string[] = [];
+    const gm = await loadWith({});
+    page({ writeText: async (text: string) => void written.push(text) });
+    expect(await gm.copyText('page')).toBe(true);
+    expect(written).toEqual(['page']);
+  });
+
+  test('refused by the page, the old way is tried', async () => {
+    const gm = await loadWith({});
+    page({ writeText: () => Promise.reject(new Error('not focused')) }, () => true);
+    expect(await gm.copyText('legacy')).toBe(true);
+  });
+
+  test('and when nothing takes it, false rather than a throw', async () => {
+    const gm = await loadWith({});
+    page(undefined, () => false);
+    expect(await gm.copyText('nowhere')).toBe(false);
   });
 });
 
