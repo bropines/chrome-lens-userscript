@@ -14,9 +14,22 @@
  * entry point and fails if it reaches anything above the line, which is a
  * build error the moment such an import is written rather than a surprise for
  * whoever tries to reuse this next.
+ *
+ * Two more rules are about the whole tree rather than the engine's closure,
+ * because they are the same kind of decay:
+ *
+ * - **A host function is called from gm.ts and nowhere else.** `GM_*`, `GM.*`
+ *   and `unsafeWindow` differ between userscript hosts, and every difference is
+ *   settled in that one file by feature detection. A direct call elsewhere
+ *   works on the host it was written on and is a TypeError on the next - which
+ *   is how the end of main.ts once aborted on a host with no menu. Nothing
+ *   outside it may even import `$`, the module those names come from.
+ * - **No dynamic `import()`.** The bundle is a single file, and the import walk
+ *   above only follows static specifiers, so a dynamic one would be a module
+ *   the closure check never looks at.
  */
 
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, posix, relative, resolve } from 'node:path';
 
 const ROOT = resolve(import.meta.dirname, '..');
@@ -79,11 +92,67 @@ function visit(file: string, via: string[]): void {
 
 visit(ENTRY, []);
 
+// --- Rules about the whole tree ---------------------------------------------
+
+/** The one file allowed to talk to the userscript host. */
+const HOST_FILE = 'src/gm.ts';
+
+function sourcesUnder(dir: string): string[] {
+  const out: string[] = [];
+  for (const entry of readdirSync(resolve(ROOT, dir), { withFileTypes: true })) {
+    const path = posix.join(dir, entry.name);
+    if (entry.isDirectory()) out.push(...sourcesUnder(path));
+    else if (entry.name.endsWith('.ts')) out.push(path);
+  }
+  return out;
+}
+
+/**
+ * Names that only exist because a userscript host put them there.
+ *
+ * Looked for in the transpiled output, which has lost its comments and types,
+ * and with string literals skipped: a comment explaining why `GM_xmlhttpRequest`
+ * is wrapped is not a call to it, and neither is the word in an error message.
+ * The string patterns do not cross a line, so a quote inside a regular
+ * expression cannot swallow the code after it.
+ */
+const HOST_NAME =
+  /"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'|`(?:[^`\\]|\\.)*`|(?<![\w$])(GM_\w+|GM|unsafeWindow)(?![\w$])/g;
+
+const transpiler = new Bun.Transpiler({ loader: 'ts' });
+
+for (const file of sourcesUnder('src')) {
+  const source = readFileSync(resolve(ROOT, file), 'utf8');
+
+  for (const { kind, path } of transpiler.scan(source).imports) {
+    if (kind === 'dynamic-import') {
+      problems.push(
+        `${file} has a dynamic import${path ? ` of '${path}'` : ''}, which no check here follows`
+      );
+    }
+    if (path === '$' && file !== HOST_FILE) {
+      problems.push(`${file} imports '$'; only ${HOST_FILE} may talk to the userscript host`);
+    }
+  }
+
+  if (file === HOST_FILE) continue;
+  const used = new Set<string>();
+  for (const match of transpiler.transformSync(source).matchAll(HOST_NAME)) {
+    if (match[1]) used.add(match[1]);
+  }
+  for (const name of used) {
+    problems.push(`${file} uses ${name}; host functions belong in ${HOST_FILE}, behind a feature test`);
+  }
+}
+
 if (problems.length > 0) {
-  console.error(`${ENTRY} reaches outside the engine:\n`);
+  console.error('The layering is broken:\n');
   for (const problem of problems) console.error(`  ${problem}`);
-  console.error('\nThe engine is what another script installs; it cannot depend on this one.');
+  console.error(
+    '\nThe engine is what another script installs and cannot depend on this one;' +
+      `\nthe userscript host is something only ${HOST_FILE} may know about.`
+  );
   process.exit(1);
 }
 
-console.log(`engine closure clean: ${visited.size} modules reachable from ${ENTRY}`);
+console.log(`layers clean: ${visited.size} modules reachable from ${ENTRY}, host confined to ${HOST_FILE}`);

@@ -168,46 +168,31 @@ function loadWithCors(url: string): Promise<HTMLImageElement> {
 /**
  * Get the image into Chromium's upload shape.
  *
- * Three ways in, cheapest first: the element as it stands, the same URL
- * re-requested with CORS, and finally the raw bytes over GM_xmlhttpRequest.
- * Only the last needs permission for the image's host, and it is rarely
+ * The ladder is `acquireSource`'s - the element as it stands, the same URL
+ * re-requested with CORS, then the raw bytes - and the encode is
+ * `encodeForUpload`'s. This used to be a third copy of both, written before
+ * either was split out, and the two drifted: only one of them tested whether
+ * the pixels could be read back before trusting them. A caller that wants the
+ * pixels without the encode (a cache hit does not need an upload) uses
+ * `acquireSource` directly; one that wants the whole thing comes here.
+ *
+ * Only the last rung needs permission for the image's host, and it is rarely
  * reached.
  */
 export async function prepareImage(
   target: Target,
   settings: LensOptions
 ): Promise<PreparedImage> {
-  const own = ownPixels(target);
-  if (own) {
-    try {
-      return await encodeForUpload(own, settings);
-    } catch {
-      // Tainted canvas; fall through to fetching the bytes ourselves.
-    }
-  }
-
-  const url = target.url;
-  if (!url) throw new Error('There is nothing to read from this element');
-
+  const acquired = await acquireSource(target);
   try {
-    const cors = await loadWithCors(url);
-    return await encodeForUpload(cors, settings);
-  } catch {
-    // Either the host sends no CORS headers, or it sends them but the canvas
-    // still came out tainted. Fall through to fetching the bytes.
-  }
-
-  const blob = await fetchImageBlob(url);
-  const bitmap = await createImageBitmap(blob);
-  try {
-    // The bitmap is kept alive for rendering; the caller releases it.
-    return await encodeForUpload(bitmap, settings, () => bitmap.close());
-  } catch (e) {
-    bitmap.close();
-    throw e;
+    // The caller releases the source through the result, once it is done
+    // drawing from it; if the encode fails nobody else will.
+    return await encodeForUpload(acquired.source, settings, acquired.release);
+  } catch (error) {
+    acquired.release();
+    throw error;
   }
 }
-
 
 /**
  * Decoded pixels only, without the JPEG encode.
