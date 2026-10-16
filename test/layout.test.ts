@@ -1,7 +1,10 @@
 import { describe, expect, test } from 'bun:test';
+import { existsSync, readFileSync } from 'node:fs';
 import {
+  CORNER_PUNCT,
   MAX_FONT_SIZE,
   MIN_FONT_SIZE,
+  ROTATED_PUNCT,
   argbToCss,
   buildLineText,
   fitFontSize,
@@ -79,6 +82,16 @@ describe('fitFontSize', () => {
     expect(fitFontSize('a very long line of text indeed', 1, 1, 'sans-serif')).toBe(
       MIN_FONT_SIZE
     );
+  });
+
+  test('the cap belongs to the caller: a supersampled canvas has bigger pixels to spend', () => {
+    // 150 is a size in the picture's own pixels. On a canvas drawn at 2x the
+    // same text is 300 canvas pixels, and capping it at 150 halved every
+    // headline that wanted more than 75.
+    expect(fitFontSize('x', 100000, 100000, 'sans-serif', MAX_FONT_SIZE * 2)).toBe(300);
+    expect(fitFontSize('x', 100000, 100000, 'sans-serif', MAX_FONT_SIZE * 3)).toBe(450);
+    // And a box that is the limit is still the limit.
+    expect(fitFontSize('abcdefghij', 100, 1000, 'sans-serif', 300)).toBe(19);
   });
 
   test('the width is what limits a long line', () => {
@@ -185,6 +198,27 @@ describe('vertical runs', () => {
   });
 });
 
+describe('vertical punctuation', () => {
+  test('dashes and brackets turn, kuten and touten hang, kana stand', () => {
+    for (const char of 'ー「」（）【】…') expect(ROTATED_PUNCT.has(char)).toBe(true);
+    for (const char of '、。') expect(CORNER_PUNCT.has(char)).toBe(true);
+    for (const char of '、。今は') expect(ROTATED_PUNCT.has(char)).toBe(false);
+  });
+
+  const python = new URL(
+    '../../../chrome-lens-py/src/chrome_lens_py/core/text_renderer.py',
+    import.meta.url
+  );
+  test.skipIf(!existsSync(python))('is the set the Python renderer rotates', () => {
+    // Only where the sibling checkout is, which CI does not have: this is a
+    // drift guard for whoever edits one port and forgets the other.
+    const source = readFileSync(python, 'utf8');
+    const literal = /_VERTICAL_ROTATED_PUNCT = frozenset\(\s*"([^"]*)"/.exec(source)?.[1];
+    expect(literal).toBeDefined();
+    expect([...ROTATED_PUNCT].sort()).toEqual([...new Set([...(literal ?? '')])].sort());
+  });
+});
+
 describe('fitTextBlock', () => {
   const rig = () => {
     let size = 10;
@@ -217,6 +251,12 @@ describe('fitTextBlock', () => {
     const { setFont, measure, lineHeight } = rig();
     expect(fitTextBlock(setFont, measure, lineHeight, 'x', 1e6, 1e6).size).toBe(MAX_FONT_SIZE);
     expect(fitTextBlock(setFont, measure, lineHeight, 'x', 1, 1).size).toBe(MIN_FONT_SIZE);
+  });
+
+  test('takes its cap from the caller too', () => {
+    const { setFont, measure, lineHeight } = rig();
+    const fitted = fitTextBlock(setFont, measure, lineHeight, 'x', 1e6, 1e6, false, 300);
+    expect(fitted.size).toBe(300);
   });
 });
 

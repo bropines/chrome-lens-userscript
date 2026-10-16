@@ -1,6 +1,8 @@
 import {
+  MAX_FONT_SIZE,
   MIN_FONT_SIZE,
   OUTLINE_RATIO,
+  ROTATED_PUNCT,
   argbToCss,
   CORNER_PUNCT,
   buildLineText,
@@ -45,6 +47,15 @@ interface DrawContext {
    * page scales this canvas down to its displayed size. Zero disables the floor.
    */
   minFontPx: number;
+  /**
+   * Largest font size, in canvas pixels.
+   *
+   * Chromium's 150 is a cap on a size in the picture's own pixels, and this
+   * canvas is the picture times the supersample factor. Applying 150 to canvas
+   * pixels capped a big headline at 75 natural pixels on a 2x render, and
+   * silently, since the text just came out smaller than its box.
+   */
+  maxFontPx: number;
 }
 
 /**
@@ -102,6 +113,21 @@ function drawVertical(
     if (upright) {
       for (const char of run) {
         const advance = ctx.measureText(char).width;
+        if (ROTATED_PUNCT.has(char)) {
+          // A quarter turn clockwise about the middle of its cell, as the
+          // Python renderer does for the same characters.
+          ctx.save();
+          ctx.translate(boxW / 2, y + em / 2);
+          ctx.rotate(90 * DEG);
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          strokeThenFill(ctx, char, 0, 0, outline, outlineColor);
+          ctx.fillStyle = fill;
+          ctx.fillText(char, 0, 0);
+          ctx.restore();
+          y += em;
+          continue;
+        }
         // Kuten and touten sit in the upper right rather than centred.
         const corner = CORNER_PUNCT.has(char);
         const x = (boxW - advance) / 2 + (corner ? advance * 0.45 : 0);
@@ -171,6 +197,9 @@ function drawReflowedParagraph(
   ctx.save();
   ctx.translate(box.cx, box.cy);
   ctx.rotate(geometry.angle * DEG);
+  // drawLine sets this and this did not, so an Arabic paragraph that was
+  // re-wrapped was shaped and ordered as if it were English.
+  ctx.direction = isRtl(block) ? 'rtl' : 'ltr';
 
   // The same multiple has to reach both the fit and the draw: choosing a size
   // against one spacing and then painting at another overflows the box.
@@ -182,7 +211,16 @@ function drawReflowedParagraph(
     ctx.font = `${px}px ${fontFamily}`;
   };
 
-  const { size } = fitTextBlock(setFont, measure, (px) => px * spacing, text, boxW, boxH, perCharacter);
+  const { size } = fitTextBlock(
+    setFont,
+    measure,
+    (px) => px * spacing,
+    text,
+    boxW,
+    boxH,
+    perCharacter,
+    draw.maxFontPx
+  );
 
   // The readable-size floor overrides what fits, and the wrap has to be redone
   // at the size actually drawn. Wrapping for one size and painting at another
@@ -372,7 +410,13 @@ async function drawLine(
   const text = backgroundOnly ? '' : buildLineText(block.translation, line, nextLine);
   if (text.trim()) {
     const vertical = shouldStayVertical(block, settings.verticalText);
-    const fitted = fitFontSize(text, vertical ? boxH : boxW, vertical ? boxW : boxH, fontFamily);
+    const fitted = fitFontSize(
+      text,
+      vertical ? boxH : boxW,
+      vertical ? boxW : boxH,
+      fontFamily,
+      draw.maxFontPx
+    );
     // Lens sizes text to the original line box, so fine print on a large image
     // comes back at a few pixels once the page scales the image down. Raising
     // it past the box is the only way to make it legible; lines can then
@@ -476,6 +520,7 @@ export async function renderToBlob(
     height,
     fontFamily,
     minFontPx: floorCssPx > 0 ? floorCssPx * canvasPerCssPx : 0,
+    maxFontPx: MAX_FONT_SIZE * scale,
   };
 
   const boxes = blocks.map((block) =>

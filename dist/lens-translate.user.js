@@ -1633,6 +1633,7 @@
     return UPRIGHT_RANGES.some(([low, high]) => code >= low && code <= high);
   };
   const CORNER_PUNCT = new Set("、。，．");
+  const ROTATED_PUNCT = new Set("ー―‐—–〜~（）()「」『』【】〔〕［］[]｛｝{}〈〉《》…‥");
   function verticalRuns(text2) {
     const runs = [];
     for (const char of text2) {
@@ -1930,6 +1931,19 @@
       if (upright) {
         for (const char of run2) {
           const advance = ctx.measureText(char).width;
+          if (ROTATED_PUNCT.has(char)) {
+            ctx.save();
+            ctx.translate(boxW / 2, y + em / 2);
+            ctx.rotate(90 * DEG);
+            ctx.textAlign = "center";
+            ctx.textBaseline = "middle";
+            strokeThenFill(ctx, char, 0, 0, outline, outlineColor);
+            ctx.fillStyle = fill;
+            ctx.fillText(char, 0, 0);
+            ctx.restore();
+            y += em;
+            continue;
+          }
           const corner = CORNER_PUNCT.has(char);
           const x = (boxW - advance) / 2 + (corner ? advance * 0.45 : 0);
           const cy = y - (corner ? em * 0.4 : 0);
@@ -1975,13 +1989,23 @@
     ctx.save();
     ctx.translate(box.cx, box.cy);
     ctx.rotate(geometry.angle * DEG);
+    ctx.direction = isRtl(block) ? "rtl" : "ltr";
     const spacing = settings2.lineSpacing > 0 ? settings2.lineSpacing : 1.25;
     const perCharacter = wrapsPerCharacter(block);
     const measure = (candidate) => ctx.measureText(candidate).width;
     const setFont = (px) => {
       ctx.font = `${px}px ${fontFamily}`;
     };
-    const { size } = fitTextBlock(setFont, measure, (px) => px * spacing, text2, boxW, boxH, perCharacter);
+    const { size } = fitTextBlock(
+      setFont,
+      measure,
+      (px) => px * spacing,
+      text2,
+      boxW,
+      boxH,
+      perCharacter,
+      draw.maxFontPx
+    );
     let fontSize = Math.max(size, draw.minFontPx);
     setFont(fontSize);
     let lines = wrapText(measure, text2, boxW, perCharacter);
@@ -2085,7 +2109,13 @@
     const text2 = backgroundOnly ? "" : buildLineText(block.translation, line, nextLine);
     if (text2.trim()) {
       const vertical = shouldStayVertical(block, settings2.verticalText);
-      const fitted = fitFontSize(text2, vertical ? boxH : boxW, vertical ? boxW : boxH, fontFamily);
+      const fitted = fitFontSize(
+        text2,
+        vertical ? boxH : boxW,
+        vertical ? boxW : boxH,
+        fontFamily,
+        draw.maxFontPx
+      );
       const size = Math.max(fitted, draw.minFontPx);
       ctx.font = `${size}px ${fontFamily}`;
       ctx.direction = isRtl(block) ? "rtl" : "ltr";
@@ -2139,7 +2169,8 @@
       width,
       height,
       fontFamily,
-      minFontPx: floorCssPx > 0 ? floorCssPx * canvasPerCssPx : 0
+      minFontPx: floorCssPx > 0 ? floorCssPx * canvasPerCssPx : 0,
+      maxFontPx: MAX_FONT_SIZE * scale
     };
     const boxes = blocks.map(
       (block) => block.geometry ? rectOf(block.geometry, width, height) : null

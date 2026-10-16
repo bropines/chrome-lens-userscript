@@ -236,6 +236,16 @@ export const isUpright = (char: string): boolean => {
 /** Small punctuation hangs in the upper right of its em square. */
 export const CORNER_PUNCT = new Set('、。，．');
 
+/**
+ * Dashes and brackets turn a quarter turn in vertical text.
+ *
+ * Stacked upright, a long-vowel mark or a pair of brackets points the wrong way
+ * - a horizontal stroke where the column wants a vertical one. This is the set
+ * the Python renderer rotates (`_VERTICAL_ROTATED_PUNCT` in text_renderer.py),
+ * kept identical so the two ports set the same page the same way.
+ */
+export const ROTATED_PUNCT = new Set('ー―‐—–〜~（）()「」『』【】〔〕［］[]｛｝{}〈〉《》…‥');
+
 export function verticalRuns(text: string): Array<[boolean, string]> {
   const runs: Array<[boolean, string]> = [];
   for (const char of text) {
