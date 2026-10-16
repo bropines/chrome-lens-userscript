@@ -22,21 +22,31 @@ need to land in both.
 ```bash
 bun install
 bun run gen        # proto/ -> .protogen -> src/gen/fields.ts  (after updating protos)
-bun run typecheck  # tsc --noEmit, strict
-bun run check      # the engine's import closure stays clean
-bun run build      # typecheck, check, then dist/lens-translate.user.js
+bun run typecheck  # tsc --noEmit, strict (src and test)
+bun run check      # layering: the engine stays clean, the host stays in gm.ts
+bun test           # unit tests, no browser; CI runs them before the build
+bun run build      # typecheck, check, then dist/lens-translate.user.js + .meta.js
 bun run dev        # live-reload userscript for development
 ```
 
 `bun run build` is the gate: it will not emit if the types do not check, or if
-the engine has grown an import of the application.
+the layering is broken. It does not run the tests - `bun test` is its own step,
+in CI and before you commit.
+
+Bun is pinned in CI (`bun-version` in the workflow) because `dist/` is compared
+byte for byte; bump it deliberately, with a rebuilt `dist/`. `.gitattributes`
+pins text files to LF for the same reason: on a Windows checkout with autocrlf
+`src/ui/styles.css` arrives with CRLF and is inlined into the bundle as such,
+so a local build differs from CI's. Write files with LF.
 
 ## Layout
 
 ```
 proto/                  Chromium's Lens .proto files, copied verbatim
 scripts/gen-fields.ts   descriptors -> typed field-number table (build time only)
-scripts/check-layers.ts the engine may not import the application
+scripts/check-layers.ts the engine may not import the application; the host
+                        is only named in gm.ts; no dynamic import()
+test/                   bun test; setup.ts stubs the page with a predictable ruler
 src/
   engine.ts             the engine's public entry - everything below the line
   protobuf.ts           minimal wire codec: varint, length-delimited, fixed32
@@ -45,18 +55,22 @@ src/
   gm.ts                 every difference between userscript hosts, in one place
   detect.ts             what counts as a picture, and where they are
   settings.ts           GM-backed store, defaults, and the settings field list
+  sites.ts              per-hostname rules: default, off, auto-translate
   languages.ts          language codes; labels come from Intl.DisplayNames
-  cache.ts              LRU over Lens responses, evicted by bytes
+  cache.ts              LRU over Lens responses and renderings, one byte budget
   store.ts              the same answers kept across reloads, keyed by content
+                        and language, with recency in a store of its own
   image.ts              fetch, downscale, JPEG encode
   gen/fields.ts         GENERATED - do not edit
-  lens/                 request builder, response parser, transport
+  lens/                 request builder, response parser, transport, plain text
   render/
     layout.ts           the pure layout maths, shared by both renderers
+    background.ts       a CSS background as geometry (pure)
     canvas.ts           paints the translation into a bitmap
     cover.ts            lays that bitmap over the image as a sibling
+    watch.ts            notices that a covered element is no longer that picture
     overlay.ts          the alternative DOM-lines renderer
-  ui/                   shadow root, settings panel, styles
+  ui/                   shadow root, settings panel, menu, styles
 ```
 
 ## Things that are the way they are for a reason
@@ -89,6 +103,18 @@ is what catches `$`, and with it `vite-plugin-monkey`. Run it against a
 deliberate violation before trusting it; a checker that cannot fail proves
 nothing, and this one was written by adding the import back and watching it go
 red.
+
+It also checks two rules about the whole tree, which decay the same way:
+
+- **`GM_*`, `GM` and `unsafeWindow` are named in `gm.ts` and nowhere else**, and
+  only `gm.ts` imports `$`. It looks at transpiled output (so a comment
+  mentioning `GM_xmlhttpRequest` is not a call) with string literals skipped.
+  Everything host-specific is a feature test in one file; a direct call
+  elsewhere is a TypeError on the next host.
+- **No dynamic `import()`.** The bundle is one file and the closure walk only
+  follows static specifiers, so a dynamic one would be a module nothing checks.
+
+Add a violation of each before trusting a change to the checker.
 
 Three things came out of drawing the line, and all three are better designs
 independently of the consumer:
@@ -132,6 +158,45 @@ Three approaches were tried. Two failed:
    Shares the image's containing block, so `offsetLeft`/`offsetTop` need no
    scroll correction; the framework never touches it because it did not create
    it. This is the one that works.
+
+What the sibling does not do by itself is notice that the framework changed
+what the image *is*. A virtualised feed reuses the `<img>` for the next post by
+assigning a new `src`, and a cover that nobody told sits on top of a different
+photograph - and then a settings change "redraws" it by the stale address. A
+framework that makes a new element instead leaves the cover orphaned in the page
+and its object URL unrevocable, because the only way to a cover was through its
+image. So:
+
+- `render/watch.ts` watches a covered element: `src`/`srcset`/`sizes` (or
+  `style`/`class` for a background), plus `load` and `error`, which are the only
+  report of a `<picture>` source switching under a media query. A new address
+  that **normalises to the same one** is not a change (Twitter's
+  `?name=small` -> `large`), and re-asserting the same `src`, which React does
+  every render, is not news either. While a change is unresolved the cover is
+  hidden, not left over the new picture; `currentSrc` lags the attribute, hence
+  the short settle delay.
+- Covers are registered by the **cover element**, which is in the page, and
+  callbacks hold a `WeakRef` to the image, so the registry is not what keeps a
+  discarded element alive. `coverImage` owns the object URL it is given,
+  including when it fails to lay the cover.
+- `main.ts` sweeps every few seconds and prunes `showing`. The resize observer
+  is what reports a removal quickly - but **it, `requestAnimationFrame` and
+  `IntersectionObserver` do not fire in a pane that is not being painted**, so
+  a test in a hidden browser pane sees covers that never go. Test in a painting
+  browser.
+- The tail of the same lesson: `mouseover` only fires on *entering* an element,
+  so a test that leaves the cursor where it was and expects the button after a
+  state change is testing the test.
+
+A cover for a CSS background is not the element's box. `render/background.ts`
+works out where `background-size`/`-position`/`-origin` put the one painted copy
+and `place` in `cover.ts` puts the cover there, clipped to `background-clip`
+with the element's rounded corners as a `clip-path`; for `<img>`, `<canvas>` and
+`<video>` it is the **content** box, with `object-position` copied alongside
+`object-fit`. Measured by screenshotting the original and then the cover alone
+over a hidden original: identical to the pixel for replaced elements, and
+differing only on rows where a half-pixel offset antialiases the edge for
+backgrounds.
 
 ### All UI lives in a shadow root
 
@@ -178,6 +243,9 @@ From `chrome/browser/resources/lens/overlay/text_layer.ts`:
 - **Font size is a binary search over 3..150px**, testing measured width against
   the box width and `fontBoundingBoxAscent + fontBoundingBoxDescent` against the
   box height — the font's bounding box, not the ink extents of these glyphs.
+  150 is in the picture's own pixels; the canvas is drawn at the supersample
+  factor, so the cap handed to `fitFontSize`/`fitTextBlock` is `150 * scale`.
+  Applying 150 to canvas pixels capped a headline at 75 natural pixels on 2x.
 - **The background patch is larger than the line box.** Chromium writes this as
   `hPad * box.h / aspect * W` and `vPad * box.h * H`, and since `W / aspect ===
   H`, both are a fraction of the line's height in pixels. It looks wrong for a
@@ -234,6 +302,26 @@ tried and a bad API key is not spent twice.
 
 An empty body is a body. Returning `null` for an empty string here reported a
 zero-byte 200 as "a response this script cannot read".
+
+**An image fetch is sent as the browser's own would have been.** `getBinary`
+takes the page as `Referer` (the engine's `Transport.get` has an optional
+`referer`, so another front end can supply its own) and sends cookies
+(`anonymous: false`). Hotlink-protected hosts - pixiv's image host, most manga
+CDNs - answer `403` to a bare `GM_xmlhttpRequest`. The Lens POST gets neither.
+
+**Storage has three shapes.** The synchronous `GM_getValue`; the promise-only
+`GM.getValue` of Greasemonkey 4 and Safari's Userscripts, which cannot be read
+synchronously and so are loaded into memory once (`preloadStored`) with the
+settings and site rules re-read when they land; and `localStorage`, which is the
+*site's* and only a last resort. Falling to it silently is how Safari settings
+became per-site. Both grant names are declared.
+
+**`@noframes`.** The script does not run in iframes: it ran in every ad and
+embed on a page, each with a copy of the bundle, an observer and a shadow root.
+A reader inside an iframe of its own is the cost; there is no per-frame opt-in
+in the metadata. `updateURL` points at `dist/lens-translate.meta.js` (the header
+alone, emitted by `metaFileName`) so a manager's version poll does not download
+the whole bundle; `downloadURL` stays the full script.
 
 **Nothing but a string may be handed to `GM_setValue`.** GM4 promises to persist
 strings, numbers and booleans, and AdGuard for Android honours exactly that in
@@ -321,6 +409,20 @@ computed style per element. The sweep is capped, and the hover path never
 depends on it - it classifies whatever is under the cursor directly, so a
 background always works there.
 
+**A background is a picture only if it is painted once.** `url()` on `<body>`,
+`<html>` or a wrapper is a texture, and because a hover takes the nearest
+classified element up the tree, one patterned ancestor made every spot of the
+page without a picture of its own offer to translate it. So: `body`/`html` are
+never pictures; a repeating background counts only when its size always fills
+the box (`cover`, or an explicit size at least that big) - `repeat` with `auto`
+size is the signature of a pattern, decided from the style alone before the
+image has loaded; a size the style settles that is under `minImageSize` fails
+the size test (a 24px icon on a wide bar); and what is not modelled (fixed
+attachment, text clipping, `space`/`round`, a position it cannot resolve) is
+refused, not guessed. The exact "was it tiled" test waits for the picture's own
+size and happens when the cover is laid. The first `url()` layer is used, with
+its siblings looked up at the same index of each list.
+
 ### The pinned button is a scan, not an observer
 
 A touch screen has no hover, so in `buttonMode: auto` the button is pinned over
@@ -354,12 +456,24 @@ inside a site's own shadow root, which the hover path reaches via
 ### The cache has two levels, and their order matters
 
 `cache.ts` holds Lens responses *and* finished renderings, sharing one byte
-budget. Two mistakes were made here and both are worth not repeating:
+budget **and one clock** (it said so for a while before it was true: each map
+evicted against the full limit on its own). It is the memory allowance;
+`store.ts` is a separate allowance of the same size on disk. Mistakes made here
+that are worth not repeating:
 
 - The response cache was keyed on the raw image URL. Twitter serves one photo
   as `?name=small` / `medium` / `large` / `orig` and React rewrites `src`
   between them, so every layout change was a miss. Keys go through
   `normalizeUrl`, which drops rendition parameters.
+- ...and that list was too long. `w`, `h`, `s`, `fit`, `crop` and `resize` do not
+  pick a *resolution* of a picture, they pick *which part*, so two crops of one
+  path collided and the second got the first one's translation laid out for a
+  different frame. Only parameters that change the pixel count of the same frame
+  are dropped (`name`, `format`, `fm`, `q`, `quality`, `dpr`, `auto`), and each
+  only when its value looks like that kind of value (`name` on another CDN is a
+  filename). An entry also remembers the proportions of the pixels it was made
+  from and a hit that disagrees by more than rounding is a miss - compared as an
+  aspect ratio, since `small` and `orig` are different sizes of one frame.
 - The cache check sat *after* `prepareImage`, so a hit still fetched pixels and
   JPEG-encoded an upload nobody would send. The render cache is now checked
   first and short-circuits everything; the response cache sits ahead of the
@@ -406,10 +520,21 @@ Three things about where it sits in the flow:
 - **Only the answer is kept, never the picture.** Drawing from it is local work
   in milliseconds, and a stored rendering would be wrong the moment a setting
   changed.
-- **The languages are part of the entry**, not the key, so asking for a
-  different target language misses rather than returning the old translation.
+- **The languages are part of the key**, with the hash. They were a field to
+  compare, which made a miss on a different language correct but made translating
+  to a second language *overwrite* the first, and going back paid Lens again.
+- **Recency lives in a small `meta` store**, and eviction walks its `used` index
+  with a cursor. A hit used to rewrite the whole record (megabytes of patches) to
+  update one number, and every write ran `getAll()` on the responses to total the
+  bytes. A hit now touches only the small record, at most once a minute per
+  entry; the total is kept by arithmetic and recounted from the small records now
+  and then, since other tabs write too.
+- Version 1 data is keyed the wrong way round and cannot be migrated, so the
+  upgrade drops it. It is tested against `fake-indexeddb`, upgrade included.
 
-It is per-origin, being IndexedDB, and it degrades to nothing when storage is
+It is per-origin, being IndexedDB - what was translated on a site sits in that
+site's origin, readable by the site's own scripts, which the README says
+plainly. It degrades to nothing when storage is
 blocked - every call resolves to null rather than throwing, including a blocked
 upgrade, which would otherwise hang every caller waiting on the database.
 
@@ -606,20 +731,45 @@ width `2 * pad`, then fill.
 
 ## Verifying changes
 
-There is no test runner. Changes to rendering or the protocol are verified in a
-real browser against a recorded Lens response: build a page that inlines
-`dist/lens-translate.user.js`, shim the `GM_*` functions, and drive the script
-through a real hover and click.
+`bun test` covers what can be checked without a page: the protobuf codec, URL
+normalisation and the cache budget, the layout maths (`test/layout.test.ts`,
+partly ported from `chrome-lens-py/tests/test_units.py` - and the rotated
+punctuation set is compared with the Python one when the sibling checkout is
+there), background geometry, the IndexedDB store, `gm.ts` and the per-site rules.
 
-`src/gm.ts` is verified the same way but without a browser: build it as its own
-entry, then `eval` the bundle under a fake host, re-evaluating for each shape
-worth covering - `vite-plugin-monkey` captures the `GM_*` globals when the
-bundle starts, so a fresh `eval` is what picks up a different host. The shapes
-that matter are Tampermonkey (typed array in, ArrayBuffer out), AdGuard (string
-only in, text out, no menu), a host with only the GM4 `GM.xmlHttpRequest`, and
-one with no transport at all. A body covering all 256 byte values is what
-catches a lossy path; a short ASCII one passes through nearly anything. Past sessions have used this to confirm
-alignment to the pixel, zero framework reverts, and cache hits.
+- `test/setup.ts` stands in for the page with a ruler anyone can do in their
+  head (a Latin glyph is half an em, a CJK one a full em, the font box one em
+  tall). The layout maths promises a relationship between measurements and the
+  size chosen, not what a browser's metrics are. `layout.ts` makes its measuring
+  context on first use so importing it needs no DOM.
+- A module that imports `$` is tested by replacing `$` with
+  `mock.module('$', ...)` and importing a **fresh copy** of the module under a
+  query string (`import('../src/gm.ts?host=1')`):
+  `vite-plugin-monkey` captures the host's globals when the bundle starts, so a
+  different host needs a different evaluation. The shapes that matter are
+  Tampermonkey (typed array in, ArrayBuffer out), AdGuard (string only in, text
+  out, no menu), a host with only the GM4 `GM.xmlHttpRequest`, one with
+  promise-only storage, and one with no transport at all. A body covering all
+  256 byte values is what catches a lossy path.
+- A test that swaps `globalThis.document` must put it back: the other files'
+  tests run in the same process.
+- `fake-indexeddb` runs `store.ts` for real, including the upgrade from a
+  version 1 database built by hand.
+
+Rendering, the cover and anything that depends on layout are verified in a real,
+**painting** browser against a recorded Lens response: build a page that inlines
+`dist/lens-translate.user.js`, shim the `GM_*` functions, answer
+`GM_xmlhttpRequest` for `crupload` with a response built by `src/protobuf.ts`'s
+`writer()` and the field table (two paragraphs, three lines is enough), and drive
+the script through a real hover and click. `puppeteer-core` against the
+installed Chrome in headless mode paints, which an embedded preview pane that is
+hidden does not - there `requestAnimationFrame`, `ResizeObserver` and
+`IntersectionObserver` never fire and a cover looks as if it never goes. Past
+sessions have used this to confirm alignment to the pixel, zero framework
+reverts, cache hits, the hold-to-peek and batch paths, and the per-site rules.
+For geometry, screenshot the original, hide it, put the cover over it and
+compare the two images: a cover that is a pixel out shows immediately, and what
+remains should be antialiasing along half-pixel edges.
 
 Two traps that produced false passes:
 

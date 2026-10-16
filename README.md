@@ -12,7 +12,10 @@ No server, no extension, no account. TypeScript, built with Vite.
 
 Every version is also tagged, so `raw/v2.5.0/dist/lens-translate.user.js` is a
 working script forever where `main` is only ever the latest one - worth knowing
-if an update ever goes wrong on you.
+if an update ever goes wrong on you. Update checks read
+[`dist/lens-translate.meta.js`](https://github.com/bropines/chrome-lens-userscript/raw/main/dist/lens-translate.meta.js),
+the same header with no code in it, so a manager polling for a new version does
+not download the whole script to find out there is not one.
 
 Or build it yourself:
 
@@ -21,11 +24,29 @@ bun install
 bun run build
 ```
 
-Alt+click an image, or use the button that appears when you hover one. Click again to undo. **On a touch screen there is no hover**, and the tap that would summon the button is the same tap a reader uses to turn the page - so there the button is pinned instead, sitting over whichever image fills most of the viewport and following the scroll. **When to show it** in settings forces either behaviour. Settings live in the userscript manager's menu under **Lens Translate: settings** — or, since AdGuard has no such menu, behind the gear that appears next to the hover button. Clearing the cache, undoing a page and switching the script off are in that panel under **Actions** as well as in the menu, so every host can reach all four.
+Alt+click an image, or use the button that appears when you hover one. Click again to undo. **On a touch screen there is no hover**, and the tap that would summon the button is the same tap a reader uses to turn the page - so there the button is pinned instead, sitting over whichever image fills most of the viewport and following the scroll. **When to show it** in settings forces either behaviour. Settings live in the userscript manager's menu under **Lens Translate: settings** — or, since AdGuard has no such menu, behind the gear that appears next to the hover button. Every command below is in that panel under **Actions** as well as in the menu, so every host can reach all of them.
+
+## What you can do
+
+| | how |
+|---|---|
+| Translate one image | Alt+click it (the modifier is a setting), or the button on hover; tap the pinned button on a touch screen |
+| Undo it | the button again |
+| **See the original** while looking | **hold the button** for a third of a second - the translation steps aside and comes back when you let go. On a touch screen a long press does the same |
+| See every original at once | hold a key: backtick, Shift or Ctrl, chosen under **Hold to see the original** (off by default) |
+| **Translate everything in view** | **Alt+Shift+T**, or *Translate all in view* in the menu and the panel. Two at a time, one summary at the end. Ignored while you are typing in a field; the chord is a setting |
+| **Copy the translation** or **the original text** | the small `...` button next to the gear (it appears with it), or right-click the main button. The original is whatever Lens could read, including text it could not translate |
+| Switch it off on one site | *Toggle for this site* - the button disappears, Alt+click is the page's again and any translations come down |
+| **Translate as you read** on one site | *Toggle auto-translate here* - every picture that scrolls into view is translated by itself, once: one that had no text is not asked about again, and one you undid stays undone |
+| Clear the cache, undo a whole page, switch everything off, run diagnostics | the menu, or **Actions** in the panel |
+
+The per-site choice is per hostname (`www.` is the same site as the bare name) and is kept in the userscript manager's own storage, not the site's.
+
+Backgrounds work too, with a catch: a CSS `background-image` is only offered when it is painted once. A texture tiled behind the page, a sprite, an icon on a button are all `background-image` and none has text to translate, so a repeating background counts only when its size always fills the box (`cover`, or an explicit size at least as big), and one smaller than **Ignore images under** is ignored. The translation is laid where the browser painted the picture - honouring `background-size`, `-position`, `-origin` and `-clip` - and a layout it cannot follow (tiled, fixed to the viewport, clipped to text) is refused rather than guessed at. The `overlay` renderer cannot follow a background and says so.
 
 ### What differs between hosts
 
-Only two things, and both are handled by the script rather than by the reader:
+Four things, and all of them are handled by the script rather than by the reader:
 
 - **The userscript menu may not exist.** `GM_registerMenuCommand` is absent from [AdGuard's documented API](https://adguard.com/kb/general/userscripts/) and missing from some builds, though 1.2.7 does have it. Nothing here name-checks a version: the commands are registered with the host when it takes them and drawn in the settings panel regardless.
 - **Binary bodies are not portable.** Every host implements `GM_xmlhttpRequest`, but none documents which shapes of request body it marshals, and AdGuard has [been loose about `responseType`](https://github.com/AdguardTeam/CoreLibs/issues/1983). The request is sent as a typed array first; a `400`, which is exactly what a mangled protobuf produces, buys one retry as a binary string, and whichever shape returns `200` is used from then on. Responses are read as an ArrayBuffer, a Blob, or `charset=x-user-defined` text, whichever the host produced.
@@ -33,7 +54,7 @@ Only two things, and both are handled by the script rather than by the reader:
 
 An image host is different: there `fetch` is blocked by the very CORS that `GM_xmlhttpRequest` exists to dodge, so that path never remembers a transport and always tries the host's own first.
 
-Settings are stored with `GM_setValue`. A host without it falls back to `localStorage`, which on AdGuard is the *page's* — so settings would then be per-site. Every host worth naming has `GM_setValue`; the fallback is there so a missing one degrades to forgetful rather than broken.
+- **Storage may only be asynchronous.** Tampermonkey, Violentmonkey and AdGuard have `GM_getValue`/`GM_setValue`. Greasemonkey 4 and Safari's Userscripts publish only `GM.getValue`/`GM.setValue`, which return promises, so there is no reading a setting synchronously. Those values are loaded once at startup and the script reapplies them when they arrive (for a few milliseconds it runs on the defaults); writes go to the host straight away. Only a host with neither falls back to `localStorage`, which on AdGuard is the *page's* — so settings would then be per-site — and that is now the last resort rather than what Safari quietly got.
 
 ## When it does not work
 
@@ -156,7 +177,7 @@ Four details are easy to get wrong and are the reason this matches Chromium:
 
 1. **No word wrap.** One translated line is one rendered line, scaled down by font size until it fits. Wrapping never matches.
 2. **The box comes from the original detected line.** The server sends no geometry for translated text at all.
-3. **Font size is a binary search over 3..150px**, testing `measureText().width` against the box width and `fontBoundingBoxAscent + fontBoundingBoxDescent` against the box height — the font's bounding box, not the ink extents of these particular glyphs.
+3. **Font size is a binary search over 3..150px** (of the picture's own pixels - the cap scales with **Render sharpness**, so a 2x canvas allows 300), testing `measureText().width` against the box width and `fontBoundingBoxAscent + fontBoundingBoxDescent` against the box height — the font's bounding box, not the ink extents of these particular glyphs.
 4. **The background patch is larger than the line box.** Its paddings are fractions of the line *height*; the horizontal one is divided by the image aspect ratio to become a fraction of width.
 
 Word offsets index the translation by **UTF-16 code unit**, which is what `icu::UnicodeString` uses on the server — and conveniently exactly how JavaScript indexes strings, so `String.prototype.slice` is already correct here.
@@ -167,24 +188,21 @@ them out of your hands - a speech bubble is really one text area, so the setting
 lays the paragraph out again inside it, mends any word the server split across
 its own lines, and makes **Line spacing** mean something.
 
-Vertical CJK gets a fifth rule of its own: setting a Russian translation vertically is faithful to the source and miserable to read, so the `verticalText` setting defaults to `auto` and keeps the column only when the target language is itself CJK.
+Vertical CJK gets a fifth rule of its own: setting a Russian translation vertically is faithful to the source and miserable to read, so the `verticalText` setting defaults to `auto` and keeps the column only when the target language is itself CJK. Where a column is kept, dashes and brackets (the long-vowel mark, parentheses, corner brackets) turn a quarter turn, as vertical typesetting has them, and kuten/touten hang in the upper right of their cell. Right-to-left targets are set right-to-left whether or not the paragraph was re-wrapped.
 
 ## Which images, and how they are read
 
-Detection is `<img>` elements only, found by walking `event.composedPath()` so images inside a site's own shadow DOM are caught too. An image qualifies when its **rendered** size — not its natural size — is at least `minImageSize` on both axes, so a 4000px asset scaled down to a 20px icon is correctly ignored.
+Detection finds `<img>`, `<canvas>` and `<video>` elements and CSS `background-image`s (see above for which of those count), by walking `event.composedPath()` so pictures inside a site's own shadow DOM are caught too, and anything a page inserts long after it has finished loading - which on a lot of sites is every picture on it. A picture qualifies when its **rendered** size — not its natural size — is at least `minImageSize` on both axes, so a 4000px asset scaled down to a 20px icon is correctly ignored. A canvas and a video are the one limited case: they have no address, so they are never cached, and if the page drew them from another origin they cannot be read at all. Not covered: `<svg>` drawn as markup rather than an image.
 
-Also covered: CSS `background-image`, `<canvas>` and `<video>` frames, images
-inside a site's own shadow root, and anything a page inserts long after it has
-finished loading - which on a lot of sites is every picture on it. A canvas and
-a video are the one limited case: they have no address, so they are never
-cached, and if the page drew them from another origin they cannot be read at
-all. Not covered: `<svg>` drawn as markup rather than an image. Images inside a cross-origin `<iframe>` work only if the script runs in that frame too, which `@match *://*/*` arranges.
+**The script does not run inside iframes** (`@noframes`). Left to run in every frame it ran inside every advertisement and embed on the page too - a copy of the bundle, an observer and a shadow root each, and a translate button over an advert. The price is a reader that lives in an iframe of its own: open the frame's address directly, or use a manager that lets you opt a script in per site.
+
+A translation goes when its picture does. A virtualised feed reuses an `<img>` for the next post by assigning a new `src`, and a translation left behind would sit on top of a different photograph; so the covered element is watched, and a changed address (not a different *rendition* of the same one, which Twitter does as the layout moves) takes the translation down, as does the element leaving the page. The memory a long scroll would otherwise accumulate - the element, the bitmap, its object URL - is released the same way, with a periodic sweep as the backstop.
 
 Reading the pixels has three ways in, cheapest first:
 
 1. **The element as it stands.** The browser has already downloaded and decoded it, so this costs no network request at all. Works for same-origin images.
 2. **The same URL re-requested with `crossOrigin`.** A plain `<img>` is not *requested* with CORS, so drawing it taints the canvas even when the host would have allowed it — and most image hosts, `pbs.twimg.com` included, send `Access-Control-Allow-Origin: *`. Asking again with CORS usually comes straight out of the HTTP cache.
-3. **`GM_xmlhttpRequest`.** Only for hosts that send no CORS headers at all. This is the one that needs `@connect *`, and it is rarely reached.
+3. **`GM_xmlhttpRequest`.** Only for hosts that send no CORS headers at all. This is the one that needs `@connect *`, and it is rarely reached. It goes out as the browser's own request for the image would have: with the page as `Referer` and with cookies, because hotlink-protected hosts (pixiv's image host, most manga CDNs) answer `403` to anything else. That is the one request in this script that tells a third party which page you are on - and it is the same thing the `<img>` already told them.
 
 If step 3 does get reached and fails, the message names the host: Tampermonkey blocks a domain permanently once refused, and it is cleared under Tampermonkey → Settings → Security → Blocked domains.
 
@@ -256,8 +274,9 @@ Both modes are reversible: click the button again, or use **undo all on this pag
 
 ## Caching
 
-Two levels, sharing one byte budget (32 MB by default, adjustable, 0 disables,
-clearable from the menu):
+Two levels in memory, sharing one byte budget (32 MB by default, adjustable, 0
+disables, clearable from the menu) - one clock too, so whichever entry was used
+longest ago goes first, from either:
 
 - **Lens responses**, keyed by the image plus the three language settings. Only
   the response — re-rendering from it is local, so changing a render setting
@@ -270,7 +289,13 @@ Two details that took measuring to get right:
 
 - The key normalizes the URL. Twitter serves one photo as `?name=small` /
   `medium` / `large` / `orig` and React rewrites `src` between them, so keying
-  on the raw URL made every layout change a miss.
+  on the raw URL made every layout change a miss. Only parameters that change
+  how many pixels the *same frame* has are dropped (`name`, `format`, `q`,
+  `dpr`...), and only when the value looks like that kind of value. `w`, `h`,
+  `crop` and `fit` pick which part of the picture, so two crops of one path are
+  two pictures; as a second line of defence an entry remembers the proportions
+  of the pixels it was made from, and a hit with a different aspect ratio is a
+  miss.
 - The cache check sits *ahead* of the JPEG encode. Encoding an upload that is
   never sent was the expensive half of a cache hit.
 
@@ -279,7 +304,16 @@ keeps Lens's answers in IndexedDB, keyed by a fingerprint of the pixels rather
 than the URL. Reopening a chapter then costs no uploads and no requests at all,
 and the same photo is recognised under a different address - a CDN rendition, a
 freshly minted `blob:`. Only the answer is kept; the picture is drawn again
-locally, which is milliseconds and no bytes.
+locally, which is milliseconds and no bytes. It is a separate allowance of the
+same size - RAM that dies with the page against disk that does not - and an
+answer is stored under the picture *and* the languages asked for, so translating
+a page into a second language does not forget the first.
+
+**Privacy.** That store is IndexedDB, which is per-origin: what you translated on
+a site is kept in that site's origin, where the site's own scripts could read it
+(each entry is the recognised text, its translation and the erasing patches -
+not the picture). Turn **Remember across reloads** off to keep nothing, or use
+*Clear cache*, which empties both levels. Nothing is stored outside the browser.
 
 Eviction is by total bytes rather than entry count, because the weight is
 almost entirely the inpainted WebP patches and the rendered PNGs, and those vary
@@ -287,9 +321,9 @@ hugely between a two-word sign and a page of manga.
 
 ## Turning it off
 
-Four commands: **settings**, **clear cache**, **undo all on this page**, and **toggle on/off**. They sit in the host's userscript menu where there is one, and in the settings panel under **Actions** either way — which is how they are reached on AdGuard, which has no menu. There is also an `enabled` checkbox in settings; with it off, the hover button does nothing and says so.
+The commands are **settings**, **clear cache**, **undo all on this page**, **toggle on/off**, **translate all visible images**, **toggle on/off for this site**, **toggle auto-translate for this site**, **diagnostics**, and **copy translation** / **copy original text** (those two act on the picture you last used and are only in the host's menu; the panel's copy buttons are in the `...` menu beside the picture). They sit in the host's userscript menu where there is one, and in the settings panel under **Actions** either way — which is how they are reached on AdGuard, which has no menu. There is also an `enabled` checkbox in settings; with it off, the hover button does nothing and says so.
 
-Hovering an image shows the translate button, and holding the cursor there for another half second brings up a settings button next to it.
+Hovering an image shows the translate button, and holding the cursor there for another half second brings up the settings and menu buttons next to it.
 
 ## Surviving other people's CSS
 
@@ -313,21 +347,33 @@ src/
   types.ts           shared domain types
   transport.ts       the privileged request the engine cannot make itself
   settings.ts        GM-backed settings store
+  sites.ts           what each hostname is told: default, off, auto-translate
   gm.ts              every difference between userscript hosts
   image.ts           fetch, downscale, JPEG encode
   detect.ts          what counts as a picture, and where they are
   gen/fields.ts      generated; do not edit
-  lens/              request builder, response parser, client
-  render/            layout maths, canvas painter, DOM overlay, image swap
-  ui/                settings panel, styles
+  lens/              request builder, response parser, client, plain-text extraction
+  render/            layout maths, canvas painter, DOM overlay, image swap,
+                     background geometry, watching a picture for change
+  ui/                settings panel, menu, styles
+test/                bun test: the codec, the cache, the layout maths, gm.ts
+                     against fake hosts, the per-site rules
 ```
 
 ```bash
 bun run dev        # live-reload userscript for development
 bun run typecheck  # tsc --noEmit, strict
-bun run check      # the engine's import closure stays clean
+bun run check      # layering: the engine stays clean, the host stays in gm.ts
+bun test           # unit tests; no browser needed
 bun run build      # typecheck, check, then dist/lens-translate.user.js
 ```
+
+The tests cover what can be checked without a page: the protobuf codec (round
+trips, negative varints, truncated input), URL normalisation and the cache's
+budget, the layout maths (ported in part from the Python project's suite), the
+background geometry, the IndexedDB store against `fake-indexeddb`, and `gm.ts`
+against hosts with synchronous storage, promise-only storage, and neither.
+Rendering and the cover are still checked in a real browser; `AGENTS.md` says how.
 
 ## Using the engine from another script
 
@@ -337,7 +383,7 @@ button. A second script can install this repo and keep its own front end:
 
 ```json
 "dependencies": {
-  "lens-translate-userscript": "github:bropines/chrome-lens-userscript#v2.11.0"
+  "lens-translate-userscript": "github:bropines/chrome-lens-userscript#v2.12.0"
 }
 ```
 
