@@ -1,4 +1,4 @@
-import { gmTransport, registerCommand } from './gm.js';
+import { gmTransport, preloadStored, registerCommand } from './gm.js';
 import { setTransport } from './transport.js';
 import { diagnose } from './diagnose.js';
 
@@ -16,7 +16,7 @@ import {
 } from './render/overlay.js';
 import { renderToBlob } from './render/canvas.js';
 import { coverImage, isCover, isCovered, uncoverAll, uncoverImage } from './render/cover.js';
-import { getSettings, saveSettings } from './settings.js';
+import { SETTINGS_KEYS, getSettings, reloadSettings, saveSettings } from './settings.js';
 import {
   cacheKey,
   cacheStats,
@@ -655,6 +655,17 @@ window.addEventListener('hashchange', checkDebugHash);
 
 applyButtonMode();
 checkDebugHash();
+
+// A host whose storage is promise-only (Greasemonkey 4, Safari's Userscripts)
+// has nothing to give a synchronous read, so everything above started from the
+// defaults. Once the saved values arrive they are adopted - without this the
+// settings silently fell back to the site's localStorage, which made them
+// per-site.
+void preloadStored(SETTINGS_KEYS).then((arrived) => {
+  if (!arrived) return;
+  settings = reloadSettings();
+  applyButtonMode();
+});
 // Asked once at document-idle is a snapshot, and the answer can arrive late or
 // change under you - a mouse plugged into a tablet, a window moved between
 // screens. Cheaper to be told than to re-ask on a timer.

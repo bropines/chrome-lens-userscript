@@ -7,7 +7,12 @@ import {
   GM_xmlhttpRequest,
   unsafeWindow,
 } from '$';
-import type { BinaryRequest, BinaryResponse, Transport as EngineTransport } from './transport.js';
+import type {
+  BinaryRequest,
+  BinaryResponse,
+  GetOptions,
+  Transport as EngineTransport,
+} from './transport.js';
 import type { Bytes } from './types.js';
 
 export type { BinaryResponse };
@@ -45,16 +50,51 @@ export function hostName(): string {
 // --- Storage ----------------------------------------------------------------
 
 /**
- * `localStorage` is the last resort, not the default: AdGuard runs in the
- * page's context, so its `localStorage` is the *site's*, and settings saved on
- * one domain would not exist on the next. Every host worth supporting has
- * `GM_getValue`; this is only here so a host missing it degrades to forgetful
- * rather than broken.
+ * Three places a value can live, in order of preference.
+ *
+ * 1. The synchronous `GM_getValue`/`GM_setValue` - Tampermonkey, Violentmonkey
+ *    and AdGuard.
+ * 2. The GM4 `GM.getValue`/`GM.setValue`, which return promises and are all
+ *    that Greasemonkey 4 and Safari's Userscripts publish. There is no reading
+ *    one of those synchronously, so the values are loaded once at startup into
+ *    `loaded` (see `preloadStored`) and written through to both.
+ * 3. `localStorage`, the last resort and not the default: AdGuard runs in the
+ *    page's context, so its `localStorage` is the *site's*, and settings saved
+ *    on one domain would not exist on the next. Falling to it silently was how
+ *    a Safari user's settings became per-site without anyone being told.
  */
 const LOCAL_PREFIX = 'lens-translate:';
 
+const hasAsyncStorage = (): boolean =>
+  typeof GM_getValue !== 'function' && typeof GM?.getValue === 'function';
+
+/** What the async API returned at startup, plus whatever has been written since. */
+const loaded = new Map<string, unknown>();
+
+/**
+ * Bring the keys into memory when the host can only hand them over by promise.
+ *
+ * Resolves true when it actually loaded something, which is the signal to read
+ * the settings again: everything that ran before this settled saw defaults. On
+ * a host with the synchronous API there is nothing to do and nothing changes.
+ */
+export async function preloadStored(keys: string[]): Promise<boolean> {
+  if (!hasAsyncStorage()) return false;
+  await Promise.all(
+    keys.map(async (key) => {
+      try {
+        loaded.set(key, await GM.getValue<unknown>(key, null));
+      } catch {
+        // A key that cannot be read is a key with nothing in it.
+      }
+    })
+  );
+  return true;
+}
+
 export function readStored(key: string): unknown {
   if (typeof GM_getValue === 'function') return GM_getValue<unknown>(key, null);
+  if (hasAsyncStorage()) return loaded.get(key) ?? null;
   try {
     return window.localStorage.getItem(LOCAL_PREFIX + key);
   } catch {
@@ -78,6 +118,13 @@ export function writeStored(key: string, value: unknown): void {
   const encoded = JSON.stringify(value);
   if (typeof GM_setValue === 'function') {
     GM_setValue(key, encoded);
+    return;
+  }
+  if (typeof GM?.setValue === 'function') {
+    // Remembered here as well, so a read straight after a write sees it
+    // without waiting for the promise.
+    loaded.set(key, encoded);
+    void Promise.resolve(GM.setValue(key, encoded)).catch(() => {});
     return;
   }
   try {
@@ -216,6 +263,13 @@ interface Attempt {
   method: 'GET' | 'POST';
   url: string;
   headers: Record<string, string>;
+  /**
+   * Whether to send the host's cookies, for the host's transport only.
+   *
+   * `false` is a browser's own default for an <img>, and hotlink protection
+   * that keys on a session needs it. Hosts without the option ignore it.
+   */
+  withCookies?: boolean;
   body: Bytes | null;
   encoding: BodyEncoding;
   timeoutMs: number;
@@ -255,6 +309,7 @@ function sendViaGm(attempt: Attempt): Promise<BinaryResponse> {
       method: attempt.method,
       url: attempt.url,
       headers: attempt.headers,
+      ...(attempt.withCookies === undefined ? {} : { anonymous: !attempt.withCookies }),
       ...(data === undefined ? {} : { data, binary: true }),
       responseType: 'arraybuffer',
       overrideMimeType: BINARY_MIME,
@@ -395,9 +450,24 @@ export function postBinary(options: BinaryRequest): Promise<BinaryResponse> {
   return climb({ ...options, method: 'POST', encoding: 'typed' }, true);
 }
 
-export function getBinary(url: string, timeoutMs: number): Promise<BinaryResponse> {
+export function getBinary(
+  url: string,
+  timeoutMs: number,
+  options: GetOptions = {}
+): Promise<BinaryResponse> {
   return climb(
-    { method: 'GET', url, headers: {}, body: null, encoding: 'typed', timeoutMs },
+    {
+      method: 'GET',
+      url,
+      // `Referer` is a forbidden header for a page fetch and a perfectly good
+      // one for a privileged request, which is the whole reason to be here.
+      headers: options.referer ? { Referer: options.referer } : {},
+      body: null,
+      encoding: 'typed',
+      timeoutMs,
+      // The same request the <img> would have made, cookies included.
+      withCookies: true,
+    },
     false
   );
 }
@@ -438,8 +508,8 @@ export function hostFacts(): string[] {
     `context: ${unsafeWindow === undefined ? 'unknown' : unsafeWindow === window ? 'page (AdGuard-style)' : 'sandbox'}`,
     [
       has('xmlhttpRequest', request),
-      has('getValue', GM_getValue),
-      has('setValue', GM_setValue),
+      has('getValue', GM_getValue ?? GM?.getValue),
+      has('setValue', GM_setValue ?? GM?.setValue),
       has('registerMenuCommand', GM_registerMenuCommand),
     ].join(', '),
   ];

@@ -12,13 +12,24 @@ export default defineConfig({
         supportURL: 'https://github.com/bropines/chrome-lens-userscript/issues',
         downloadURL:
           'https://github.com/bropines/chrome-lens-userscript/raw/main/dist/lens-translate.user.js',
+        // The managers poll this for the version number, so it points at the
+        // metadata block alone: the full script is well over 100 kB, and
+        // fetching it on every check to read one line is wasteful for them and
+        // for the repo's raw endpoint. The download itself stays the full file.
         updateURL:
-          'https://github.com/bropines/chrome-lens-userscript/raw/main/dist/lens-translate.user.js',
+          'https://github.com/bropines/chrome-lens-userscript/raw/main/dist/lens-translate.meta.js',
         description:
           "Hover any image, click the button, and its text is translated in place - rendered the way Chromium's own Lens overlay does it.",
         author: 'bropines',
         license: 'MIT',
         match: ['*://*/*'],
+        // Top frame only. Without this the script runs in every iframe on the
+        // page, ads and embeds included, each paying for its own copy of a
+        // 110 kB bundle, an observer and a shadow root - and offering a
+        // translate button over an advertisement. The cost is a reader that
+        // lives inside an iframe of its own: open the frame's address
+        // directly, or use a manager that lets a script opt in per site.
+        noframes: true,
         // Lens is the only host the script itself calls. The wildcard is for
         // image bytes: most images are read straight off the already-decoded
         // <img> element, but a cross-origin one served without CORS headers
@@ -35,6 +46,10 @@ export default defineConfig({
           'GM.xmlHttpRequest',
           'GM_getValue',
           'GM_setValue',
+          // The promise-only spellings, for Greasemonkey 4 and Safari's
+          // Userscripts, which publish nothing synchronous.
+          'GM.getValue',
+          'GM.setValue',
           'GM_registerMenuCommand',
           'GM_info',
           'unsafeWindow',
@@ -44,6 +59,9 @@ export default defineConfig({
       },
       build: {
         fileName: 'lens-translate.user.js',
+        // dist/lens-translate.meta.js: the same header with no code, which is
+        // what updateURL above points at.
+        metaFileName: true,
         // Everything is hand-rolled, so there is nothing to pull from a CDN.
         externalGlobals: {},
       },

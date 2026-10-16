@@ -44,7 +44,7 @@ export type {
   WritingDirection,
 } from './types.js';
 
-export type { BinaryRequest, BinaryResponse, Transport } from './transport.js';
+export type { BinaryRequest, BinaryResponse, GetOptions, Transport } from './transport.js';
 export { getTransport, setTransport } from './transport.js';
 
 export { LENS_ENDPOINT, callLens, fetchImageBlob } from './lens/client.js';

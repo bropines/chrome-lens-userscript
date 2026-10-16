@@ -4,6 +4,9 @@ import type { Settings } from './types.js';
 
 const STORAGE_KEY = 'lens-translate:settings';
 
+/** Every key this module reads, for a host that has to be asked for them ahead of time. */
+export const SETTINGS_KEYS: string[] = [STORAGE_KEY];
+
 export const DEFAULTS: Settings = {
   targetLang: 'ru',
   sourceLang: '',
@@ -256,6 +259,12 @@ export function getSettings(): Settings {
     cache = { ...DEFAULTS, ...stored };
   }
   return cache;
+}
+
+/** Read the store again, after something that was not there the first time arrived. */
+export function reloadSettings(): Settings {
+  cache = null;
+  return getSettings();
 }
 
 export function saveSettings(patch: Partial<Settings>): Settings {

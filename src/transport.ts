@@ -30,9 +30,22 @@ export interface BinaryRequest {
   timeoutMs: number;
 }
 
+/** What a fetch of someone else's image may need to say about where it is from. */
+export interface GetOptions {
+  /**
+   * The page the image is wanted for.
+   *
+   * Hotlink protection is a check on this: pixiv's image host and most manga
+   * CDNs answer 403 to a request without a Referer from their own site, which
+   * is what an unadorned `GM_xmlhttpRequest` sends. A browser loading the same
+   * `<img>` sends one, so the fetch that stands in for it has to as well.
+   */
+  referer?: string;
+}
+
 export interface Transport {
   post(request: BinaryRequest): Promise<BinaryResponse>;
-  get(url: string, timeoutMs: number): Promise<BinaryResponse>;
+  get(url: string, timeoutMs: number, options?: GetOptions): Promise<BinaryResponse>;
   /**
    * Anything the host wants appended when a request fails.
    *

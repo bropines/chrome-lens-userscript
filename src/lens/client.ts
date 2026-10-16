@@ -45,7 +45,11 @@ export async function fetchImageBlob(url: string): Promise<Blob> {
   const transport = getTransport();
   let response;
   try {
-    response = await transport.get(url, IMAGE_TIMEOUT_MS);
+    // The page asking is the page the browser would have sent as the referrer
+    // for the same <img>, and a host that checks it answers 403 to anything else.
+    response = await transport.get(url, IMAGE_TIMEOUT_MS, {
+      ...(typeof location === 'undefined' ? {} : { referer: location.href }),
+    });
   } catch (error) {
     // Whatever the host wants to add - a blocked domain is worth naming, and
     // only the host knows where to undo one. Everywhere else the transport's

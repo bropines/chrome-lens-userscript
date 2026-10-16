@@ -11,10 +11,12 @@
 // @source       https://github.com/bropines/chrome-lens-userscript.git
 // @supportURL   https://github.com/bropines/chrome-lens-userscript/issues
 // @downloadURL  https://github.com/bropines/chrome-lens-userscript/raw/main/dist/lens-translate.user.js
-// @updateURL    https://github.com/bropines/chrome-lens-userscript/raw/main/dist/lens-translate.user.js
+// @updateURL    https://github.com/bropines/chrome-lens-userscript/raw/main/dist/lens-translate.meta.js
 // @match        *://*/*
 // @connect      lensfrontend-pa.googleapis.com
 // @connect      *
+// @grant        GM.getValue
+// @grant        GM.setValue
 // @grant        GM.xmlHttpRequest
 // @grant        GM_getValue
 // @grant        GM_info
@@ -23,6 +25,7 @@
 // @grant        GM_xmlhttpRequest
 // @grant        unsafeWindow
 // @run-at       document-idle
+// @noframes
 // ==/UserScript==
 
 (function () {
@@ -40,8 +43,23 @@
     return _GM_info?.scriptHandler ?? "The userscript host";
   }
   const LOCAL_PREFIX = "lens-translate:";
+  const hasAsyncStorage = () => typeof _GM_getValue !== "function" && typeof _GM?.getValue === "function";
+  const loaded = /* @__PURE__ */ new Map();
+  async function preloadStored(keys) {
+    if (!hasAsyncStorage()) return false;
+    await Promise.all(
+      keys.map(async (key) => {
+        try {
+          loaded.set(key, await _GM.getValue(key, null));
+        } catch {
+        }
+      })
+    );
+    return true;
+  }
   function readStored(key) {
     if (typeof _GM_getValue === "function") return _GM_getValue(key, null);
+    if (hasAsyncStorage()) return loaded.get(key) ?? null;
     try {
       return window.localStorage.getItem(LOCAL_PREFIX + key);
     } catch {
@@ -52,6 +70,12 @@
     const encoded = JSON.stringify(value);
     if (typeof _GM_setValue === "function") {
       _GM_setValue(key, encoded);
+      return;
+    }
+    if (typeof _GM?.setValue === "function") {
+      loaded.set(key, encoded);
+      void Promise.resolve(_GM.setValue(key, encoded)).catch(() => {
+      });
       return;
     }
     try {
@@ -133,6 +157,7 @@
         method: attempt.method,
         url: attempt.url,
         headers: attempt.headers,
+        ...attempt.withCookies === void 0 ? {} : { anonymous: !attempt.withCookies },
         ...data === void 0 ? {} : { data, binary: true },
         responseType: "arraybuffer",
         overrideMimeType: BINARY_MIME,
@@ -209,9 +234,20 @@
   function postBinary(options) {
     return climb({ ...options, method: "POST", encoding: "typed" }, true);
   }
-  function getBinary(url, timeoutMs) {
+  function getBinary(url, timeoutMs, options = {}) {
     return climb(
-      { method: "GET", url, headers: {}, body: null, encoding: "typed", timeoutMs },
+      {
+        method: "GET",
+        url,
+        // `Referer` is a forbidden header for a page fetch and a perfectly good
+        // one for a privileged request, which is the whole reason to be here.
+        headers: options.referer ? { Referer: options.referer } : {},
+        body: null,
+        encoding: "typed",
+        timeoutMs,
+        // The same request the <img> would have made, cookies included.
+        withCookies: true
+      },
       false
     );
   }
@@ -230,8 +266,8 @@
       `context: ${_unsafeWindow === void 0 ? "unknown" : _unsafeWindow === window ? "page (AdGuard-style)" : "sandbox"}`,
       [
         has("xmlhttpRequest", request),
-        has("getValue", _GM_getValue),
-        has("setValue", _GM_setValue),
+        has("getValue", _GM_getValue ?? _GM?.getValue),
+        has("setValue", _GM_setValue ?? _GM?.setValue),
         has("registerMenuCommand", _GM_registerMenuCommand)
       ].join(", ")
     ];
@@ -429,6 +465,7 @@
     return blankLabel ? [["", blankLabel], ...options] : [...options];
   }
   const STORAGE_KEY = "lens-translate:settings";
+  const SETTINGS_KEYS = [STORAGE_KEY];
   const DEFAULTS = {
     targetLang: "ru",
     sourceLang: "",
@@ -676,6 +713,10 @@
       cache = { ...DEFAULTS, ...stored2 };
     }
     return cache;
+  }
+  function reloadSettings() {
+    cache = null;
+    return getSettings();
   }
   function saveSettings(patch) {
     cache = { ...getSettings(), ...patch };
@@ -1168,7 +1209,9 @@
     const transport = getTransport();
     let response;
     try {
-      response = await transport.get(url, IMAGE_TIMEOUT_MS);
+      response = await transport.get(url, IMAGE_TIMEOUT_MS, {
+        ...typeof location === "undefined" ? {} : { referer: location.href }
+      });
     } catch (error) {
       const hint = transport.hint?.() ?? "";
       throw new Error(`Could not fetch the image (${error.message}).${hint}`);
@@ -3256,6 +3299,11 @@ ${OVERLAY_CSS}`;
   window.addEventListener("hashchange", checkDebugHash);
   applyButtonMode();
   checkDebugHash();
+  void preloadStored(SETTINGS_KEYS).then((arrived) => {
+    if (!arrived) return;
+    settings = reloadSettings();
+    applyButtonMode();
+  });
   window.matchMedia(TOUCH_QUERY).addEventListener("change", applyButtonMode);
 
 })();
