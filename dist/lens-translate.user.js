@@ -1748,7 +1748,7 @@
     return UPRIGHT_RANGES.some(([low, high]) => code >= low && code <= high);
   };
   const CORNER_PUNCT = new Set("、。，．");
-  const ROTATED_PUNCT = new Set("ー―‐—–〜~（）()「」『』【】〔〕［］[]｛｝{}〈〉《》…‥");
+  const ROTATED_PUNCT = new Set("ー〜～‐‑‒–—―－…‥（）｛｝〔〕［］【】「」『』〈〉《》");
   function verticalRuns(text2) {
     const runs = [];
     for (const char of text2) {

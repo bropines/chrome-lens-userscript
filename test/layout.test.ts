@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import {
   CORNER_PUNCT,
   MAX_FONT_SIZE,
@@ -205,17 +205,24 @@ describe('vertical punctuation', () => {
     for (const char of '、。今は') expect(ROTATED_PUNCT.has(char)).toBe(false);
   });
 
-  const python = new URL(
-    '../../../chrome-lens-py/src/chrome_lens_py/core/text_renderer.py',
-    import.meta.url
-  );
-  test.skipIf(!existsSync(python))('is the set the Python renderer rotates', () => {
-    // Only where the sibling checkout is, which CI does not have: this is a
-    // drift guard for whoever edits one port and forgets the other.
-    const source = readFileSync(python, 'utf8');
-    const literal = /_VERTICAL_ROTATED_PUNCT = frozenset\(\s*"([^"]*)"/.exec(source)?.[1];
-    expect(literal).toBeDefined();
-    expect([...ROTATED_PUNCT].sort()).toEqual([...new Set([...(literal ?? '')])].sort());
+  // The sibling project moves its code around (this constant has lived in two
+  // files), so look in all of the renderer's modules rather than one path.
+  const core = new URL('../../../chrome-lens-py/src/chrome_lens_py/core/', import.meta.url);
+  const literal = (): string | undefined => {
+    if (!existsSync(core)) return undefined;
+    for (const name of readdirSync(core)) {
+      if (!name.endsWith('.py')) continue;
+      const source = readFileSync(new URL(name, core), 'utf8');
+      const found = /_VERTICAL_ROTATED_PUNCT = frozenset\(\s*"([^"]*)"/.exec(source)?.[1];
+      if (found) return found;
+    }
+    return undefined;
+  };
+
+  // Only where the sibling checkout is, which CI does not have: a drift guard
+  // for whoever edits one port and forgets the other.
+  test.skipIf(literal() === undefined)('is the set the Python renderer rotates', () => {
+    expect([...ROTATED_PUNCT].sort()).toEqual([...new Set([...(literal() ?? '')])].sort());
   });
 });
 

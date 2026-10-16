@@ -241,10 +241,16 @@ export const CORNER_PUNCT = new Set('、。，．');
  *
  * Stacked upright, a long-vowel mark or a pair of brackets points the wrong way
  * - a horizontal stroke where the column wants a vertical one. This is the set
- * the Python renderer rotates (`_VERTICAL_ROTATED_PUNCT` in text_renderer.py),
- * kept identical so the two ports set the same page the same way.
+ * the Python renderer rotates (`_VERTICAL_ROTATED_PUNCT` in render_vertical.py),
+ * kept identical so the two ports set the same page the same way. The ASCII
+ * look-alikes are not in it: they are not upright to begin with, so they ride
+ * in a sideways run, which is already turned.
+ *
+ * Python also substitutes the vertical presentation forms (U+FE35 and friends)
+ * for the brackets its font has them for. Canvas text has no way to ask a font
+ * for its `vert` glyphs, so here the turn is all there is.
  */
-export const ROTATED_PUNCT = new Set('ー―‐—–〜~（）()「」『』【】〔〕［］[]｛｝{}〈〉《》…‥');
+export const ROTATED_PUNCT = new Set('ー〜～‐‑‒–—―－…‥（）｛｝〔〕［］【】「」『』〈〉《》');
 
 export function verticalRuns(text: string): Array<[boolean, string]> {
   const runs: Array<[boolean, string]> = [];
