@@ -1,6 +1,7 @@
 import type { DetectedObject, NormalizedBox, OcrParagraph } from '../types.js';
 import { boxAfterRelease, boxToRect, centreOf, dragToBox, joinPicked, objectsStillValid, pickables } from './geometry.js';
 import type { ObjectSource, Point, Rect } from './geometry.js';
+import { t } from '../i18n/index.js';
 import { icon } from './icons.js';
 import type { IconName } from './icons.js';
 import { uiRoot } from './root.js';
@@ -182,7 +183,7 @@ function openFrame(options: ToolOptions, kind: string, onLayout: () => void): Fr
     const close = document.createElement('button');
     close.type = 'button';
     close.className = 'lt-btn lt-ghost lt-square';
-    close.setAttribute('aria-label', 'Close');
+    close.setAttribute('aria-label', t('tool.close'));
     close.innerHTML = icon('close', 16);
     close.addEventListener('click', closeTool);
     row.appendChild(close);
@@ -220,22 +221,22 @@ export function openRegionTool(options: RegionToolOptions): boolean {
   frame.layer.appendChild(selection);
 
   const idle = (): void => {
-    frame.setBar({ text: 'Drag over the part of the picture to search' });
+    frame.setBar({ text: t('tool.regionIdle') });
   };
   const chosen = (): void => {
     const chosenBox = box;
     if (!chosenBox) return;
     const input: HTMLInputElement | null = frame.setBar({
-      text: 'Search this area',
-      input: { placeholder: 'Add a question (optional)' },
+      text: t('tool.regionChosen'),
+      input: { placeholder: t('tool.regionQuestion') },
       buttons: [
         {
-          label: 'Search',
+          label: t('tool.search'),
           icon: 'search',
           primary: true,
           run: () => send('visual'),
         },
-        { label: 'Ask AI', icon: 'sparkles', run: () => send('ai') },
+        { label: t('tool.askAi'), icon: 'sparkles', run: () => send('ai') },
       ],
     });
     const send = (mode: 'visual' | 'ai'): void => {
@@ -355,7 +356,7 @@ export function openObjectsTool<S extends ObjectSource>(options: ObjectsToolOpti
       const list = source.objects;
       const found = list.filter((object) => object.geometry);
       if (!found.length) {
-        frame.setBar({ text: 'Lens found no separate objects in this picture' });
+        frame.setBar({ text: t('tool.noObjects') });
         return undefined;
       }
       found.forEach((object, index) => {
@@ -364,14 +365,14 @@ export function openObjectsTool<S extends ObjectSource>(options: ObjectsToolOpti
         const dot = document.createElement('button');
         dot.type = 'button';
         dot.className = 'lt-dot';
-        dot.setAttribute('aria-label', `Search object ${index + 1}`);
+        dot.setAttribute('aria-label', t('tool.objectLabel', { n: index + 1 }));
         dot.addEventListener('click', () => {
           // The session expired while the dots were up, or was reopened by
           // another search: the server has forgotten these ids, and searching
           // with one would describe nothing. Find the objects again instead -
           // they may not even be in the same places.
           if (!objectsStillValid(source, list)) {
-            show('Looking for objects again...');
+            show(t('tool.objectsAgain'));
             return;
           }
           closeTool();
@@ -382,12 +383,12 @@ export function openObjectsTool<S extends ObjectSource>(options: ObjectsToolOpti
         dots.push({ object, dot, outline });
       });
       layout();
-      frame.setBar({ text: `Tap a dot to search that object (${found.length} found)` });
+      frame.setBar({ text: t('tool.objectsHint', { count: found.length }) });
       return undefined;
     });
   };
 
-  show('Looking for objects...');
+  show(t('tool.objectsLooking'));
   return true;
 }
 
@@ -422,25 +423,25 @@ export function openTextTool(options: TextToolOptions): boolean {
 
   const frame = openFrame(options, 'text', layout);
   if (!frame) return false;
-  frame.setBar({ text: 'Reading the text...', busy: true });
+  frame.setBar({ text: t('tool.reading'), busy: true });
   const mine = active;
 
   const bar = (): void => {
     const text = joinPicked(items, picked);
     frame.setBar({
-      text: picked.size ? text : 'Tap or drag across words to pick them',
+      text: picked.size ? text : t('tool.wordsHint'),
       buttons: [
         {
-          label: picked.size === items.length ? 'None' : 'All',
+          label: picked.size === items.length ? t('tool.none') : t('tool.all'),
           run: () => {
             const all = picked.size !== items.length;
             items.forEach((_, index) => set(index, all));
             bar();
           },
         },
-        { label: 'Copy', icon: 'copy', disabled: !picked.size, run: () => options.onCopy(text) },
+        { label: t('tool.copy'), icon: 'copy', disabled: !picked.size, run: () => options.onCopy(text) },
         {
-          label: 'Search',
+          label: t('tool.search'),
           icon: 'search',
           primary: true,
           disabled: !picked.size,
@@ -500,7 +501,7 @@ export function openTextTool(options: TextToolOptions): boolean {
     if (!paragraphs) return closeTool();
     items = pickables(paragraphs);
     if (!items.length) {
-      frame.setBar({ text: 'Lens found no text in this picture' });
+      frame.setBar({ text: t('tool.noText') });
       return undefined;
     }
     for (const item of items) {

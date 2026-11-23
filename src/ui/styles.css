@@ -109,24 +109,48 @@
 
 /* ------------------------------------------------------------- controls */
 
-/* Hung from the picture's top right corner by its own right edge, so the row
-   can be any width: main.ts sets `left` to the corner and this pulls it back. */
+/* Hung from a corner of the picture by its own matching corner, so the row
+   can be any size: main.ts measures it, sets its width and puts its top-left
+   where that corner lands - moved back onto the screen if it would leave it.
+   The controls are listed corner-first; a right-hand corner reverses them, so
+   the first - the main one - is the one in the corner whichever side that is.
+   A row wider than the screen wraps, and for a bottom corner the lines stack
+   upwards so the main control's line is still the one at the corner. */
 #lt-controls {
+  --lt-ctl: 32px;
+  --lt-idle: 1;
   position: absolute;
   z-index: 1;
   display: flex;
+  flex-direction: row-reverse;
+  flex-wrap: wrap;
   gap: 4px;
-  transform: translateX(-100%);
   pointer-events: none;
 }
-#lt-button,
-#lt-gear,
-#lt-more {
-  width: 32px;
-  height: 32px;
+#lt-controls[data-corner='br'] {
+  flex-wrap: wrap-reverse;
+}
+#lt-controls[data-corner='tl'] {
+  flex-direction: row;
+}
+#lt-controls[data-corner='bl'] {
+  flex-direction: row;
+  flex-wrap: wrap-reverse;
+}
+#lt-controls[data-size='s'] {
+  --lt-ctl: 28px;
+}
+#lt-controls[data-size='l'] {
+  --lt-ctl: 40px;
+}
+.lt-ctl {
+  flex: none;
+  width: var(--lt-ctl);
+  height: var(--lt-ctl);
   display: flex;
   align-items: center;
   justify-content: center;
+  gap: 6px;
   /* These sit on somebody's photograph, not on a surface of ours, so they do
      not follow the theme: dark glass reads on any picture. */
   background: rgba(9, 9, 11, 0.72);
@@ -143,43 +167,53 @@
   transition: opacity 0.15s, transform 0.15s, background 0.15s;
   -webkit-tap-highlight-color: transparent;
 }
-#lt-controls.lt-on #lt-button,
-/* A beat after the main button, so a passing cursor does not summon three. */
-#lt-controls.lt-on.lt-extras #lt-gear,
-#lt-controls.lt-on.lt-extras #lt-more {
-  opacity: 1;
+/* With its name beside the icon a control is as wide as the name. */
+.lt-ctl.lt-labelled {
+  width: auto;
+  padding: 0 10px 0 8px;
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+#lt-controls.lt-on .lt-main,
+/* A beat after the main button, so a passing cursor does not summon the row. */
+#lt-controls.lt-on.lt-extras .lt-ctl {
+  opacity: var(--lt-idle);
   transform: none;
   pointer-events: auto;
 }
-#lt-button:hover,
-#lt-gear:hover,
-#lt-more:hover {
+/* Dimmed until pointed at, when that was asked for; solid under the cursor. */
+#lt-controls.lt-on:hover .lt-main,
+#lt-controls.lt-on.lt-extras:hover .lt-ctl {
+  opacity: 1;
+}
+.lt-ctl:hover {
   background: rgba(9, 9, 11, 0.92);
 }
-/* Held down to peek, and on a touch screen a long press: the browser must not
-   take either for a scroll or a text selection. */
-#lt-button {
+/* Held down, and on a touch screen a long press: the browser must not take
+   either for a scroll or a text selection. */
+.lt-main {
   touch-action: none;
   -webkit-user-select: none;
   user-select: none;
   -webkit-touch-callout: none;
 }
 /* Held down to look at the original: the button says so with a ring. */
-#lt-button.lt-peeking {
+.lt-main.lt-peeking {
   box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.6);
 }
-#lt-button .lt-icon-loader,
-#lt-button.lt-busy .lt-icon-translate {
+.lt-main .lt-icon-loader,
+.lt-main.lt-busy .lt-icon:not(.lt-icon-loader) {
   display: none;
 }
-#lt-button.lt-busy .lt-icon-loader {
+.lt-main.lt-busy .lt-icon-loader {
   display: block;
 }
-#lt-button.lt-active {
+.lt-ctl.lt-active {
   background: var(--success);
   border-color: transparent;
 }
-#lt-button.lt-error {
+.lt-main.lt-error {
   background: var(--destructive);
   border-color: transparent;
 }
@@ -233,8 +267,19 @@
   opacity: 0.5;
   pointer-events: none;
 }
+.lt-btn.lt-small {
+  height: 28px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+.lt-btn[hidden],
+.lt-reset[hidden] {
+  display: none;
+}
 .lt-btn:focus-visible,
 .lt-x:focus-visible,
+.lt-tab:focus-visible,
+.lt-reset:focus-visible,
 .lt-dot:focus-visible {
   outline: 2px solid var(--ring);
   outline-offset: 2px;
@@ -503,20 +548,315 @@
   background: var(--accent);
 }
 
+/* ------------------------------------------------------ settings window */
+
+/* A header, the tabs, the fields and a footer. The tabs are a strip along the
+   top by default - which is what a phone and a narrow window get - and become
+   a rail down the left side where there is room for one (see below). */
+.lt-settings-main {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.lt-settings .lt-panel-head {
+  gap: 12px;
+}
+.lt-settings .lt-panel-head strong {
+  flex: none;
+}
+.lt-search {
+  flex: 1;
+  max-width: 320px;
+  margin-left: auto;
+}
+.lt-search[hidden] {
+  display: none;
+}
+.lt-tabs {
+  flex: none;
+  display: flex;
+  gap: 4px;
+  padding: 8px 14px;
+  overflow-x: auto;
+  overscroll-behavior: contain;
+  border-bottom: 1px solid var(--border);
+  /* The strip scrolls under a finger; a bar across it would only be noise. */
+  scrollbar-width: none;
+}
+.lt-tabs::-webkit-scrollbar {
+  display: none;
+}
+.lt-tab {
+  flex: none;
+  display: flex;
+  align-items: center;
+  height: 32px;
+  padding: 0 12px;
+  font: inherit;
+  font-weight: 500;
+  white-space: nowrap;
+  color: var(--muted-foreground);
+  background: transparent;
+  border: 0;
+  border-radius: calc(var(--radius) - 2px);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.lt-tab:hover {
+  color: var(--foreground);
+  background: var(--accent);
+}
+.lt-tab[aria-selected='true'] {
+  color: var(--foreground);
+  background: var(--surface-muted);
+}
+.lt-settings .lt-panel-body {
+  flex: 1;
+  min-height: 0;
+  padding-top: 4px;
+}
+.lt-pane[hidden],
+.lt-row[hidden],
+.lt-extra[hidden],
+.lt-note[hidden],
+.lt-guard[hidden] {
+  display: none;
+}
+.lt-pane-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 28px;
+  margin: 10px 0 2px;
+}
+.lt-pane-head h3 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+/* One tab at a time needs no heading over it: the tab says where you are.
+   Search results come from several, and each group says which. */
+.lt-settings:not(.lt-searching) .lt-pane-head h3 {
+  visibility: hidden;
+}
+.lt-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  column-gap: 28px;
+}
+
+/* A field: its name, the control, and a line about what it does. Stacked, so
+   the control gets the full width of its column whatever the name's length. */
 .lt-row {
   display: grid;
-  grid-template-columns: 190px minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
+  align-content: start;
+  gap: 6px;
+  padding: 9px 0;
+}
+.lt-row.lt-row-check {
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  gap: 2px 14px;
-  padding: 7px 0;
 }
 .lt-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 20px;
   font-weight: 500;
 }
+/* The name is a <label for> its control: pressing it focuses or toggles. */
+.lt-label-text {
+  cursor: pointer;
+}
 .lt-hint {
-  grid-column: 2;
+  grid-column: 1 / -1;
   color: var(--muted-foreground);
   font-size: 12px;
+}
+/* Back to the default; only there when the value is not the default. */
+.lt-reset {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  color: var(--muted-foreground);
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.lt-reset:hover {
+  color: var(--foreground);
+  background: var(--accent);
+}
+.lt-reset .lt-icon {
+  width: 14px;
+}
+.lt-guard {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.lt-color,
+.lt-chord-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.lt-swatch {
+  flex: none;
+  width: 36px;
+  height: 36px;
+  padding: 2px;
+  background: var(--background);
+  border: 1px solid var(--input);
+  border-radius: calc(var(--radius) - 2px);
+  cursor: pointer;
+}
+.lt-swatch.lt-unset {
+  opacity: 0.35;
+}
+.lt-chord {
+  flex: 1;
+  min-width: 0;
+  justify-content: flex-start;
+  font-variant-numeric: tabular-nums;
+}
+.lt-chord.lt-recording {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+  color: var(--muted-foreground);
+}
+
+/* The buttons over a picture, as a list to tick and to drag into order. */
+.lt-order,
+.lt-site-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.lt-order {
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) - 2px);
+  overflow: hidden;
+}
+.lt-order-item,
+.lt-site {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 40px;
+  padding: 2px 6px 2px 4px;
+  background: var(--background);
+}
+.lt-order-item + .lt-order-item,
+.lt-site + .lt-site {
+  border-top: 1px solid var(--border);
+}
+.lt-order-item.lt-dragging {
+  background: var(--accent);
+}
+/* The handle is the only part that drags, so the rest of the row still
+   scrolls the sheet under a finger. */
+.lt-grip {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 36px;
+  color: var(--muted-foreground);
+  cursor: grab;
+  touch-action: none;
+}
+.lt-order-name {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.lt-order-name .lt-icon {
+  color: var(--muted-foreground);
+}
+.lt-order-moves {
+  display: flex;
+  flex: none;
+}
+.lt-order-moves .lt-btn {
+  width: 32px;
+  height: 32px;
+}
+.lt-site {
+  padding-left: 10px;
+}
+.lt-site-host {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: 500;
+}
+.lt-site-rule {
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+
+.lt-version {
+  padding-top: 4px;
+  font-weight: 600;
+}
+.lt-link {
+  display: inline-flex;
+  align-items: center;
+  height: 32px;
+  color: var(--foreground);
+  text-underline-offset: 3px;
+}
+.lt-facts {
+  border-radius: calc(var(--radius) - 2px);
+  padding: 10px 12px;
+}
+
+/* Room for a rail: the tabs go down the left and short fields sit two to a
+   row. Only for a pointer that can aim - a wide tablet keeps the strip. */
+@media (min-width: 900px) and (pointer: fine) {
+  .lt-settings.lt-pro {
+    width: min(960px, 94vw);
+    height: min(720px, calc(var(--lt-dvh) * 88));
+    max-height: none;
+  }
+  .lt-pro .lt-settings-main {
+    flex-direction: row;
+  }
+  .lt-pro .lt-tabs {
+    flex-direction: column;
+    width: 196px;
+    padding: 12px 8px;
+    overflow-x: hidden;
+    overflow-y: auto;
+    border-bottom: 0;
+    border-right: 1px solid var(--border);
+  }
+  .lt-pro .lt-tab {
+    width: 100%;
+    height: 34px;
+  }
+  .lt-pro .lt-panel-body {
+    padding: 4px 24px 20px;
+  }
+  .lt-pro .lt-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .lt-pro .lt-row-wide {
+    grid-column: 1 / -1;
+  }
 }
 
 /* Outline slider with its live sample. */
@@ -543,7 +883,7 @@
   color: var(--muted-foreground);
 }
 .lt-preview {
-  grid-column: 2;
+  grid-column: 1 / -1;
   width: 100%;
   height: auto;
   border-radius: calc(var(--radius) - 2px);
@@ -736,14 +1076,14 @@
    targets are 44px, the fields are 16px so iOS does not zoom into them, and
    whatever opens does so from the bottom edge, where the thumb already is. */
 @media (max-width: 640px), (pointer: coarse) {
-  #lt-button,
-  #lt-gear,
-  #lt-more {
-    width: 44px;
-    height: 44px;
-  }
-  #lt-controls {
+  /* Never under 44px here, whatever size was chosen: small is a mouse's size. */
+  #lt-controls,
+  #lt-controls[data-size='s'] {
+    --lt-ctl: 44px;
     gap: 6px;
+  }
+  #lt-controls[data-size='l'] {
+    --lt-ctl: 52px;
   }
   .lt-btn,
   .lt-input {
@@ -791,18 +1131,40 @@
     padding-left: max(14px, env(safe-area-inset-left, 0px));
     padding-right: max(14px, env(safe-area-inset-right, 0px));
   }
-  /* The label goes above its field: 190px of label leaves a phone no field. */
-  .lt-row {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 6px;
-    padding: 9px 0;
+  /* The settings sheet is as tall as it may be whatever tab is open, so
+     changing tab does not move the strip out from under the thumb. */
+  .lt-settings {
+    height: calc(var(--lt-svh) * 100 - var(--lt-kb) - 24px);
   }
-  .lt-row.lt-row-check {
-    grid-template-columns: minmax(0, 1fr) auto;
+  .lt-tabs {
+    padding-left: max(10px, env(safe-area-inset-left, 0px));
+    padding-right: max(10px, env(safe-area-inset-right, 0px));
   }
-  .lt-hint,
-  .lt-preview {
-    grid-column: 1 / -1;
+  .lt-tab {
+    height: 44px;
+    padding: 0 14px;
+  }
+  .lt-search {
+    max-width: none;
+  }
+  .lt-reset {
+    width: 32px;
+    height: 32px;
+  }
+  .lt-swatch {
+    width: 44px;
+    height: 44px;
+  }
+  .lt-order-item {
+    min-height: 52px;
+  }
+  .lt-grip,
+  .lt-order-moves .lt-btn {
+    width: 40px;
+    height: 44px;
+  }
+  .lt-panel-foot {
+    flex-wrap: wrap;
   }
 
   .lt-bar {
@@ -826,9 +1188,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  #lt-button,
-  #lt-gear,
-  #lt-more,
+  .lt-ctl,
   #lt-toast,
   .lt-dot::after,
   .lt-objbox {

@@ -1,7 +1,16 @@
+import { readFileSync } from 'node:fs';
 import { defineConfig } from 'vite';
 import monkey from 'vite-plugin-monkey';
 
+const { version } = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')) as {
+  version: string;
+};
+
 export default defineConfig({
+  // The version as a constant in the bundle (src/version.ts). The interface's
+  // translations are fetched from the tag of this exact version, and GM_info -
+  // the only other place a script can read it - is not on every host.
+  define: { __LT_VERSION__: JSON.stringify(version) },
   plugins: [
     monkey({
       // boot.ts decides between starting now and sleeping in a frame.

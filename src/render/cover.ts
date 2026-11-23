@@ -206,6 +206,8 @@ export interface CoverOptions {
    * over: the picture is usually not the element's size, and it can be tiled.
    */
   background?: BackgroundOptions;
+  /** 0..1; below 1 the original shows through the rendering. */
+  opacity?: number;
 }
 
 /**
@@ -245,6 +247,7 @@ export function coverImage(
       'pointer-events: none',
       // Above the image, below anything the page floats on top of it.
       'z-index: 1',
+      ...(options.opacity !== undefined && options.opacity < 1 ? [`opacity: ${options.opacity}`] : []),
       // A background's window, corners included, is cut out by place().
       ...(options.background
         ? ['border-radius: 0', 'object-fit: fill']

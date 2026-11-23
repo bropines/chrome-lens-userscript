@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Lens Translate
 // @namespace    https://github.com/bropines/chrome-lens-userscript
-// @version      2.13.0-beta.2
+// @version      2.13.0-beta.3
 // @author       bropines
 // @description  Hover any image, click the button, and its text is translated in place - rendered the way Chromium's own Lens overlay does it.
 // @license      MIT
@@ -60,8 +60,11 @@
         }
       })
     );
+    preloaded = true;
     return true;
   }
+  let preloaded = false;
+  const storageReady = () => preloaded || !hasAsyncStorage();
   function readStored(key) {
     if (typeof _GM_getValue === "function") return _GM_getValue(key, null);
     if (hasAsyncStorage()) return loaded.get(key) ?? null;
@@ -122,8 +125,8 @@
     }
   }
   function hostOpener() {
-    if (typeof _GM_openInTab === "function") return (url) => _GM_openInTab(url, false);
-    if (typeof _GM?.openInTab === "function") return (url) => _GM.openInTab(url, false);
+    if (typeof _GM_openInTab === "function") return (url, background) => _GM_openInTab(url, background);
+    if (typeof _GM?.openInTab === "function") return (url, background) => _GM.openInTab(url, background);
     return null;
   }
   function openWindow(url) {
@@ -151,13 +154,13 @@
       tab.location.replace(url);
     }
   }
-  function prepareTab(preopen) {
+  function prepareTab(preopen, options = {}) {
     const viaHost = hostOpener();
     if (viaHost) {
       return {
         go(url) {
           try {
-            const tab2 = viaHost(url);
+            const tab2 = viaHost(url, options.background === true);
             return tab2 !== null && tab2 !== false && tab2?.closed !== true;
           } catch {
             return false;
@@ -171,7 +174,7 @@
     if (tab) {
       try {
         tab.document.title = "Lens";
-        tab.document.body.textContent = "Searching with Lens...";
+        tab.document.body.textContent = options.waiting ?? "Searching with Lens...";
       } catch {
       }
     }
@@ -204,7 +207,12 @@
     const out = [];
     for (const command of commands) {
       if (command.label !== null) {
-        out.push({ label: command.label, essential: command.essential === true, run: command.run });
+        out.push({
+          id: command.id,
+          label: command.label(),
+          essential: command.essential === true,
+          run: command.run
+        });
       }
     }
     return out;
@@ -316,18 +324,18 @@
   }
   let workingTransport = null;
   let workingEncoding = null;
-  function ladder(hasBody, remember) {
+  function ladder(hasBody, remember, allowFetch) {
     const latchedEncoding = remember ? workingEncoding : null;
     const encodings = !hasBody ? ["typed"] : latchedEncoding ? [latchedEncoding] : ["typed", "binary-string"];
     const rungs = encodings.map((encoding) => ({ transport: "gm", encoding }));
-    rungs.push({ transport: "fetch", encoding: "typed" });
+    if (allowFetch) rungs.push({ transport: "fetch", encoding: "typed" });
     const latchedTransport = remember ? workingTransport : null;
     return latchedTransport ? rungs.filter((rung) => rung.transport === latchedTransport) : rungs;
   }
   const BAD_REQUEST = 400;
-  async function climb(attempt, remember) {
+  async function climb(attempt, remember, allowFetch = true) {
     const failures = [];
-    for (const rung of ladder(attempt.body !== null, remember)) {
+    for (const rung of ladder(attempt.body !== null, remember, allowFetch)) {
       const next = { ...attempt, encoding: rung.encoding };
       let response;
       try {
@@ -371,6 +379,9 @@
         current = new URL(response.location, current).href;
         continue;
       }
+      if ((redirected || isWebPage(response)) && options.noFetchFallback === true) {
+        throw new Error(`the host answered with a web page, not the file (HTTP ${response.status})`);
+      }
       if (redirected || isWebPage(response)) {
         try {
           const page = await sendViaFetch({
@@ -402,10 +413,12 @@
         body: null,
         encoding: "typed",
         timeoutMs,
-        // The same request the <img> would have made, cookies included.
-        withCookies: true
+        // The same request the <img> would have made, cookies included - unless
+        // the caller is fetching something public and said so.
+        withCookies: options.anonymous !== true
       },
-      false
+      false,
+      options.noFetchFallback !== true
     );
   }
   const gmTransport = {
@@ -684,6 +697,563 @@
     }
     return null;
   }
+  const VERSION = "2.13.0-beta.3";
+  const EN = {
+    // --- the controls over a picture
+    "act.translate": "Translate",
+    "act.search": "Search image",
+    "act.ask": "Ask AI",
+    "act.area": "Select area",
+    "act.objects": "Detected objects",
+    "act.text": "Search text",
+    "act.copy": "Copy",
+    "act.settings": "Settings",
+    "act.menu": "Menu",
+    "btn.translate": "Translate the text in this image (click again to undo)",
+    "btn.settings": "Lens Translate settings",
+    "btn.more": "Search, ask, copy and more",
+    // --- the menu
+    "menu.translate": "Translate this image",
+    "menu.original": "Show the original",
+    "menu.search": "Search this image",
+    "menu.ask": "Ask AI about it",
+    "menu.askPlaceholder": "Ask about this picture (optional)",
+    "menu.askSend": "Ask",
+    "menu.area": "Select an area",
+    "menu.objects": "Detected objects",
+    "menu.text": "Search selected text",
+    "menu.copyTranslation": "Copy translation",
+    "menu.copyOriginal": "Copy original text",
+    "menu.copyText": "Copy text",
+    "menu.all": "Translate everything in view",
+    "menu.settings": "Settings",
+    // --- messages
+    "toast.dismiss": "Dismiss",
+    "toast.copy": "Copy",
+    "toast.addressCopied": "Address copied",
+    "toast.addressNotCopied": "Could not copy; select the address instead",
+    "toast.off": "Translation is switched off in settings",
+    "toast.siteOff": "Lens Translate is switched off on {host}",
+    "toast.siteOffHint": "Lens Translate is switched off on {host} (settings: Sites)",
+    "toast.noTranslation": "Lens read the text but returned no translation (same language?)",
+    "toast.noText": "Lens found no text in this image",
+    "toast.backgroundTiled": "This background is tiled or clipped in a way a translation cannot follow",
+    "toast.cannotCover": "This image cannot be covered here",
+    "toast.backgroundNeedsCanvas": "Backgrounds need the canvas renderer (Render as, in settings)",
+    "toast.nothingPlaced": "Nothing could be placed on this image",
+    "toast.lensError": "Lens: {message}",
+    "toast.nothingLeft": "Nothing left to translate in view",
+    "toast.batchStart": "Translating images: {count}...",
+    "toast.batchDone": "Translated {shown} of {total}",
+    "toast.batchEmpty": "no text: {count}",
+    "toast.batchFailed": "failed: {count} ({reason})",
+    "toast.autoFailed": "Auto-translate failed for images: {count} ({reason})",
+    "toast.saved": "Settings saved",
+    "toast.translateFirst": "Translate an image first, then its text can be copied",
+    "toast.nothingToCopy": "There is no text to copy",
+    "toast.copiedTranslation": "Translation copied (characters: {count})",
+    "toast.copiedOriginal": "Original text copied (characters: {count})",
+    "toast.copiedText": "Text copied (characters: {count})",
+    "toast.clipboardDenied": "The browser would not let the script use the clipboard",
+    "toast.changed": "The picture changed while it was open; try again on the new one",
+    "toast.opened": "Results opened in a new tab",
+    "toast.openAgain": "Open again",
+    "toast.ready": "The results are ready",
+    "toast.open": "Open",
+    "toast.openResults": "Open results",
+    "toast.asking": "Asking Lens...",
+    "toast.searching": "Searching with Lens...",
+    "toast.cannotMeasure": "This picture cannot be measured yet",
+    "toast.reading": "Reading the text...",
+    "toast.cleared": "Cache cleared: {count} results, {size} MB",
+    "toast.cacheEmpty": "The cache was already empty",
+    "toast.restored": "Images restored: {count}",
+    "toast.nothingToRestore": "Nothing to restore",
+    "toast.siteNowOff": "Lens Translate is off on {host}",
+    "toast.siteNowAuto": "Images on {host} will be translated as they come into view",
+    "toast.siteNowDefault": "{host} is back to the default",
+    "toast.enabled": "Translation enabled",
+    "toast.disabled": "Translation disabled",
+    "toast.noPicture": "Point at a picture first",
+    // --- commands, in the host menu and in the panel
+    "cmd.settings": "Settings",
+    "cmd.clearCache": "Clear cache",
+    "cmd.undoAll": "Undo all on this page",
+    "cmd.translateAll": "Translate all in view",
+    "cmd.copyTranslation": "Copy translation",
+    "cmd.copyOriginal": "Copy original text",
+    "cmd.toggleSite": "Toggle for this site",
+    "cmd.toggleAuto": "Toggle auto-translate here",
+    "cmd.diagnostics": "Run diagnostics",
+    "cmd.toggle": "Toggle on/off",
+    // --- the tools drawn on a picture
+    "tool.close": "Close",
+    "tool.regionIdle": "Drag over the part of the picture to search",
+    "tool.regionChosen": "Search this area",
+    "tool.regionQuestion": "Add a question (optional)",
+    "tool.search": "Search",
+    "tool.askAi": "Ask AI",
+    "tool.noObjects": "Lens found no separate objects in this picture",
+    "tool.objectLabel": "Search object {n}",
+    "tool.objectsAgain": "Looking for objects again...",
+    "tool.objectsHint": "Tap a dot to search that object (found: {count})",
+    "tool.objectsLooking": "Looking for objects...",
+    "tool.reading": "Reading the text...",
+    "tool.wordsHint": "Tap or drag across words to pick them",
+    "tool.none": "None",
+    "tool.all": "All",
+    "tool.copy": "Copy",
+    "tool.noText": "Lens found no text in this picture",
+    // --- the diagnostics report
+    "report.title": "Diagnostics",
+    "report.aria": "Lens Translate diagnostics",
+    "report.settings": "Settings",
+    "report.copy": "Copy",
+    "report.close": "Close",
+    "report.copied": "Copied",
+    "report.selected": "Selected - copy it",
+    "report.probing": "Probing...",
+    "report.failed": "Diagnostics failed: {message}",
+    "diag.both": "Lens is reachable both ways. If translating still fails, the problem is past the transport - send this report with the exact error the message shows.",
+    "diag.fetchOnly": "Lens is reachable, but this host's own transport is not. That is handled: the script falls back to fetch, which costs one failed attempt per page and sends an Origin header GM_xmlhttpRequest would not.",
+    "diag.gmOnly": "Lens is reachable through the host's transport, which is the path the script prefers anyway.",
+    "diag.blocked": 'Nothing reaches Lens, but the control host answers. Something on this device is blocking lensfrontend-pa.googleapis.com specifically - check the DNS filtering and the HTTPS filtering exclusions, and search the activity log for "googleapis".',
+    "diag.offline": "Nothing reaches anything, the control host included. The device has no working connection from this page.",
+    // --- the settings window
+    "panel.title": "Lens Translate",
+    "panel.aria": "Lens Translate settings",
+    "panel.close": "Close",
+    "panel.cancel": "Cancel",
+    "panel.save": "Save",
+    "panel.search": "Search settings",
+    "panel.noMatches": 'No setting matches "{query}"',
+    "panel.resetField": "Reset to default",
+    "panel.resetTab": "Reset this tab",
+    "panel.resetAll": "Reset all settings",
+    "panel.unsaved": "You have unsaved changes.",
+    "panel.discard": "Discard",
+    "panel.keepEditing": "Keep editing",
+    "panel.actions": "Actions",
+    "panel.actionsNote": "These run at once, and discard anything unsaved.",
+    "panel.simpleNote": 'Switch Interface to "pro" for every setting, in tabs.',
+    "tab.general": "General",
+    "tab.translation": "Translation",
+    "tab.search": "Search",
+    "tab.appearance": "Appearance",
+    "tab.buttons": "Buttons",
+    "tab.behaviour": "Behaviour",
+    "tab.sites": "Sites",
+    "tab.advanced": "Advanced",
+    "tab.about": "About",
+    "buttons.pin": "Show {name} in the row",
+    "buttons.up": "Move {name} up",
+    "buttons.down": "Move {name} down",
+    "buttons.drag": "Drag to reorder",
+    "chord.record": "Press the keys...",
+    "chord.none": "Not set",
+    "chord.clear": "Clear",
+    "color.auto": "From the picture",
+    "color.pick": "Choose a colour",
+    "lang.auto": "Auto (browser language)",
+    "lang.detect": "Detect automatically",
+    "lang.followTarget": "Follow the target",
+    "lang.sameAsTranslation": "Same as the translation language",
+    "sites.current": "This site: {host}",
+    "sites.default": "Default - translate when asked",
+    "sites.off": "Off - no button, no shortcuts",
+    "sites.auto": "Auto - translate images as they come into view",
+    "sites.others": "Other sites with a rule",
+    "sites.none": "No other site has a rule.",
+    "sites.remove": "Remove the rule for {host}",
+    "sites.note": "Site rules take effect at once; they are not part of Save.",
+    "about.version": "Version {version}",
+    "about.links": "Links",
+    "about.repo": "Source code",
+    "about.issues": "Report a problem",
+    "about.docs": "What Lens can do",
+    "about.host": "Userscript host",
+    "about.tools": "Tools",
+    "about.backup": "Backup",
+    "about.export": "Export settings",
+    "about.import": "Import settings",
+    "about.importDone": "Settings imported: {count}. Check them and press Save.",
+    "about.importIgnored": "Ignored: {keys}",
+    "about.importInvalid": "This file does not hold Lens Translate settings.",
+    "about.locale": "Interface translations are downloaded from GitHub once per version and language, then kept by the userscript host.",
+    // --- settings: General
+    "set.uiMode.label": "Interface",
+    "set.uiMode.opt.simple": "simple - translate, search, ask, copy",
+    "set.uiMode.opt.pro": "pro - areas, objects, text picking, every setting",
+    "set.language.label": "Interface language",
+    "set.language.hint": "the language of these menus; not what pictures are translated to",
+    "set.enabled.label": "Translation enabled",
+    "set.popupOpacity.label": "Popup opacity",
+    "set.popupOpacity.hint": "the menu, settings and messages; below 100 the picture shows through, blurred",
+    // --- settings: Translation
+    "set.targetLang.label": "Translate to",
+    "set.sourceLang.label": "Translate from",
+    "set.ocrLang.label": "OCR language hint",
+    "set.ocrLang.hint": "helps Lens read a script it guesses wrong; a wrong hint reads worse than none",
+    "set.renderMode.label": "Render as",
+    "set.renderMode.opt.canvas": "canvas - a picture laid over the image (default)",
+    "set.renderMode.opt.overlay": "overlay - crisp text, can drift on dynamic pages",
+    "set.mangaMode.label": "Manga mode",
+    "set.mangaMode.hint": "always reflow vertical text, widen the layout area, bigger minimum size",
+    "set.concurrency.label": "Pictures translated at once",
+    "set.concurrency.hint": "more finishes a page sooner; too many gets requests refused and floods a slow connection",
+    // --- settings: Search
+    "set.aiPrompt.label": "Default AI question",
+    "set.aiPrompt.hint": 'what the "Ask AI" field starts with; blank sends the picture alone',
+    "set.rememberQuestion.label": "Remember the last AI question",
+    "set.rememberQuestion.hint": "the field starts from what you asked last instead of the default",
+    "set.searchLang.label": "Results language",
+    "set.searchLang.hint": "the language Google answers in",
+    "set.searchTheme.label": "Results theme",
+    "set.searchTheme.opt.auto": "auto - follow the system",
+    "set.searchTheme.opt.light": "light",
+    "set.searchTheme.opt.dark": "dark",
+    "set.backgroundTabs.label": "Open results in a background tab",
+    "set.backgroundTabs.hint": "keeps you on the page; only where the userscript host opens tabs itself",
+    // --- settings: Appearance
+    "set.fontFamily.label": "Font family",
+    "set.fontFamily.hint": "any CSS font list; blank is the system font. A narrow face fits more text at a larger size",
+    "set.fontWeight.label": "Font weight",
+    "set.fontWeight.hint": "bolder reads better over a busy picture but is wider, so the text comes out smaller",
+    "set.fontWeight.opt.300": "light",
+    "set.fontWeight.opt.400": "regular (default)",
+    "set.fontWeight.opt.500": "medium",
+    "set.fontWeight.opt.600": "semibold",
+    "set.fontWeight.opt.700": "bold",
+    "set.fontWeight.opt.800": "extra bold",
+    "set.textColor.label": "Text colour",
+    "set.textColor.hint": "overrides the colour Lens sampled; one colour for every picture can vanish on a dark one",
+    "set.outlineColor.label": "Outline colour",
+    "set.outlineColor.hint": "overrides the sampled background colour used for the outline",
+    "set.fillColor.label": "Fill colour",
+    "set.fillColor.hint": "the flat colour behind text where no patch is used; a fixed one shows as boxes on tinted paper",
+    "set.outlineScale.label": "Text outline",
+    "set.outlineScale.hint": "thicker hides leftovers of the original; too thick closes up small letters. 0 removes it",
+    "set.verticalText.label": "Vertical CJK text",
+    "set.verticalText.opt.auto": "auto - vertical only for CJK targets",
+    "set.verticalText.opt.keep": "keep - always vertical, like Chromium",
+    "set.verticalText.opt.horizontal": "horizontal - always reflow",
+    "set.textAlign.label": "Text alignment",
+    "set.textAlign.opt.auto": "auto - follow the source, like Chromium",
+    "set.textAlign.opt.left": "left",
+    "set.textAlign.opt.center": "center",
+    "set.textAlign.opt.right": "right",
+    "set.reflowHorizontal.label": "Re-wrap horizontal text",
+    "set.reflowHorizontal.hint": "treats a paragraph as one text area: better in bubbles, less faithful to the source lines",
+    "set.fitToBox.label": "Keep text out of the next bubble",
+    "set.fitToBox.hint": "shrinks a paragraph that outgrows its room; off, text stays larger but may overlap",
+    "set.lineSpacing.label": "Line spacing",
+    "set.lineSpacing.hint": "re-wrapped text only; looser is easier to read but makes the font smaller",
+    "set.minReadablePx.label": "Minimum text size (px)",
+    "set.minReadablePx.hint": "enlarges text too small to read; higher values make lines overlap. 0 disables",
+    "set.mangaBoxGrowth.label": "Bubble fill (manga mode)",
+    "set.mangaBoxGrowth.hint": "how far past the detected box to lay text out; more room means bigger text",
+    "set.mangaMinPx.label": "Minimum text size in manga mode (px)",
+    "set.mangaMinPx.hint": "the floor manga mode raises the minimum size to",
+    "set.drawBackground.label": "Erase the original text",
+    "set.drawBackground.hint": "off, the translation is drawn straight over the source and both show",
+    "set.eraseMode.label": "How to erase",
+    "set.eraseMode.opt.patch": "patch - the server's inpainting, like Chromium",
+    "set.eraseMode.opt.hull": "hull - cover the whole text area with its background colour",
+    "set.hullPadding.label": "Cover margin",
+    "set.hullPadding.hint": "how far past the text the cover extends; more hides residue but eats into the art",
+    "set.patchPadding.label": "Patch padding",
+    "set.patchPadding.hint": "scales the margin of the server's patch; 1 is Chromium's. More hides glyph edges, and blurs more",
+    "set.supersample.label": "Render sharpness",
+    "set.supersample.hint": "sharper when zoomed, at the cost of memory and time per picture",
+    "set.supersample.opt.1": "1x - smallest images",
+    "set.supersample.opt.2": "2x - sharper when zoomed (default)",
+    "set.supersample.opt.3": "3x - sharpest, heaviest",
+    "set.coverOpacity.label": "Translation opacity",
+    "set.coverOpacity.hint": "below 100 the original shows through the translated picture",
+    // --- settings: Buttons
+    "set.showButton.label": "Show the buttons over images",
+    "set.showButton.hint": "off, only the shortcuts and the userscript menu remain",
+    "set.buttonMode.label": "When to show them",
+    "set.buttonMode.hint": "a touch screen has no hover, and tapping the image is how you turn the page",
+    "set.buttonMode.opt.auto": "auto - pinned on a touch screen, on hover otherwise",
+    "set.buttonMode.opt.hover": "on hover only",
+    "set.buttonMode.opt.pinned": "always, over the image in view",
+    "set.buttons.label": "Buttons and their order",
+    "set.buttons.hint": "ticked buttons sit over the picture; the order here is also the order of the menu",
+    "set.mainAction.label": "Main button",
+    "set.mainAction.hint": "the button that appears first and shows progress",
+    "set.mainAction.opt.translate": "translate",
+    "set.mainAction.opt.search": "search the image",
+    "set.mainAction.opt.ask": "ask AI",
+    "set.mainAction.opt.area": "select an area",
+    "set.mainAction.opt.menu": "open the menu",
+    "set.longPressAction.label": "Holding the main button",
+    "set.longPressAction.hint": "actions that open a tab may be offered as a link instead when started by a hold",
+    "set.longPressAction.opt.peek": "show the original while held",
+    "set.longPressAction.opt.translate": "translate",
+    "set.longPressAction.opt.search": "search the image",
+    "set.longPressAction.opt.ask": "ask AI",
+    "set.longPressAction.opt.area": "select an area",
+    "set.longPressAction.opt.menu": "open the menu",
+    "set.longPressAction.opt.none": "nothing",
+    "set.repeatLast.label": "Main button repeats the last action",
+    "set.repeatLast.hint": "whatever you last chose from the menu becomes what the main button does",
+    "set.buttonSize.label": "Button size",
+    "set.buttonSize.hint": "never under 44px on a touch screen",
+    "set.buttonSize.opt.s": "small",
+    "set.buttonSize.opt.m": "medium",
+    "set.buttonSize.opt.l": "large",
+    "set.buttonCorner.label": "Corner",
+    "set.buttonCorner.opt.tr": "top right",
+    "set.buttonCorner.opt.tl": "top left",
+    "set.buttonCorner.opt.br": "bottom right",
+    "set.buttonCorner.opt.bl": "bottom left",
+    "set.idleOpacity.label": "Opacity when not pointed at",
+    "set.idleOpacity.hint": "lower keeps the buttons out of the picture until the cursor is on them",
+    "set.buttonLabels.label": "Show labels next to icons",
+    "set.buttonLabels.hint": "clearer, and covers more of the picture",
+    "set.hideDelayMs.label": "Hide delay (ms)",
+    "set.hideDelayMs.hint": "how long the buttons stay after the cursor leaves the picture",
+    "set.extrasDelayMs.label": "Delay before the other buttons (ms)",
+    "set.extrasDelayMs.hint": "so a passing cursor summons one button, not the whole row; 0 shows all at once",
+    "set.holdMs.label": "Hold time (ms)",
+    "set.holdMs.hint": "how long a press lasts before it counts as a hold; too short and clicks become holds",
+    // --- settings: Behaviour
+    "set.hotkey.label": "Modifier + click translates",
+    "set.hotkey.opt.alt": "Alt + click",
+    "set.hotkey.opt.ctrl": "Ctrl + click",
+    "set.hotkey.opt.shift": "Shift + click",
+    "set.hotkey.opt.none": "off",
+    "set.peekKey.label": "Hold to see the original",
+    "set.peekKey.hint": "while held, every translation steps aside; let go and it is back",
+    "set.peekKey.opt.off": "off - holding the button down still works",
+    "set.peekKey.opt.backquote": "` (backtick), held",
+    "set.peekKey.opt.shift": "Shift, held",
+    "set.peekKey.opt.control": "Ctrl, held",
+    "set.keyTranslateAll.label": "Shortcut: translate all in view",
+    "set.keyTranslate.label": "Shortcut: translate the picture",
+    "set.keyTranslate.hint": "picture shortcuts act on the one under the cursor, or the largest in view",
+    "set.keySearch.label": "Shortcut: search the picture",
+    "set.keyAsk.label": "Shortcut: ask AI",
+    "set.keyArea.label": "Shortcut: select an area",
+    "set.keyCopy.label": "Shortcut: copy the text",
+    "set.keyUndoAll.label": "Shortcut: undo all on the page",
+    "set.minImageSize.label": "Ignore images under (px)",
+    "set.minImageSize.hint": "lower reaches small pictures, and puts a button on icons and avatars",
+    "set.frames.label": "Work inside frames",
+    "set.frames.hint": "for readers and galleries that show pages in an iframe; small frames such as ads are always left alone",
+    // --- settings: Advanced
+    "set.jpegQuality.label": "Upload quality",
+    "set.jpegQuality.hint": "higher can read fine print better and uploads more; 40% is what Chromium sends",
+    "set.maxArea.label": "Upload size limit (pixels)",
+    "set.maxArea.hint": "larger pictures are scaled down to this area before upload; 1500000 is Chromium's",
+    "set.maxSide.label": "Upload longest side (px)",
+    "set.maxSide.hint": "raising it helps tall pages with small text and makes every upload slower; 1600 is Chromium's",
+    "set.timeoutMs.label": "Request timeout (ms)",
+    "set.timeoutMs.hint": "how long to wait for Lens before giving up",
+    "set.cacheBytes.label": "Cache in memory (MB)",
+    "set.cacheBytes.hint": "remembers answers and renderings for this page, so repeating costs nothing; 0 disables",
+    "set.persistCache.label": "Remember across reloads",
+    "set.persistCache.hint": "recognises a picture by its pixels, so reopening a page asks Lens nothing",
+    "set.storeBytes.label": "Kept across reloads (MB)",
+    "set.storeBytes.hint": "stored per site in the browser's own database; oldest answers are dropped first",
+    "set.maxCanvasSide.label": "Largest rendered side (px)",
+    "set.maxCanvasSide.hint": "caps the sharpness multiple on big pictures; higher uses much more memory",
+    "set.region.label": "Client region",
+    "set.region.hint": "sent to Lens as the locale region",
+    "set.timeZone.label": "Client time zone",
+    "set.apiKey.label": "API key",
+    "set.apiKey.hint": "only change if you have your own"
+  };
+  const LOCALES = ["ru", "uk", "de", "es", "fr", "pt-BR", "ja", "zh-CN", "ko", "tr"];
+  function placeholdersOf(text2) {
+    const names = /* @__PURE__ */ new Set();
+    for (const match of text2.matchAll(/\{([A-Za-z][A-Za-z0-9]*)\}/g)) {
+      if (match[1]) names.add(match[1]);
+    }
+    return [...names].sort();
+  }
+  function format(template, params) {
+    if (!params) return template;
+    return template.replace(
+      /\{([A-Za-z][A-Za-z0-9]*)\}/g,
+      (whole, name) => name in params ? String(params[name]) : whole
+    );
+  }
+  function validateLocale(raw, english) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+    const report = { strings: {}, missing: [], unknown: [], invalid: [] };
+    const given = raw;
+    for (const [key, value] of Object.entries(given)) {
+      const source = Object.hasOwn(english, key) ? english[key] : void 0;
+      if (source === void 0) {
+        report.unknown.push(key);
+        continue;
+      }
+      if (typeof value !== "string" || !value.trim() || placeholdersOf(value).join() !== placeholdersOf(source).join()) {
+        report.invalid.push(key);
+        continue;
+      }
+      report.strings[key] = value;
+    }
+    for (const key of Object.keys(english)) {
+      if (!Object.hasOwn(given, key)) report.missing.push(key);
+    }
+    return report;
+  }
+  function pickLocale(preferred, available = LOCALES) {
+    const base = (tag) => tag.toLowerCase().split("-")[0] ?? "";
+    for (const tag of preferred) {
+      if (!tag) continue;
+      if (base(tag) === "en") return "en";
+      const exact = available.find((code2) => code2.toLowerCase() === tag.toLowerCase());
+      if (exact) return exact;
+      const sameLanguage = available.find((code2) => base(code2) === base(tag));
+      if (sameLanguage) return sameLanguage;
+    }
+    return "en";
+  }
+  const RAW = "https://raw.githubusercontent.com/bropines/chrome-lens-userscript";
+  function localeUrls(version, code2) {
+    const file = `locales/${encodeURIComponent(code2)}.json`;
+    return [`${RAW}/v${encodeURIComponent(version)}/${file}`, `${RAW}/main/${file}`];
+  }
+  async function fetchLocale(urls, get, english, outcome = { answered: false }) {
+    for (const url of urls) {
+      try {
+        const response = await get(url);
+        outcome.answered = true;
+        if (response.status !== 200) continue;
+        const parsed = JSON.parse(new TextDecoder().decode(response.bytes));
+        const report = validateLocale(parsed, english);
+        if (report) return report.strings;
+      } catch (error) {
+        if (/\bHTTP \d{3}\b/.test(error?.message ?? "")) outcome.answered = true;
+      }
+    }
+    return null;
+  }
+  function storedLocale(raw, version, code2, english) {
+    try {
+      const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+      if (!parsed || typeof parsed !== "object") return null;
+      const entry = parsed;
+      if (entry.version !== version || entry.code !== code2) return null;
+      return validateLocale(entry.strings, english)?.strings ?? null;
+    } catch {
+      return null;
+    }
+  }
+  function ownName(code2) {
+    try {
+      const name = new Intl.DisplayNames([code2], { type: "language" }).of(code2);
+      if (name && name !== code2) return name.charAt(0).toLocaleUpperCase(code2) + name.slice(1);
+    } catch {
+    }
+    return code2;
+  }
+  const MISS_TTL_MS = 6 * 60 * 60 * 1e3;
+  const UNREACHABLE_TTL_MS = 15 * 60 * 1e3;
+  function recentMiss(raw, version, code2, now, ttl = MISS_TTL_MS) {
+    try {
+      const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+      if (!parsed || typeof parsed !== "object") return false;
+      const miss = parsed;
+      if (miss.version !== version || miss.code !== code2 || typeof miss.at !== "number") return false;
+      const window2 = typeof miss.ttl === "number" && miss.ttl > 0 && miss.ttl <= ttl ? miss.ttl : ttl;
+      const age = now - miss.at;
+      return age >= 0 && age < window2;
+    } catch {
+      return false;
+    }
+  }
+  const LOCALE_KEY = "lens-translate:locale";
+  const MISS_KEY = "lens-translate:locale-miss";
+  const LOCALE_KEYS = [LOCALE_KEY, MISS_KEY];
+  const FETCH_TIMEOUT_MS = 15e3;
+  let code = "en";
+  let strings = {};
+  let generation = 0;
+  let requested = "en";
+  const listeners = /* @__PURE__ */ new Set();
+  function t(key, params) {
+    return format(strings[key] ?? EN[key], params);
+  }
+  function tMaybe(key) {
+    if (!Object.hasOwn(EN, key)) return void 0;
+    return t(key);
+  }
+  const currentLocale = () => code;
+  function onLocaleChange(listener) {
+    listeners.add(listener);
+    return () => listeners.delete(listener);
+  }
+  function adopt(next, dictionary) {
+    code = next;
+    strings = dictionary;
+    for (const listener of [...listeners]) {
+      try {
+        listener();
+      } catch {
+      }
+    }
+  }
+  function resolveLanguage(setting) {
+    if (setting && setting !== "auto") {
+      return LOCALES.includes(setting) ? setting : "en";
+    }
+    const preferred = typeof navigator === "undefined" ? [] : navigator.languages?.length ? navigator.languages : [navigator.language];
+    return pickLocale(preferred);
+  }
+  const cached = (wanted) => storedLocale(readStored(LOCALE_KEY), VERSION, wanted, EN);
+  async function download(wanted) {
+    const outcome = { answered: false };
+    const strings2 = await fetchLocale(
+      localeUrls(VERSION, wanted),
+      (url) => gmTransport.get(url, FETCH_TIMEOUT_MS, { anonymous: true, noFetchFallback: true }),
+      EN,
+      outcome
+    );
+    return { strings: strings2, answered: outcome.answered };
+  }
+  function useLanguage(setting) {
+    const wanted = resolveLanguage(setting);
+    if (wanted === requested) return;
+    requested = wanted;
+    generation += 1;
+    const mine = generation;
+    if (wanted === code) return;
+    if (wanted === "en") {
+      adopt("en", {});
+      return;
+    }
+    const held = cached(wanted);
+    if (held) {
+      adopt(wanted, held);
+      return;
+    }
+    if (recentMiss(readStored(MISS_KEY), VERSION, wanted, Date.now())) {
+      requested = code;
+      return;
+    }
+    void download(wanted).then(({ strings: fetched, answered: answered2 }) => {
+      if (!fetched) {
+        const miss = {
+          version: VERSION,
+          code: wanted,
+          at: Date.now(),
+          ttl: answered2 ? MISS_TTL_MS : UNREACHABLE_TTL_MS
+        };
+        writeStored(MISS_KEY, miss);
+      } else {
+        const entry = { version: VERSION, code: wanted, strings: fetched };
+        writeStored(LOCALE_KEY, entry);
+      }
+      if (mine !== generation) return;
+      if (fetched) adopt(wanted, fetched);
+      else requested = code;
+    });
+  }
   const LANGUAGES = [
     "af",
     "ar",
@@ -764,24 +1334,78 @@
     "zu"
   ];
   let displayNames = null;
+  let namedIn = "";
   function labeller() {
-    if (displayNames) return displayNames;
+    const locale = currentLocale();
+    if (displayNames && namedIn === locale) return displayNames;
+    namedIn = locale;
     try {
-      displayNames = new Intl.DisplayNames([navigator.language, "en"], { type: "language" });
+      const wanted = locale === "en" ? [navigator.language, "en"] : [locale, navigator.language, "en"];
+      displayNames = new Intl.DisplayNames(wanted, { type: "language" });
     } catch {
       displayNames = null;
     }
     return displayNames;
   }
-  function languageLabel(code) {
-    const name = labeller()?.of(code);
-    return name && name !== code ? `${name} (${code})` : code;
+  function languageLabel(code2) {
+    const name = labeller()?.of(code2);
+    return name && name !== code2 ? `${name} (${code2})` : code2;
   }
   function languageOptions(blankLabel) {
-    const options = LANGUAGES.map((code) => [code, languageLabel(code)]).sort(
+    const options = LANGUAGES.map((code2) => [code2, languageLabel(code2)]).sort(
       (a, b) => a[1].localeCompare(b[1])
     );
     return blankLabel ? [["", blankLabel], ...options] : [...options];
+  }
+  const BUTTON_IDS = [
+    "translate",
+    "search",
+    "ask",
+    "area",
+    "objects",
+    "text",
+    "copy",
+    "settings",
+    "menu"
+  ];
+  const DEFAULT_BUTTONS = "translate*,search,ask,area,objects,text,copy,settings*,menu*";
+  const isButtonId = (value) => BUTTON_IDS.includes(value);
+  function parseButtons(raw) {
+    const out = [];
+    const seen = /* @__PURE__ */ new Set();
+    for (const part of typeof raw === "string" ? raw.split(",") : []) {
+      const token = part.trim();
+      const pinned = token.endsWith("*");
+      const id = pinned ? token.slice(0, -1) : token;
+      if (!isButtonId(id) || seen.has(id)) continue;
+      seen.add(id);
+      out.push({ id, pinned });
+    }
+    for (const id of BUTTON_IDS) {
+      if (!seen.has(id)) out.push({ id, pinned: false });
+    }
+    return out;
+  }
+  function serializeButtons(list) {
+    return list.map((entry) => entry.pinned ? `${entry.id}*` : entry.id).join(",");
+  }
+  function moveButton(list, id, delta) {
+    const from = list.findIndex((entry) => entry.id === id);
+    if (from < 0) return [...list];
+    return placeButton(list, id, from + delta);
+  }
+  function placeButton(list, id, index) {
+    const moving = list.find((entry) => entry.id === id);
+    if (!moving) return [...list];
+    const rest = list.filter((entry) => entry.id !== id);
+    const at = Math.max(0, Math.min(rest.length, index));
+    return [...rest.slice(0, at), moving, ...rest.slice(at)];
+  }
+  function togglePinned(list, id) {
+    return list.map((entry) => entry.id === id ? { ...entry, pinned: !entry.pinned } : entry);
+  }
+  function rowOf(list, main) {
+    return [main, ...list.filter((entry) => entry.pinned && entry.id !== main).map((entry) => entry.id)];
   }
   const MIN_OPACITY = 40;
   const MAX_OPACITY = 100;
@@ -792,8 +1416,64 @@
     const snapped = Math.round(value / OPACITY_STEP) * OPACITY_STEP;
     return Math.min(MAX_OPACITY, Math.max(MIN_OPACITY, snapped));
   }
+  const MODIFIER_CODES = /^(Control|Alt|Shift|Meta|OS)(Left|Right)?$/;
+  const MODIFIER_NAMES = ["Ctrl", "Alt", "Shift", "Meta"];
+  function parseChord(raw) {
+    if (typeof raw !== "string") return null;
+    const parts = raw.split("+").map((part) => part.trim()).filter(Boolean);
+    const code2 = parts.pop();
+    if (!code2 || !/^[A-Z][A-Za-z0-9]*$/.test(code2) || MODIFIER_CODES.test(code2)) return null;
+    if (MODIFIER_NAMES.includes(code2)) return null;
+    const chord = { ctrl: false, alt: false, shift: false, meta: false, code: code2 };
+    for (const part of parts) {
+      const name = part.toLowerCase();
+      if (name === "ctrl" || name === "control") chord.ctrl = true;
+      else if (name === "alt" || name === "option") chord.alt = true;
+      else if (name === "shift") chord.shift = true;
+      else if (name === "meta" || name === "cmd" || name === "win") chord.meta = true;
+      else return null;
+    }
+    return isBare(chord) ? null : chord;
+  }
+  function isBare(chord) {
+    return !chord.ctrl && !chord.alt && !chord.meta && !/^F\d{1,2}$/.test(chord.code);
+  }
+  function serializeChord(chord) {
+    const parts = [];
+    if (chord.ctrl) parts.push("Ctrl");
+    if (chord.alt) parts.push("Alt");
+    if (chord.shift) parts.push("Shift");
+    if (chord.meta) parts.push("Meta");
+    parts.push(chord.code);
+    return parts.join("+");
+  }
+  function normalizeChord(raw) {
+    const chord = parseChord(raw);
+    return chord ? serializeChord(chord) : "";
+  }
+  function chordFromEvent(event) {
+    if (!event.code || MODIFIER_CODES.test(event.code)) return null;
+    const chord = {
+      ctrl: event.ctrlKey,
+      alt: event.altKey,
+      shift: event.shiftKey,
+      meta: event.metaKey,
+      code: event.code
+    };
+    return isBare(chord) ? null : chord;
+  }
+  function matchesChord(chord, event) {
+    return chord !== null && event.code === chord.code && event.ctrlKey === chord.ctrl && event.altKey === chord.alt && event.shiftKey === chord.shift && event.metaKey === chord.meta;
+  }
+  function formatChord(raw) {
+    const chord = parseChord(raw);
+    if (!chord) return "";
+    const key = chord.code.replace(/^Key(?=[A-Z]$)/, "").replace(/^Digit(?=\d$)/, "");
+    return [...serializeChord(chord).split("+").slice(0, -1), key].join(" + ");
+  }
   const STORAGE_KEY = "lens-translate:settings";
   const SETTINGS_KEYS = [STORAGE_KEY];
+  const MB = 1024 * 1024;
   const DEFAULTS = {
     targetLang: "ru",
     sourceLang: "",
@@ -811,16 +1491,30 @@
     showButton: true,
     buttonMode: "auto",
     hotkey: "alt",
-    batchHotkey: true,
+    keyTranslateAll: "Alt+Shift+KeyT",
+    keyTranslate: "",
+    keySearch: "",
+    keyAsk: "",
+    keyArea: "",
+    keyCopy: "",
+    keyUndoAll: "",
     peekKey: "off",
     fontFamily: "",
+    fontWeight: 400,
+    textColor: "",
+    outlineColor: "",
+    fillColor: "",
     drawBackground: true,
+    patchPadding: 1,
     verticalText: "auto",
     renderMode: "canvas",
     enabled: true,
     minReadablePx: 12,
     supersample: 2,
-    cacheBytes: 32 * 1024 * 1024,
+    maxCanvasSide: 8e3,
+    mangaMinPx: 14,
+    cacheBytes: 32 * MB,
+    storeBytes: 32 * MB,
     persistCache: true,
     mangaMode: false,
     mangaBoxGrowth: 1.45,
@@ -834,312 +1528,291 @@
     uiMode: "simple",
     aiPrompt: "What is in this picture?",
     frames: true,
-    popupOpacity: MAX_OPACITY
+    popupOpacity: MAX_OPACITY,
+    language: "auto",
+    coverOpacity: 100,
+    buttons: DEFAULT_BUTTONS,
+    mainAction: "translate",
+    longPressAction: "peek",
+    repeatLast: false,
+    buttonSize: "m",
+    buttonCorner: "tr",
+    idleOpacity: 100,
+    hideDelayMs: 300,
+    extrasDelayMs: 550,
+    buttonLabels: false,
+    holdMs: 350,
+    concurrency: 2,
+    rememberQuestion: false,
+    searchLang: "",
+    searchTheme: "auto",
+    backgroundTabs: false
   };
-  const GROUPS = [
-    "Interface",
-    "Languages",
-    "Layout",
-    "Erasing the original",
-    "Legibility",
-    "Behaviour",
-    "Advanced"
+  const TABS = [
+    "general",
+    "translation",
+    "search",
+    "appearance",
+    "buttons",
+    "behaviour",
+    "sites",
+    "advanced",
+    "about"
+  ];
+  const interfaceLanguages = () => [
+    ["auto", t("lang.auto")],
+    ["en", ownName("en")],
+    ...LOCALES.map((code2) => [code2, ownName(code2)])
   ];
   const FIELDS = [
-    {
-      key: "uiMode",
-      group: "Interface",
-      essential: true,
-      label: "Interface",
-      type: "select",
-      options: [
-        ["simple", "simple - translate, search, ask, copy"],
-        ["pro", "pro - areas, objects, text picking, every setting"]
-      ]
-    },
-    {
-      key: "aiPrompt",
-      group: "Interface",
-      label: "Default AI question",
-      type: "text",
-      hint: 'what the "Ask AI" field starts with; blank sends the picture alone'
-    },
+    // General
+    { key: "uiMode", tab: "general", essential: true, type: "select", options: ["simple", "pro"] },
+    { key: "language", tab: "general", essential: true, type: "select", choices: interfaceLanguages },
+    { key: "enabled", tab: "general", essential: true, type: "checkbox" },
     {
       key: "popupOpacity",
-      group: "Interface",
+      tab: "general",
       essential: true,
-      label: "Popup opacity",
       type: "range",
-      min: String(MIN_OPACITY),
-      max: String(MAX_OPACITY),
-      step: String(OPACITY_STEP),
-      unit: "pct",
-      hint: "the menu, settings and messages; below 100 the picture shows through, blurred"
+      min: MIN_OPACITY,
+      max: MAX_OPACITY,
+      step: OPACITY_STEP,
+      unit: "pct"
     },
-    { key: "enabled", group: "Behaviour", essential: true, label: "Translation enabled", type: "checkbox" },
-    {
-      key: "frames",
-      group: "Behaviour",
-      label: "Work inside frames",
-      type: "checkbox",
-      hint: "for readers and galleries that show pages in an iframe; small frames such as ads are always left alone"
-    },
-    {
-      key: "renderMode",
-      group: "Behaviour",
-      label: "Render as",
-      type: "select",
-      options: [
-        ["canvas", "canvas - a picture laid over the image (default)"],
-        ["overlay", "overlay - crisp text, can drift on dynamic pages"]
-      ]
-    },
-    { key: "targetLang", group: "Languages", essential: true, label: "Translate to", type: "select", options: languageOptions() },
+    // Translation
+    { key: "targetLang", tab: "translation", essential: true, type: "select", choices: () => languageOptions() },
     {
       key: "sourceLang",
-      group: "Languages",
+      tab: "translation",
       essential: true,
-      label: "Translate from",
       type: "select",
-      options: languageOptions("Detect automatically")
+      choices: () => languageOptions(t("lang.detect"))
     },
+    { key: "ocrLang", tab: "translation", type: "select", choices: () => languageOptions(t("lang.followTarget")) },
+    { key: "mangaMode", tab: "translation", essential: true, type: "checkbox" },
+    { key: "renderMode", tab: "translation", type: "select", options: ["canvas", "overlay"] },
+    { key: "concurrency", tab: "translation", type: "number", min: 1, max: 6, step: 1 },
+    // Search
+    { key: "aiPrompt", tab: "search", type: "text", wide: true },
+    { key: "rememberQuestion", tab: "search", type: "checkbox" },
+    { key: "backgroundTabs", tab: "search", type: "checkbox" },
     {
-      key: "ocrLang",
-      group: "Languages",
-      label: "OCR language hint",
+      key: "searchLang",
+      tab: "search",
       type: "select",
-      options: languageOptions("Follow the target")
+      choices: () => languageOptions(t("lang.sameAsTranslation"))
     },
+    { key: "searchTheme", tab: "search", type: "select", options: ["auto", "light", "dark"] },
+    // Appearance
+    { key: "fontFamily", tab: "appearance", type: "text", wide: true },
+    { key: "fontWeight", tab: "appearance", type: "select", options: ["300", "400", "500", "600", "700", "800"] },
+    { key: "textAlign", tab: "appearance", type: "select", options: ["auto", "left", "center", "right"] },
+    { key: "textColor", tab: "appearance", type: "color" },
+    { key: "outlineColor", tab: "appearance", type: "color" },
+    { key: "outlineScale", tab: "appearance", type: "range", min: 0, max: 8, step: 0.1, unit: "x", wide: true },
+    { key: "minReadablePx", tab: "appearance", type: "number", min: 0, max: 64, step: 1 },
+    { key: "verticalText", tab: "appearance", type: "select", options: ["auto", "keep", "horizontal"] },
+    { key: "reflowHorizontal", tab: "appearance", type: "checkbox" },
+    { key: "fitToBox", tab: "appearance", type: "checkbox" },
+    { key: "lineSpacing", tab: "appearance", type: "range", min: 0.8, max: 2, step: 0.05, unit: "x" },
+    { key: "mangaBoxGrowth", tab: "appearance", type: "number", min: 1, max: 3, step: 0.05 },
+    { key: "mangaMinPx", tab: "appearance", type: "number", min: 0, max: 64, step: 1 },
+    { key: "drawBackground", tab: "appearance", type: "checkbox" },
+    { key: "eraseMode", tab: "appearance", type: "select", options: ["patch", "hull"] },
+    { key: "fillColor", tab: "appearance", type: "color" },
+    { key: "hullPadding", tab: "appearance", type: "range", min: 0, max: 2, step: 0.05, unit: "%" },
+    { key: "patchPadding", tab: "appearance", type: "range", min: 0, max: 3, step: 0.05, unit: "x" },
+    { key: "supersample", tab: "appearance", type: "select", options: ["1", "2", "3"] },
+    { key: "coverOpacity", tab: "appearance", type: "range", min: 20, max: 100, step: 5, unit: "pct" },
+    // Buttons
+    { key: "showButton", tab: "buttons", type: "checkbox" },
+    { key: "buttonMode", tab: "buttons", essential: true, type: "select", options: ["auto", "hover", "pinned"] },
+    { key: "buttons", tab: "buttons", type: "buttons", wide: true },
+    { key: "mainAction", tab: "buttons", type: "select", options: ["translate", "search", "ask", "area", "menu"] },
     {
-      key: "verticalText",
-      group: "Layout",
-      label: "Vertical CJK text",
+      key: "longPressAction",
+      tab: "buttons",
       type: "select",
-      options: [
-        ["auto", "auto - vertical only for CJK targets"],
-        ["keep", "keep - always vertical, like Chromium"],
-        ["horizontal", "horizontal - always reflow"]
-      ]
+      options: ["peek", "translate", "search", "ask", "area", "menu", "none"]
     },
-    {
-      key: "textAlign",
-      group: "Layout",
-      label: "Text alignment",
-      type: "select",
-      options: [
-        ["auto", "auto - follow the source, like Chromium"],
-        ["left", "left"],
-        ["center", "center"],
-        ["right", "right"]
-      ]
-    },
-    {
-      key: "mangaMode",
-      group: "Layout",
-      essential: true,
-      label: "Manga mode",
-      type: "checkbox",
-      hint: "always reflow vertical text, widen the layout area, bigger minimum size"
-    },
-    {
-      key: "mangaBoxGrowth",
-      group: "Layout",
-      label: "Bubble fill (manga mode)",
-      type: "number",
-      step: "0.05",
-      hint: "how far past the detected box to lay out; safe to raise while the setting below is on"
-    },
-    { key: "drawBackground", group: "Erasing the original", label: "Erase the original text", type: "checkbox" },
-    {
-      key: "eraseMode",
-      group: "Erasing the original",
-      label: "How to erase",
-      type: "select",
-      options: [
-        ["patch", "patch - the server's inpainting, like Chromium"],
-        ["hull", "hull - cover the whole text area with its background colour"]
-      ]
-    },
-    {
-      key: "hullPadding",
-      group: "Erasing the original",
-      label: "Cover margin",
-      type: "range",
-      min: "0",
-      max: "2",
-      step: "0.05",
-      unit: "%",
-      hint: "how far past the text the cover extends, relative to line height"
-    },
-    {
-      key: "outlineScale",
-      group: "Legibility",
-      label: "Text outline",
-      type: "range",
-      min: "0",
-      max: "8",
-      step: "0.1",
-      unit: "x",
-      hint: "thickens the outline behind translated text; 0 removes it"
-    },
-    { key: "fontFamily", group: "Layout", label: "Font family", type: "text", hint: "blank = the page font" },
-    { key: "showButton", group: "Behaviour", label: "Show the button over images", type: "checkbox" },
-    {
-      key: "hotkey",
-      group: "Behaviour",
-      label: "Modifier + click",
-      type: "select",
-      options: [
-        ["alt", "Alt + click"],
-        ["ctrl", "Ctrl + click"],
-        ["shift", "Shift + click"],
-        ["none", "off"]
-      ]
-    },
-    {
-      key: "batchHotkey",
-      group: "Behaviour",
-      label: "Alt + Shift + T translates all in view",
-      type: "checkbox",
-      hint: "every picture currently on screen; also in the userscript menu and Actions below"
-    },
-    {
-      key: "peekKey",
-      group: "Behaviour",
-      label: "Hold to see the original",
-      type: "select",
-      options: [
-        ["off", "off - holding the button down still works"],
-        ["backquote", "` (backtick), held"],
-        ["shift", "Shift, held"],
-        ["control", "Ctrl, held"]
-      ],
-      hint: "while held, every translation steps aside; let go and it is back"
-    },
-    {
-      key: "reflowHorizontal",
-      group: "Layout",
-      label: "Re-wrap horizontal text",
-      type: "checkbox",
-      hint: "treat a paragraph as one text area, not a repeat of the server lines"
-    },
-    {
-      key: "fitToBox",
-      group: "Layout",
-      label: "Keep text out of the next bubble",
-      type: "checkbox",
-      hint: "shrink a paragraph that outgrows the room between its neighbours"
-    },
-    {
-      key: "lineSpacing",
-      group: "Layout",
-      label: "Line spacing",
-      type: "range",
-      min: "0.8",
-      max: "2",
-      step: "0.05",
-      unit: "x",
-      hint: "needs re-wrapped text: the switch above, or a vertical source"
-    },
-    {
-      key: "minReadablePx",
-      group: "Legibility",
-      label: "Minimum text size (px)",
-      type: "number",
-      hint: "enlarges text that would render too small to read; 0 disables"
-    },
-    {
-      key: "supersample",
-      group: "Legibility",
-      label: "Render sharpness",
-      type: "select",
-      options: [
-        ["1", "1x - smallest images"],
-        ["2", "2x - sharper when zoomed (default)"],
-        ["3", "3x - sharpest, heaviest"]
-      ]
-    },
-    {
-      key: "cacheBytes",
-      group: "Behaviour",
-      label: "Cache size (MB)",
-      type: "number",
-      step: "4",
-      hint: "remembers what Lens said, so re-translating costs nothing; 0 disables"
-    },
-    {
-      key: "buttonMode",
-      group: "Behaviour",
-      essential: true,
-      label: "When to show it",
-      type: "select",
-      options: [
-        ["auto", "auto - pinned on a touch screen, on hover otherwise"],
-        ["hover", "on hover only"],
-        ["pinned", "always, over the image in view"]
-      ],
-      hint: "a touch screen has no hover, and tapping the image is how you turn the page"
-    },
-    {
-      key: "persistCache",
-      group: "Behaviour",
-      label: "Remember across reloads",
-      type: "checkbox",
-      hint: "recognise a picture by its pixels, so reopening a page asks Lens nothing"
-    },
-    { key: "minImageSize", group: "Behaviour", label: "Ignore images under (px)", type: "number" },
-    { key: "jpegQuality", group: "Advanced", label: "Upload quality (0..1)", type: "number", step: "0.05" },
-    { key: "timeoutMs", group: "Advanced", label: "Request timeout (ms)", type: "number", step: "1000" },
-    { key: "region", group: "Advanced", label: "Client region", type: "text" },
-    { key: "timeZone", group: "Advanced", label: "Client time zone", type: "text" },
-    { key: "apiKey", group: "Advanced", label: "API key", type: "text", hint: "only change if you have your own" }
+    { key: "repeatLast", tab: "buttons", type: "checkbox" },
+    { key: "buttonLabels", tab: "buttons", type: "checkbox" },
+    { key: "buttonSize", tab: "buttons", type: "select", options: ["s", "m", "l"] },
+    { key: "buttonCorner", tab: "buttons", type: "select", options: ["tr", "tl", "br", "bl"] },
+    { key: "idleOpacity", tab: "buttons", type: "range", min: 20, max: 100, step: 5, unit: "pct" },
+    { key: "hideDelayMs", tab: "buttons", type: "number", min: 0, max: 5e3, step: 50 },
+    { key: "extrasDelayMs", tab: "buttons", type: "number", min: 0, max: 5e3, step: 50 },
+    { key: "holdMs", tab: "buttons", type: "number", min: 150, max: 2e3, step: 50 },
+    // Behaviour
+    { key: "hotkey", tab: "behaviour", type: "select", options: ["alt", "ctrl", "shift", "none"] },
+    { key: "peekKey", tab: "behaviour", type: "select", options: ["off", "backquote", "shift", "control"] },
+    { key: "keyTranslateAll", tab: "behaviour", type: "chord" },
+    { key: "keyTranslate", tab: "behaviour", type: "chord" },
+    { key: "keySearch", tab: "behaviour", type: "chord" },
+    { key: "keyAsk", tab: "behaviour", type: "chord" },
+    { key: "keyArea", tab: "behaviour", type: "chord" },
+    { key: "keyCopy", tab: "behaviour", type: "chord" },
+    { key: "keyUndoAll", tab: "behaviour", type: "chord" },
+    { key: "minImageSize", tab: "behaviour", type: "number", min: 10, max: 2e3, step: 10 },
+    { key: "frames", tab: "behaviour", type: "checkbox" },
+    // Advanced
+    { key: "jpegQuality", tab: "advanced", type: "range", min: 0.1, max: 1, step: 0.05, unit: "%" },
+    { key: "maxArea", tab: "advanced", type: "number", min: 1e5, max: 16e6, step: 1e5 },
+    { key: "maxSide", tab: "advanced", type: "number", min: 400, max: 8e3, step: 100 },
+    { key: "timeoutMs", tab: "advanced", type: "number", min: 5e3, max: 3e5, step: 1e3 },
+    { key: "cacheBytes", tab: "advanced", type: "number", min: 0, max: 1024, step: 4, scale: MB },
+    { key: "persistCache", tab: "advanced", type: "checkbox" },
+    { key: "storeBytes", tab: "advanced", type: "number", min: 0, max: 1024, step: 4, scale: MB },
+    { key: "maxCanvasSide", tab: "advanced", type: "number", min: 2e3, max: 16e3, step: 500 },
+    { key: "region", tab: "advanced", type: "text" },
+    { key: "timeZone", tab: "advanced", type: "text" },
+    { key: "apiKey", tab: "advanced", type: "text", wide: true }
   ];
-  let cache = null;
+  const fieldLabel = (field) => t(`set.${field.key}.label`);
+  const fieldHint = (field) => tMaybe(`set.${field.key}.hint`);
+  function fieldChoices(field) {
+    if (field.choices) return field.choices();
+    return (field.options ?? []).map(
+      (value) => [value, tMaybe(`set.${field.key}.opt.${value}`) ?? value]
+    );
+  }
+  function fieldMatches(field, query) {
+    const needle = query.trim().toLowerCase();
+    if (!needle) return true;
+    return [fieldLabel(field), fieldHint(field) ?? "", field.key].some(
+      (text2) => text2.toLowerCase().includes(needle)
+    );
+  }
+  let cache$1 = null;
+  function merge(stored2) {
+    const merged = { ...DEFAULTS };
+    for (const key of Object.keys(DEFAULTS)) {
+      if (Object.hasOwn(stored2, key) && stored2[key] !== void 0) merged[key] = stored2[key];
+    }
+    if (stored2["batchHotkey"] === false && !Object.hasOwn(stored2, "keyTranslateAll")) {
+      merged["keyTranslateAll"] = "";
+    }
+    merged["fontFamily"] = typeof merged["fontFamily"] === "string" ? cleanFontFamily(merged["fontFamily"]) : DEFAULTS.fontFamily;
+    return merged;
+  }
   function getSettings() {
-    if (!cache) {
+    if (!cache$1) {
       let stored2 = {};
       try {
         const raw = readStored(STORAGE_KEY);
-        if (typeof raw === "string") stored2 = JSON.parse(raw);
-        else if (raw && typeof raw === "object") stored2 = raw;
+        const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+        if (parsed && typeof parsed === "object") stored2 = parsed;
       } catch {
         stored2 = {};
       }
-      cache = { ...DEFAULTS, ...stored2 };
+      cache$1 = merge(stored2);
     }
-    return cache;
+    return cache$1;
   }
   function reloadSettings() {
-    cache = null;
+    cache$1 = null;
     return getSettings();
   }
   function saveSettings(patch) {
-    cache = { ...getSettings(), ...patch };
-    writeStored(STORAGE_KEY, cache);
-    return cache;
+    cache$1 = { ...getSettings(), ...patch };
+    writeStored(STORAGE_KEY, cache$1);
+    return cache$1;
   }
-  function resetSettings() {
-    cache = { ...DEFAULTS };
-    writeStored(STORAGE_KEY, cache);
-    return cache;
+  const COLOUR = /^#[0-9a-f]{6}$/i;
+  function clampTo(field, value) {
+    const scale = field.scale ?? 1;
+    let out = value;
+    if (field.min !== void 0) out = Math.max(field.min * scale, out);
+    if (field.max !== void 0) out = Math.min(field.max * scale, out);
+    return out;
+  }
+  function sanitize(field, raw) {
+    const fallback = DEFAULTS[field.key];
+    switch (field.type) {
+      case "checkbox":
+        return typeof raw === "boolean" ? raw : void 0;
+      case "number":
+      case "range": {
+        if (typeof raw !== "number" || !Number.isFinite(raw)) return void 0;
+        if (field.key === "popupOpacity") return clampOpacity(raw);
+        return clampTo(field, raw);
+      }
+      case "select": {
+        const text2 = String(raw);
+        if (typeof raw !== "string" && typeof raw !== "number") return void 0;
+        if (!fieldChoices(field).some(([value]) => value === text2)) return void 0;
+        return typeof fallback === "number" ? Number(text2) : text2;
+      }
+      case "color":
+        if (typeof raw !== "string") return void 0;
+        return raw === "" || COLOUR.test(raw) ? raw.toLowerCase() : void 0;
+      case "chord":
+        return typeof raw === "string" ? normalizeChord(raw) : void 0;
+      case "buttons":
+        return typeof raw === "string" ? serializeButtons(parseButtons(raw)) : void 0;
+      case "text":
+        if (typeof raw !== "string") return void 0;
+        return field.key === "fontFamily" ? cleanFontFamily(raw) : raw.trim();
+    }
+  }
+  const FONT_FAMILY_MAX = 200;
+  function cleanFontFamily(raw) {
+    return raw.replace(/[;{}<>\\\r\n\t\f\v]/g, "").trim().slice(0, FONT_FAMILY_MAX).trim();
+  }
+  function formPatch(entries2) {
+    const patch = {};
+    for (const [field, now, initial] of entries2) {
+      if (now === initial) continue;
+      patch[field.key] = coerce(field, now);
+    }
+    return patch;
+  }
+  function settingsDiffer(a, b) {
+    return FIELDS.some((field) => a[field.key] !== b[field.key]);
   }
   function coerce(field, raw) {
-    if (field.key === "cacheBytes") {
-      const megabytes = Number(raw);
-      return Number.isFinite(megabytes) && megabytes >= 0 ? Math.round(megabytes * 1024 * 1024) : DEFAULTS.cacheBytes;
+    let candidate = raw;
+    if (field.type === "checkbox") candidate = Boolean(raw);
+    else if (field.type === "number" || field.type === "range") {
+      candidate = String(raw).trim() === "" ? Number.NaN : Number(raw) * (field.scale ?? 1);
+      if (field.scale && Number.isFinite(candidate)) candidate = Math.round(candidate);
     }
-    if (field.key === "supersample") {
-      const value = Number(raw);
-      return value >= 1 && value <= 3 ? value : DEFAULTS.supersample;
+    return sanitize(field, candidate) ?? DEFAULTS[field.key];
+  }
+  function shown(field, value) {
+    if (field.scale && typeof value === "number") return String(Math.round(value / field.scale * 10) / 10);
+    return String(value);
+  }
+  const EXPORT_MARK = "lens-translate";
+  function exportSettings(settings, version) {
+    const ordered = {};
+    for (const key of Object.keys(DEFAULTS).sort()) ordered[key] = settings[key];
+    return `${JSON.stringify({ [EXPORT_MARK]: version, settings: ordered }, null, 2)}
+`;
+  }
+  function importSettings(raw) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+    const outer = raw;
+    const inner = Object.hasOwn(outer, EXPORT_MARK) ? outer["settings"] : outer;
+    if (!inner || typeof inner !== "object" || Array.isArray(inner)) return null;
+    const report = { patch: {}, applied: [], unknown: [], invalid: [] };
+    const patch = {};
+    for (const [key, value] of Object.entries(inner)) {
+      const field = FIELDS.find((candidate) => candidate.key === key);
+      if (!field) {
+        report.unknown.push(key);
+        continue;
+      }
+      const clean = sanitize(field, value);
+      if (clean === void 0) {
+        report.invalid.push(key);
+        continue;
+      }
+      patch[key] = clean;
+      report.applied.push(key);
     }
-    if (field.key === "popupOpacity") return clampOpacity(raw);
-    if (field.key === "uiMode") return raw === "pro" ? "pro" : "simple";
-    if (field.type === "checkbox") return Boolean(raw);
-    if (field.type === "number" || field.type === "range") {
-      const value = Number(raw);
-      return Number.isFinite(value) ? value : DEFAULTS[field.key];
-    }
-    return String(raw).trim();
+    report.patch = patch;
+    return report.applied.length || report.unknown.length || report.invalid.length ? report : null;
   }
   const F = {
     AppliedFilter: {
@@ -1517,7 +2190,7 @@
         filter.int(F.AppliedFilter.filterType, FILTER_TRANSLATE);
         filter.sub(
           F.AppliedFilter.translate,
-          (t) => t.str(F.AppliedFilter_Translate.targetLanguage, settings.targetLang).str(F.AppliedFilter_Translate.sourceLanguage, settings.sourceLang)
+          (t2) => t2.str(F.AppliedFilter_Translate.targetLanguage, settings.targetLang).str(F.AppliedFilter_Translate.sourceLanguage, settings.sourceLang)
         );
       })
     );
@@ -1710,18 +2383,18 @@
     const fetchLens = answered(results.get("fetch -> lens") ?? "");
     const anyControl = answered(results.get("gm -> control") ?? "") || answered(results.get("fetch -> control") ?? "");
     if (gmLens && fetchLens) {
-      return "Lens is reachable both ways. If translating still fails, the problem is past the transport - send this report with the exact error the toast shows.";
+      return t("diag.both");
     }
     if (fetchLens) {
-      return "Lens is reachable, but this host's own transport is not. That is handled: the script falls back to fetch, which costs one failed attempt per page and sends an Origin header GM_xmlhttpRequest would not.";
+      return t("diag.fetchOnly");
     }
     if (gmLens) {
-      return "Lens is reachable through the host's transport, which is the path the script prefers anyway.";
+      return t("diag.gmOnly");
     }
     if (anyControl) {
-      return 'Nothing reaches Lens, but the control host answers. Something on this device is blocking lensfrontend-pa.googleapis.com specifically - check the DNS filtering and the HTTPS filtering exclusions, and search the activity log for "googleapis".';
+      return t("diag.blocked");
     }
-    return "Nothing reaches anything, the control host included. The device has no working connection from this page.";
+    return t("diag.offline");
   }
   function pageFacts(context) {
     const minSize = getSettings().minImageSize;
@@ -1984,7 +2657,7 @@
               F.LensOverlayInteractionRequestMetadata.queryMetadata,
               (q) => q.sub(
                 F.LensOverlayInteractionRequestMetadata_QueryMetadata.textQuery,
-                (t) => t.str(F.TextQuery.query, query)
+                (t2) => t2.str(F.TextQuery.query, query)
               )
             );
           }
@@ -2295,10 +2968,12 @@
     });
     return all2;
   }
+  const budgetOf = (settings) => settings.storeBytes ?? settings.cacheBytes;
   async function putStored(hash, result, settings) {
-    if (!hash || !settings.persistCache || settings.cacheBytes <= 0) return;
+    const budget = budgetOf(settings);
+    if (!hash || !settings.persistCache || budget <= 0) return;
     const bytes2 = weigh$1(result);
-    if (bytes2 > settings.cacheBytes) return;
+    if (bytes2 > budget) return;
     const key = entryKey(hash, settings);
     const now = Date.now();
     const entry = { key, hash, languages: languagesOf(settings), result, bytes: bytes2 };
@@ -2318,7 +2993,7 @@
     writesSinceCount += 1;
     if (writesSinceCount >= RECOUNT_EVERY) total = null;
     if (total !== null) total += delta;
-    await evict$1(settings.cacheBytes);
+    await evict$1(budget);
   }
   async function evict$1(budget) {
     if (total === null) {
@@ -2394,15 +3069,18 @@
     }
     return measureCtx;
   }
+  function fontOf(px2, family, weight = 400) {
+    return weight === 400 ? `${px2}px ${family}` : `${weight} ${px2}px ${family}`;
+  }
   const baseLang = (tag) => tag.split("-")[0]?.toLowerCase() ?? "";
-  function fitFontSize(str, boxWidth, boxHeight, fontFamily, maxSize = MAX_FONT_SIZE) {
+  function fitFontSize(str, boxWidth, boxHeight, fontFamily, maxSize = MAX_FONT_SIZE, fontWeight = 400) {
     const ctx = measurer();
     if (!ctx) return MIN_FONT_SIZE;
     let low = MIN_FONT_SIZE;
     let high = maxSize;
     while (low <= high) {
       const mid = low + high >> 1;
-      ctx.font = `${mid}px ${fontFamily}`;
+      ctx.font = fontOf(mid, fontFamily, fontWeight);
       const metrics = ctx.measureText(str);
       const height = metrics.fontBoundingBoxAscent + metrics.fontBoundingBoxDescent;
       if (metrics.width >= boxWidth || height >= boxHeight) high = mid - 1;
@@ -2506,8 +3184,8 @@
     [65504, 65510]
   ];
   const isUpright = (char) => {
-    const code = char.codePointAt(0) ?? 0;
-    return UPRIGHT_RANGES.some(([low, high]) => code >= low && code <= high);
+    const code2 = char.codePointAt(0) ?? 0;
+    return UPRIGHT_RANGES.some(([low, high]) => code2 >= low && code2 <= high);
   };
   const CORNER_PUNCT = new Set("、。，．");
   const ROTATED_PUNCT = new Set("ー〜～‐‑‒–—―－…‥（）｛｝〔〕［］【】「」『』〈〉《》");
@@ -2660,7 +3338,14 @@
   const SEPARATOR = String.fromCharCode(0);
   const DRAWN = Object.keys({
     fontFamily: 0,
+    fontWeight: 0,
+    textColor: 0,
+    outlineColor: 0,
+    fillColor: 0,
     drawBackground: 0,
+    patchPadding: 0,
+    maxCanvasSide: 0,
+    mangaMinPx: 0,
     verticalText: 0,
     minReadablePx: 0,
     supersample: 0,
@@ -2889,6 +3574,7 @@
     const layer = document.createElement("div");
     layer.className = "lt-layer";
     placeLayer(layer, img);
+    if (options.opacity !== void 0 && options.opacity < 1) layer.style.opacity = String(options.opacity);
     root.append(layer);
     const objectUrls = [];
     const ref = new WeakRef(img);
@@ -2927,8 +3613,16 @@
         if (!str.trim()) return;
         const boxW = geometry.w * rect.width;
         const boxH = geometry.h * rect.height;
-        const size = fitFontSize(str, vertical ? boxH : boxW, vertical ? boxW : boxH, fontFamily);
-        const bgColor = argbToCss(line.bgColor);
+        const size = fitFontSize(
+          str,
+          vertical ? boxH : boxW,
+          vertical ? boxW : boxH,
+          fontFamily,
+          void 0,
+          settings.fontWeight
+        );
+        const bgColor = settings.fillColor || argbToCss(line.bgColor);
+        const outlineColor = settings.outlineColor || argbToCss(line.bgColor);
         const outline = size * OUTLINE_RATIO * settings.outlineScale;
         const padX = patch ? 0 : 2;
         const padY = patch ? 0 : 1;
@@ -2940,7 +3634,8 @@
           `height:calc(${pct(geometry.h)} + ${padY * 2}px)`,
           `left:calc(${pct(geometry.cx - geometry.w / 2)} - ${padX}px)`,
           `top:calc(${pct(geometry.cy - geometry.h / 2)} - ${padY}px)`,
-          `color:${argbToCss(line.textColor)}`,
+          `color:${settings.textColor || argbToCss(line.textColor)}`,
+          settings.fontWeight === 400 ? "" : `font-weight:${settings.fontWeight}`,
           `background-color:${patch ? "transparent" : bgColor}`,
           `font-size:${size}px`,
           `font-family:${fontFamily}`,
@@ -2953,7 +3648,7 @@
           // Eight directions rather than Chromium's four: the diagonals alone
           // separate into distinct copies once the offset grows past a pixel or
           // two, and this renderer has no stroke to fall back on.
-          patch ? `text-shadow:${textShadow(outline, bgColor)}` : ""
+          patch ? `text-shadow:${textShadow(outline, outlineColor)}` : ""
         ].filter(Boolean).join(";");
         layer.appendChild(element);
         rendered += 1;
@@ -3080,7 +3775,7 @@
   function drawReflowedParagraph(draw, block, settings, room) {
     const geometry = block.geometry;
     if (!geometry || geometry.w <= 0 || geometry.h <= 0) return;
-    const { ctx, width, height, fontFamily } = draw;
+    const { ctx, width, height, fontFamily, fontWeight } = draw;
     const box = fitInside(
       {
         cx: (room.left + room.right) / 2,
@@ -3106,7 +3801,7 @@
     const perCharacter = wrapsPerCharacter(block);
     const measure = (candidate) => ctx.measureText(candidate).width;
     const setFont = (px2) => {
-      ctx.font = `${px2}px ${fontFamily}`;
+      ctx.font = fontOf(px2, fontFamily, fontWeight);
     };
     const { size } = fitTextBlock(
       setFont,
@@ -3139,12 +3834,12 @@
     const lineHeight = fontSize * spacing;
     ctx.textAlign = "left";
     ctx.textBaseline = "top";
-    const fill = argbToCss(style.textColor);
+    const fill = settings.textColor || argbToCss(style.textColor);
     const outline = Math.max(
       0,
       Math.round(fontSize * OUTLINE_RATIO * 2 * settings.outlineScale)
     );
-    const outlineColor = argbToCss(style.bgColor);
+    const outlineColor = settings.outlineColor || argbToCss(style.bgColor);
     const justify = justification(block.alignment, isRtl(block), settings.textAlign);
     let y = -Math.min(boxH, lines.length * lineHeight) / 2;
     for (const line of lines) {
@@ -3170,7 +3865,7 @@
     const style = block.lines.find((line) => line.geometry) ?? block.lines[0];
     if (!style) return;
     const pad = Number.isFinite(thinnest) ? thinnest * settings.hullPadding : 0;
-    fillHull(ctx, convexHull(points), argbToCss(style.bgColor), pad);
+    fillHull(ctx, convexHull(points), settings.fillColor || argbToCss(style.bgColor), pad);
   }
   function nudgeInside(draw, box, line) {
     const radians = line.angle * DEG;
@@ -3194,7 +3889,8 @@
   async function drawLine(draw, block, line, nextLine, settings, backgroundOnly = false, skipBackground = false) {
     const geometry = line.geometry;
     if (!geometry || geometry.w <= 0 || geometry.h <= 0) return;
-    const { ctx, width, height, fontFamily } = draw;
+    const { ctx, width, height, fontFamily, fontWeight } = draw;
+    const flat = settings.fillColor || argbToCss(line.bgColor);
     const boxW = geometry.w * width;
     const boxH = geometry.h * height;
     const cx = geometry.cx * width;
@@ -3204,18 +3900,18 @@
     ctx.translate(cx, cy);
     ctx.rotate(geometry.angle * DEG);
     if (patch) {
-      const padW = patch.hPad * boxH;
-      const padH = patch.vPad * boxH;
+      const padW = patch.hPad * boxH * settings.patchPadding;
+      const padH = patch.vPad * boxH * settings.patchPadding;
       try {
         const bitmap = await createImageBitmap(new Blob([patch.bytes], { type: "image/webp" }));
         ctx.drawImage(bitmap, -(boxW + padW) / 2, -(boxH + padH) / 2, boxW + padW, boxH + padH);
         bitmap.close();
       } catch {
-        ctx.fillStyle = argbToCss(line.bgColor);
+        ctx.fillStyle = flat;
         ctx.fillRect(-boxW / 2, -boxH / 2, boxW, boxH);
       }
     } else if (settings.drawBackground && !skipBackground) {
-      ctx.fillStyle = argbToCss(line.bgColor);
+      ctx.fillStyle = flat;
       ctx.fillRect(-boxW / 2, -boxH / 2, boxW, boxH);
     }
     const text2 = backgroundOnly ? "" : buildLineText(block.translation, line, nextLine);
@@ -3226,21 +3922,22 @@
         vertical ? boxH : boxW,
         vertical ? boxW : boxH,
         fontFamily,
-        draw.maxFontPx
+        draw.maxFontPx,
+        fontWeight
       );
       const size = Math.max(fitted, draw.minFontPx);
-      ctx.font = `${size}px ${fontFamily}`;
+      ctx.font = fontOf(size, fontFamily, fontWeight);
       ctx.direction = isRtl(block) ? "rtl" : "ltr";
-      const fill = argbToCss(line.textColor);
+      const fill = settings.textColor || argbToCss(line.textColor);
       const outline = patch ? Math.max(1, Math.round(size * OUTLINE_RATIO * settings.outlineScale)) : 0;
-      const outlineColor = patch ? argbToCss(line.bgColor) : null;
+      const outlineColor = patch ? settings.outlineColor || argbToCss(line.bgColor) : null;
       const enlarged = size > fitted;
       const advance = ctx.measureText(text2).width;
       const drawW = enlarged ? Math.min(Math.max(boxW, advance + size * 0.4), width) : boxW;
       const drawH = enlarged ? Math.min(Math.max(boxH, size * 1.35), height) : boxH;
       nudgeInside(draw, { w: drawW, h: drawH }, { cx, cy, angle: geometry.angle, rtl: isRtl(block) });
       if (enlarged && settings.drawBackground && !skipBackground) {
-        ctx.fillStyle = argbToCss(line.bgColor);
+        ctx.fillStyle = flat;
         ctx.fillRect(-drawW / 2, -drawH / 2, drawW, drawH);
       }
       ctx.translate(-drawW / 2, -drawH / 2);
@@ -3262,7 +3959,7 @@
   async function renderToBlob(source, naturalWidth, naturalHeight, blocks, settings, displayedWidth = naturalWidth) {
     const scale = Math.min(
       Math.max(1, Math.round(settings.supersample)),
-      Math.max(1, Math.floor(8e3 / Math.max(naturalWidth, naturalHeight)))
+      Math.max(1, Math.floor(settings.maxCanvasSide / Math.max(naturalWidth, naturalHeight)))
     );
     const width = naturalWidth * scale;
     const height = naturalHeight * scale;
@@ -3275,12 +3972,13 @@
     ctx.drawImage(source, 0, 0, width, height);
     const fontFamily = settings.fontFamily || "system-ui, -apple-system, sans-serif";
     const canvasPerCssPx = width / Math.max(1, displayedWidth);
-    const floorCssPx = settings.mangaMode ? Math.max(settings.minReadablePx, 14) : settings.minReadablePx;
+    const floorCssPx = settings.mangaMode ? Math.max(settings.minReadablePx, settings.mangaMinPx) : settings.minReadablePx;
     const draw = {
       ctx,
       width,
       height,
       fontFamily,
+      fontWeight: settings.fontWeight,
       minFontPx: floorCssPx > 0 ? floorCssPx * canvasPerCssPx : 0,
       maxFontPx: MAX_FONT_SIZE * scale
     };
@@ -3415,6 +4113,7 @@
         "pointer-events: none",
         // Above the image, below anything the page floats on top of it.
         "z-index: 1",
+        ...options.opacity !== void 0 && options.opacity < 1 ? [`opacity: ${options.opacity}`] : [],
         // A background's window, corners included, is cut out by place().
         ...options.background ? ["border-radius: 0", "object-fit: fill"] : [
           // Inherit the shape so rounded media does not get square corners.
@@ -3534,6 +4233,33 @@
       if (img) peekCover(img, peeking);
     }
   }
+  const STATE_KEY = "lens-translate:state";
+  const EMPTY = { lastAction: "", lastQuestion: "" };
+  let cache = null;
+  function getState() {
+    if (cache) return cache;
+    cache = { ...EMPTY };
+    try {
+      const raw = readStored(STATE_KEY);
+      const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+      if (parsed && typeof parsed === "object") {
+        const held = parsed;
+        if (typeof held["lastAction"] === "string") cache.lastAction = held["lastAction"];
+        if (typeof held["lastQuestion"] === "string") cache.lastQuestion = held["lastQuestion"];
+      }
+    } catch {
+    }
+    return cache;
+  }
+  function reloadState() {
+    cache = null;
+  }
+  function setState(patch) {
+    const next = { ...getState(), ...patch };
+    if (next.lastAction === cache?.lastAction && next.lastQuestion === cache?.lastQuestion) return;
+    cache = next;
+    writeStored(STATE_KEY, next);
+  }
   const SITES_KEY = "lens-translate:sites";
   const hostOf = (hostname = window.location.hostname) => hostname.toLowerCase().replace(/^www\./, "");
   let rules = null;
@@ -3558,6 +4284,7 @@
   function siteMode(host2 = hostOf()) {
     return load()[host2] ?? "default";
   }
+  const siteRules = () => ({ ...load() });
   function setSiteMode(mode, host2 = hostOf()) {
     const next = { ...load() };
     if (mode === "default") delete next[host2];
@@ -3580,7 +4307,10 @@
     send: "m5 12 7-7 7 7M12 19V5",
     external: "M15 3h6v6M10 14 21 3M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6",
     images: "M18 22H4a2 2 0 0 1-2-2V6M8 2h12a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2zM22 13l-3-3-7 7",
-    loader: "M21 12a9 9 0 1 1-6.2-8.6"
+    loader: "M21 12a9 9 0 1 1-6.2-8.6",
+    up: "m18 15-6-6-6 6",
+    down: "m6 9 6 6 6-6",
+    grip: "M9 5.5a.5.5 0 1 0 0 1 .5.5 0 0 0 0-1zM15 5.5a.5.5 0 1 0 0 1 .5.5 0 0 0 0-1zM9 11.5a.5.5 0 1 0 0 1 .5.5 0 0 0 0-1zM15 11.5a.5.5 0 1 0 0 1 .5.5 0 0 0 0-1zM9 17.5a.5.5 0 1 0 0 1 .5.5 0 0 0 0-1zM15 17.5a.5.5 0 1 0 0 1 .5.5 0 0 0 0-1z"
   };
   function icon(name, size = 18) {
     return `<svg class="lt-icon lt-icon-${name}" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${PATHS[name]}"/></svg>`;
@@ -3697,7 +4427,36 @@
     return text2.replace(/\s+/g, " ").trim();
   }
   const objectsStillValid = (source, list) => source.fresh && source.objects === list;
-  const styles = "/* Lives inside a shadow root, so these selectors compete with nothing. The\n   :host is a fixed, click-through, full-viewport layer; everything here is\n   positioned in viewport coordinates.\n\n   The look is shadcn/ui's: zinc neutrals named by role, one radius, hairline\n   borders, a ring on focus. Only the look - there is no framework behind it,\n   because this stylesheet is parsed on every page the script runs on. */\n\n:host {\n  --background: #ffffff;\n  --foreground: #09090b;\n  --muted: #f4f4f5;\n  --muted-foreground: #71717a;\n  --accent: #f4f4f5;\n  --border: #e4e4e7;\n  --input: #d4d4d8;\n  --ring: #a1a1aa;\n  --primary: #18181b;\n  --primary-foreground: #fafafa;\n  --destructive: #dc2626;\n  --success: #059669;\n  --shadow: 0 10px 30px -8px rgba(9, 9, 11, 0.28), 0 2px 6px -2px rgba(9, 9, 11, 0.12);\n  /* 0.5rem, written in pixels: inside a shadow root `rem` is still the page's\n     root font size, and a site that sets that to 10px would shrink every\n     corner and control here with it. */\n  --radius: 8px;\n  /* What the keyboard covers; ui/root.ts keeps it current where it can. */\n  --lt-kb: 0px;\n  /* A hundredth of the viewport, by the best unit this browser has. `svh` is\n     the height with the address bar showing, so a sheet sized by it does not\n     jump when the bar slides away; `dvh` follows the bar. */\n  --lt-svh: 1vh;\n  --lt-dvh: 1vh;\n  /* The backgrounds of our popups, and only those: the menu, the panels, the\n     messages and a tool's bar. ui/root.ts sets --lt-opacity on the host from\n     the \"Popup opacity\" setting. Text and icons are drawn in --foreground and\n     friends, which are never touched, so the words stay solid while what is\n     behind them shows through. Without color-mix the surfaces simply stay\n     opaque: a custom property that fails to compute does not fall back to an\n     earlier declaration, it makes the background transparent, so the mix is\n     only declared where it is known to parse - and only while the setting is\n     below 100, so a fully opaque popup is the plain colour it always was. */\n  --lt-opacity: 100%;\n  --surface: var(--background);\n  --surface-muted: var(--muted);\n\n  font: 14px/1.45 system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;\n  color: var(--foreground);\n}\n@supports (background: color-mix(in srgb, red 50%, transparent)) {\n  :host([data-translucent]) {\n    --surface: color-mix(in srgb, var(--background) var(--lt-opacity), transparent);\n    --surface-muted: color-mix(in srgb, var(--muted) var(--lt-opacity), transparent);\n  }\n}\n/* A see-through popup over a photograph is a popup over noise, and the blur is\n   what turns the noise back into a tint. Only while it is see-through: a\n   backdrop filter costs a compositing pass under every surface that has one. */\n:host([data-translucent]) .lt-menu,\n:host([data-translucent]) .lt-panel,\n:host([data-translucent]) #lt-toast,\n:host([data-translucent]) .lt-bar {\n  -webkit-backdrop-filter: blur(14px) saturate(1.3);\n  backdrop-filter: blur(14px) saturate(1.3);\n}\n@supports (height: 1dvh) {\n  :host {\n    --lt-svh: 1svh;\n    --lt-dvh: 1dvh;\n  }\n}\n@media (prefers-color-scheme: dark) {\n  :host {\n    --background: #09090b;\n    --foreground: #fafafa;\n    --muted: #27272a;\n    --muted-foreground: #a1a1aa;\n    --accent: #27272a;\n    --border: #27272a;\n    --input: #3f3f46;\n    --ring: #71717a;\n    --primary: #fafafa;\n    --primary-foreground: #18181b;\n    --destructive: #ef4444;\n    --success: #10b981;\n    --shadow: 0 10px 30px -8px rgba(0, 0, 0, 0.7), 0 2px 6px -2px rgba(0, 0, 0, 0.5);\n  }\n}\n\n*,\n*::before,\n*::after {\n  box-sizing: border-box;\n}\n\n.lt-icon {\n  display: block;\n  flex: none;\n  width: 18px;\n}\n.lt-icon-loader {\n  animation: lt-spin 0.9s linear infinite;\n}\n@keyframes lt-spin {\n  to {\n    transform: rotate(360deg);\n  }\n}\n\n/* ------------------------------------------------------------- controls */\n\n/* Hung from the picture's top right corner by its own right edge, so the row\n   can be any width: main.ts sets `left` to the corner and this pulls it back. */\n#lt-controls {\n  position: absolute;\n  z-index: 1;\n  display: flex;\n  gap: 4px;\n  transform: translateX(-100%);\n  pointer-events: none;\n}\n#lt-button,\n#lt-gear,\n#lt-more {\n  width: 32px;\n  height: 32px;\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  /* These sit on somebody's photograph, not on a surface of ours, so they do\n     not follow the theme: dark glass reads on any picture. */\n  background: rgba(9, 9, 11, 0.72);\n  color: #fafafa;\n  border: 1px solid rgba(255, 255, 255, 0.18);\n  border-radius: var(--radius);\n  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);\n  -webkit-backdrop-filter: blur(6px);\n  backdrop-filter: blur(6px);\n  opacity: 0;\n  transform: scale(0.92);\n  pointer-events: none;\n  cursor: pointer;\n  transition: opacity 0.15s, transform 0.15s, background 0.15s;\n  -webkit-tap-highlight-color: transparent;\n}\n#lt-controls.lt-on #lt-button,\n/* A beat after the main button, so a passing cursor does not summon three. */\n#lt-controls.lt-on.lt-extras #lt-gear,\n#lt-controls.lt-on.lt-extras #lt-more {\n  opacity: 1;\n  transform: none;\n  pointer-events: auto;\n}\n#lt-button:hover,\n#lt-gear:hover,\n#lt-more:hover {\n  background: rgba(9, 9, 11, 0.92);\n}\n/* Held down to peek, and on a touch screen a long press: the browser must not\n   take either for a scroll or a text selection. */\n#lt-button {\n  touch-action: none;\n  -webkit-user-select: none;\n  user-select: none;\n  -webkit-touch-callout: none;\n}\n/* Held down to look at the original: the button says so with a ring. */\n#lt-button.lt-peeking {\n  box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.6);\n}\n#lt-button .lt-icon-loader,\n#lt-button.lt-busy .lt-icon-translate {\n  display: none;\n}\n#lt-button.lt-busy .lt-icon-loader {\n  display: block;\n}\n#lt-button.lt-active {\n  background: var(--success);\n  border-color: transparent;\n}\n#lt-button.lt-error {\n  background: var(--destructive);\n  border-color: transparent;\n}\n\n/* -------------------------------------------------------- buttons, fields */\n\n.lt-btn {\n  display: inline-flex;\n  align-items: center;\n  justify-content: center;\n  gap: 6px;\n  height: 36px;\n  padding: 0 14px;\n  font: inherit;\n  font-weight: 500;\n  white-space: nowrap;\n  text-decoration: none;\n  color: var(--foreground);\n  background: var(--background);\n  border: 1px solid var(--border);\n  border-radius: calc(var(--radius) - 2px);\n  box-shadow: 0 1px 2px rgba(9, 9, 11, 0.05);\n  cursor: pointer;\n  -webkit-tap-highlight-color: transparent;\n}\n.lt-btn:hover {\n  background: var(--accent);\n}\n.lt-btn.lt-primary {\n  color: var(--primary-foreground);\n  background: var(--primary);\n  border-color: transparent;\n}\n.lt-btn.lt-primary:hover {\n  opacity: 0.9;\n}\n.lt-btn.lt-ghost {\n  border-color: transparent;\n  box-shadow: none;\n  background: transparent;\n}\n.lt-btn.lt-ghost:hover {\n  background: var(--accent);\n}\n.lt-btn.lt-square {\n  width: 36px;\n  padding: 0;\n  flex: none;\n}\n.lt-btn:disabled {\n  opacity: 0.5;\n  pointer-events: none;\n}\n.lt-btn:focus-visible,\n.lt-x:focus-visible,\n.lt-dot:focus-visible {\n  outline: 2px solid var(--ring);\n  outline-offset: 2px;\n}\n\n.lt-input {\n  height: 36px;\n  min-width: 0;\n  width: 100%;\n  padding: 0 12px;\n  font: inherit;\n  color: var(--foreground);\n  background: var(--background);\n  border: 1px solid var(--input);\n  border-radius: calc(var(--radius) - 2px);\n  box-shadow: 0 1px 2px rgba(9, 9, 11, 0.05);\n}\n.lt-input::placeholder {\n  color: var(--muted-foreground);\n}\n.lt-input:focus-visible {\n  outline: 2px solid var(--ring);\n  outline-offset: 1px;\n}\n.lt-input[type='checkbox'] {\n  justify-self: start;\n  width: 16px;\n  height: 16px;\n  padding: 0;\n  box-shadow: none;\n  accent-color: var(--primary);\n}\n\n/* ----------------------------------------------------------------- menu */\n\n.lt-menu {\n  position: absolute;\n  z-index: 4;\n  width: 260px;\n  padding: 4px;\n  display: flex;\n  flex-direction: column;\n  color: var(--foreground);\n  background: var(--surface);\n  border: 1px solid var(--border);\n  border-radius: var(--radius);\n  box-shadow: var(--shadow);\n  pointer-events: auto;\n}\n.lt-menu-item {\n  display: flex;\n  align-items: center;\n  gap: 10px;\n  width: 100%;\n  min-height: 36px;\n  padding: 6px 10px;\n  font: inherit;\n  text-align: left;\n  color: inherit;\n  background: transparent;\n  border: 0;\n  border-radius: calc(var(--radius) - 4px);\n  cursor: pointer;\n  -webkit-tap-highlight-color: transparent;\n}\n.lt-menu-item .lt-icon {\n  color: var(--muted-foreground);\n}\n/* The item the keyboard is on is highlighted like the one the cursor is on,\n   not ringed: the first item is focused when the menu opens, and a ring there\n   reads as a selection nobody made. */\n.lt-menu-item:hover:not(:disabled),\n.lt-menu-item:focus-visible {\n  background: var(--accent);\n  outline: none;\n}\n.lt-menu-item:disabled {\n  color: var(--muted-foreground);\n  opacity: 0.6;\n  cursor: default;\n}\n.lt-menu-rule {\n  height: 1px;\n  margin: 4px -4px;\n  background: var(--border);\n}\n/* The item and the field under it are one thing to ask. */\n.lt-field-row {\n  display: flex;\n  gap: 6px;\n  padding: 2px 6px 6px 38px;\n}\n\n/* A sheet has to sit on something that takes the press meant to dismiss it. */\n.lt-scrim {\n  position: absolute;\n  inset: 0;\n  z-index: 4;\n  background: rgba(9, 9, 11, 0.5);\n  pointer-events: auto;\n}\n.lt-menu.lt-sheet {\n  left: 0;\n  right: 0;\n  bottom: var(--lt-kb);\n  width: auto;\n  max-width: 560px;\n  margin: 0 auto;\n  max-height: calc(var(--lt-svh) * 100 - var(--lt-kb) - 24px);\n  overflow-y: auto;\n  overscroll-behavior: contain;\n  padding: 8px max(8px, env(safe-area-inset-right, 0px)) calc(8px + env(safe-area-inset-bottom, 0px))\n    max(8px, env(safe-area-inset-left, 0px));\n  border-width: 1px 0 0;\n  border-radius: 14px 14px 0 0;\n}\n/* The handle a sheet is expected to have; it says \"this slides\", nothing more. */\n.lt-menu.lt-sheet::before {\n  content: '';\n  flex: none;\n  align-self: center;\n  width: 40px;\n  height: 4px;\n  margin: 0 0 6px;\n  border-radius: 2px;\n  background: var(--input);\n}\n.lt-sheet .lt-menu-item {\n  min-height: 48px;\n  padding: 8px 12px;\n  gap: 14px;\n  font-size: 16px;\n}\n.lt-sheet .lt-menu-item .lt-icon {\n  width: 20px;\n  height: 20px;\n}\n.lt-sheet .lt-field-row {\n  padding: 2px 8px 8px 46px;\n}\n.lt-sheet .lt-menu-rule {\n  margin: 4px 0;\n}\n\n/* ---------------------------------------------------------------- toast */\n\n#lt-toast {\n  position: absolute;\n  z-index: 6;\n  left: 50%;\n  bottom: calc(16px + var(--lt-kb) + env(safe-area-inset-bottom, 0px));\n  transform: translateX(-50%);\n  display: flex;\n  align-items: center;\n  gap: 10px;\n  max-width: min(520px, calc(100% - 24px));\n  padding: 10px 14px;\n  font-size: 13px;\n  color: var(--foreground);\n  background: var(--surface);\n  border: 1px solid var(--border);\n  border-radius: var(--radius);\n  box-shadow: var(--shadow);\n  pointer-events: none;\n  opacity: 0;\n  visibility: hidden;\n  transition: opacity 0.2s, visibility 0.2s;\n}\n#lt-toast.lt-show {\n  opacity: 1;\n  visibility: visible;\n}\n/* A message with a link in it is something to press. */\n#lt-toast.lt-show.lt-has-link {\n  pointer-events: auto;\n  padding: 8px 8px 8px 14px;\n}\n#lt-toast > span {\n  flex: 1;\n  min-width: 0;\n}\n/* An address shown because it could not be opened: one line, cut short, and\n   selectable for a host where copying is out of reach too. */\n.lt-url {\n  display: block;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n  color: var(--muted-foreground);\n  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;\n  font-size: 11px;\n  user-select: text;\n  -webkit-user-select: text;\n}\n/* While a tool's bar has the bottom of the screen, messages go to the top. */\n:host([data-tool]) #lt-toast {\n  bottom: auto;\n  top: calc(12px + env(safe-area-inset-top, 0px));\n}\n\n/* --------------------------------------------------------------- panels */\n\n.lt-panel-backdrop {\n  position: absolute;\n  inset: 0;\n  z-index: 5;\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  background: rgba(9, 9, 11, 0.5);\n  pointer-events: auto;\n}\n.lt-panel {\n  width: min(560px, 92vw);\n  max-height: calc(var(--lt-dvh) * 86);\n  display: flex;\n  flex-direction: column;\n  color: var(--foreground);\n  background: var(--surface);\n  border: 1px solid var(--border);\n  border-radius: calc(var(--radius) + 4px);\n  box-shadow: var(--shadow);\n  overflow: hidden;\n}\n.lt-panel-head,\n.lt-panel-foot {\n  display: flex;\n  align-items: center;\n  gap: 8px;\n  padding: 12px 18px;\n  flex: none;\n}\n.lt-panel-head {\n  border-bottom: 1px solid var(--border);\n  justify-content: space-between;\n  font-size: 15px;\n  font-weight: 600;\n  padding-right: 10px;\n}\n.lt-panel-foot {\n  border-top: 1px solid var(--border);\n}\n.lt-spacer {\n  flex: 1;\n}\n.lt-panel-body {\n  padding: 8px 18px 16px;\n  overflow-y: auto;\n  overscroll-behavior: contain;\n}\n.lt-x {\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  width: 32px;\n  height: 32px;\n  padding: 0;\n  color: var(--muted-foreground);\n  background: transparent;\n  border: 0;\n  border-radius: calc(var(--radius) - 2px);\n  cursor: pointer;\n}\n.lt-x:hover {\n  color: var(--foreground);\n  background: var(--accent);\n}\n\n.lt-row {\n  display: grid;\n  grid-template-columns: 190px minmax(0, 1fr);\n  align-items: center;\n  gap: 2px 14px;\n  padding: 7px 0;\n}\n.lt-label {\n  font-weight: 500;\n}\n.lt-hint {\n  grid-column: 2;\n  color: var(--muted-foreground);\n  font-size: 12px;\n}\n\n/* Outline slider with its live sample. */\n.lt-slider {\n  display: flex;\n  align-items: center;\n  gap: 10px;\n  min-width: 0;\n}\n.lt-slider input[type='range'] {\n  flex: 1;\n  width: auto;\n  height: 24px;\n  padding: 0;\n  border: 0;\n  box-shadow: none;\n  background: transparent;\n  accent-color: var(--primary);\n}\n.lt-readout {\n  min-width: 42px;\n  text-align: right;\n  font-variant-numeric: tabular-nums;\n  color: var(--muted-foreground);\n}\n.lt-preview {\n  grid-column: 2;\n  width: 100%;\n  height: auto;\n  border-radius: calc(var(--radius) - 2px);\n  border: 1px solid var(--border);\n  margin-top: 6px;\n}\n\n/* Section headings. */\n.lt-group {\n  margin: 18px 0 4px;\n  padding-bottom: 6px;\n  border-bottom: 1px solid var(--border);\n  font-size: 12px;\n  font-weight: 600;\n  color: var(--muted-foreground);\n}\n.lt-group:first-child {\n  margin-top: 6px;\n}\n\n/* Menu commands, for a host that has no menu of its own. */\n.lt-actions {\n  display: flex;\n  flex-wrap: wrap;\n  gap: 8px;\n  padding: 6px 0 0;\n}\n.lt-note {\n  color: var(--muted-foreground);\n  font-size: 12px;\n  padding-top: 10px;\n}\n\n/* The diagnostics report: fixed width, so columns line up as written. */\n.lt-report {\n  margin: 0;\n  padding: 14px 18px;\n  overflow: auto;\n  white-space: pre-wrap;\n  word-break: break-word;\n  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;\n  font-size: 12px;\n  line-height: 1.5;\n  color: var(--foreground);\n  background: var(--surface-muted);\n  user-select: text;\n  -webkit-user-select: text;\n}\n\n/* ---------------------------------------------------------------- tools */\n\n/* The layer over a picture while an area, an object or words are being\n   chosen. It scrolls by default: a webtoon page is taller than the screen,\n   and a layer that swallowed every pan would strand the reader halfway down\n   it with only the close button for a way out. Only a gesture that has to be\n   a drag locks the page - see the region layer and the words. */\n.lt-tool {\n  position: absolute;\n  z-index: 2;\n  overflow: hidden;\n  background: rgba(9, 9, 11, 0.2);\n  outline: 2px solid rgba(255, 255, 255, 0.85);\n  outline-offset: -2px;\n  pointer-events: auto;\n  touch-action: pan-x pan-y;\n  -webkit-user-select: none;\n  user-select: none;\n  -webkit-touch-callout: none;\n}\n/* Dragging out a rectangle is the whole of this tool; without `none` the\n   finger scrolls the page instead. */\n.lt-tool-region {\n  cursor: crosshair;\n  touch-action: none;\n}\n/* The chosen area is the one part left undimmed; the shadow is the dimming,\n   clipped by the layer so it stops at the picture's edge. */\n.lt-sel {\n  position: absolute;\n  border: 2px solid #fff;\n  border-radius: 4px;\n  box-shadow: 0 0 0 9999px rgba(9, 9, 11, 0.45);\n  pointer-events: none;\n}\n.lt-sel[hidden] {\n  display: none;\n}\n\n/* A dot is 16px to look at and 44px to hit. */\n.lt-dot {\n  position: absolute;\n  width: 44px;\n  height: 44px;\n  margin: -22px 0 0 -22px;\n  padding: 0;\n  background: transparent;\n  border: 0;\n  border-radius: 50%;\n  cursor: pointer;\n  -webkit-tap-highlight-color: transparent;\n}\n.lt-dot::after {\n  content: '';\n  position: absolute;\n  inset: 14px;\n  border-radius: 50%;\n  background: #fff;\n  box-shadow: 0 0 0 3px rgba(9, 9, 11, 0.55), 0 1px 5px rgba(0, 0, 0, 0.6);\n  transition: transform 0.12s;\n}\n.lt-dot:hover::after,\n.lt-dot:focus-visible::after,\n.lt-dot:active::after {\n  transform: scale(1.3);\n}\n.lt-objbox {\n  position: absolute;\n  border: 2px solid #fff;\n  border-radius: 6px;\n  box-shadow: 0 0 0 1px rgba(9, 9, 11, 0.5);\n  opacity: 0;\n  pointer-events: none;\n  transition: opacity 0.12s;\n}\n.lt-dot:hover + .lt-objbox,\n.lt-dot:focus-visible + .lt-objbox,\n.lt-dot:active + .lt-objbox {\n  opacity: 1;\n}\n\n/* A stroke that starts on a word is a drag across words and must not pan; one\n   that starts between them scrolls. touch-action is read from where the touch\n   lands, intersected up the tree, and settled before any pointer event - so it\n   has to be on the word itself; setting it from a handler is too late. */\n.lt-word {\n  position: absolute;\n  border-radius: 3px;\n  background: rgba(255, 255, 255, 0.28);\n  box-shadow: 0 0 0 1px rgba(9, 9, 11, 0.45);\n  cursor: pointer;\n  touch-action: none;\n}\n.lt-word.lt-on {\n  background: rgba(56, 189, 248, 0.5);\n  box-shadow: 0 0 0 2px #fff, 0 0 0 3px rgba(9, 9, 11, 0.6);\n}\n\n.lt-bar {\n  position: absolute;\n  z-index: 3;\n  left: 50%;\n  bottom: calc(16px + var(--lt-kb) + env(safe-area-inset-bottom, 0px));\n  transform: translateX(-50%);\n  display: flex;\n  flex-wrap: wrap;\n  align-items: center;\n  gap: 8px;\n  width: max-content;\n  max-width: min(720px, calc(100% - 24px));\n  padding: 8px 8px 8px 14px;\n  color: var(--foreground);\n  background: var(--surface);\n  border: 1px solid var(--border);\n  border-radius: calc(var(--radius) + 4px);\n  box-shadow: var(--shadow);\n  pointer-events: auto;\n}\n.lt-bar-text {\n  flex: 1 1 180px;\n  min-width: 0;\n  max-height: 2.9em;\n  overflow: hidden;\n  display: flex;\n  align-items: center;\n  gap: 8px;\n}\n.lt-bar .lt-input {\n  flex: 1 1 200px;\n  width: auto;\n}\n.lt-bar-buttons {\n  display: flex;\n  gap: 6px;\n  margin-left: auto;\n}\n\n/* ------------------------------------------------ a thumb, not a cursor */\n\n/* The same question ui/menu.ts asks. Narrow, or touched: either way the\n   targets are 44px, the fields are 16px so iOS does not zoom into them, and\n   whatever opens does so from the bottom edge, where the thumb already is. */\n@media (max-width: 640px), (pointer: coarse) {\n  #lt-button,\n  #lt-gear,\n  #lt-more {\n    width: 44px;\n    height: 44px;\n  }\n  #lt-controls {\n    gap: 6px;\n  }\n  .lt-btn,\n  .lt-input {\n    height: 44px;\n  }\n  .lt-btn.lt-square,\n  .lt-x {\n    width: 44px;\n    height: 44px;\n  }\n  .lt-input {\n    font-size: 16px;\n  }\n  .lt-input[type='checkbox'] {\n    width: 22px;\n    height: 22px;\n  }\n  .lt-slider input[type='range'] {\n    height: 44px;\n  }\n\n  .lt-panel-backdrop {\n    align-items: flex-end;\n  }\n  .lt-panel {\n    width: 100%;\n    max-width: 640px;\n    margin-bottom: var(--lt-kb);\n    max-height: calc(var(--lt-svh) * 100 - var(--lt-kb) - 24px);\n    border-width: 1px 0 0;\n    border-radius: 14px 14px 0 0;\n  }\n  .lt-panel-head,\n  .lt-panel-foot {\n    padding-left: max(14px, env(safe-area-inset-left, 0px));\n    padding-right: max(14px, env(safe-area-inset-right, 0px));\n  }\n  .lt-panel-head {\n    padding-right: max(6px, env(safe-area-inset-right, 0px));\n  }\n  .lt-panel-foot {\n    padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px));\n  }\n  .lt-panel-body {\n    padding-left: max(14px, env(safe-area-inset-left, 0px));\n    padding-right: max(14px, env(safe-area-inset-right, 0px));\n  }\n  /* The label goes above its field: 190px of label leaves a phone no field. */\n  .lt-row {\n    grid-template-columns: minmax(0, 1fr);\n    gap: 6px;\n    padding: 9px 0;\n  }\n  .lt-row.lt-row-check {\n    grid-template-columns: minmax(0, 1fr) auto;\n  }\n  .lt-hint,\n  .lt-preview {\n    grid-column: 1 / -1;\n  }\n\n  .lt-bar {\n    left: max(8px, env(safe-area-inset-left, 0px));\n    right: max(8px, env(safe-area-inset-right, 0px));\n    bottom: calc(8px + var(--lt-kb) + env(safe-area-inset-bottom, 0px));\n    transform: none;\n    width: auto;\n    max-width: none;\n  }\n  .lt-bar .lt-input {\n    flex-basis: 100%;\n  }\n  #lt-toast {\n    left: max(8px, env(safe-area-inset-left, 0px));\n    right: max(8px, env(safe-area-inset-right, 0px));\n    transform: none;\n    max-width: none;\n    font-size: 14px;\n  }\n}\n\n@media (prefers-reduced-motion: reduce) {\n  #lt-button,\n  #lt-gear,\n  #lt-more,\n  #lt-toast,\n  .lt-dot::after,\n  .lt-objbox {\n    transition: none;\n  }\n}\n";
+  function wrapWidth(widths, gap, max) {
+    let widest = 0;
+    let line = 0;
+    for (const width of widths) {
+      if (!(width > 0)) continue;
+      const next = line === 0 ? width : line + gap + width;
+      if (line > 0 && next > max) {
+        widest = Math.max(widest, line);
+        line = width;
+      } else line = next;
+    }
+    return Math.max(widest, line);
+  }
+  function placeRow(corner, anchor, row, view, margin, inset2) {
+    const onLeft = corner === "tl" || corner === "bl";
+    const onBottom = corner === "br" || corner === "bl";
+    const x = onLeft ? anchor.left + inset2 : anchor.left + anchor.width - inset2 - row.width;
+    const y = onBottom ? anchor.top + anchor.height - inset2 - row.height : anchor.top + inset2;
+    const clamp = (value, start2, room, size, keepEnd) => {
+      const low = start2 + margin;
+      const high = start2 + room - margin - size;
+      if (high < low) return keepEnd ? high : low;
+      return Math.min(high, Math.max(low, value));
+    };
+    return {
+      x: clamp(x, view.left, view.width, row.width, !onLeft),
+      y: clamp(y, view.top, view.height, row.height, onBottom)
+    };
+  }
+  const styles = "/* Lives inside a shadow root, so these selectors compete with nothing. The\n   :host is a fixed, click-through, full-viewport layer; everything here is\n   positioned in viewport coordinates.\n\n   The look is shadcn/ui's: zinc neutrals named by role, one radius, hairline\n   borders, a ring on focus. Only the look - there is no framework behind it,\n   because this stylesheet is parsed on every page the script runs on. */\n\n:host {\n  --background: #ffffff;\n  --foreground: #09090b;\n  --muted: #f4f4f5;\n  --muted-foreground: #71717a;\n  --accent: #f4f4f5;\n  --border: #e4e4e7;\n  --input: #d4d4d8;\n  --ring: #a1a1aa;\n  --primary: #18181b;\n  --primary-foreground: #fafafa;\n  --destructive: #dc2626;\n  --success: #059669;\n  --shadow: 0 10px 30px -8px rgba(9, 9, 11, 0.28), 0 2px 6px -2px rgba(9, 9, 11, 0.12);\n  /* 0.5rem, written in pixels: inside a shadow root `rem` is still the page's\n     root font size, and a site that sets that to 10px would shrink every\n     corner and control here with it. */\n  --radius: 8px;\n  /* What the keyboard covers; ui/root.ts keeps it current where it can. */\n  --lt-kb: 0px;\n  /* A hundredth of the viewport, by the best unit this browser has. `svh` is\n     the height with the address bar showing, so a sheet sized by it does not\n     jump when the bar slides away; `dvh` follows the bar. */\n  --lt-svh: 1vh;\n  --lt-dvh: 1vh;\n  /* The backgrounds of our popups, and only those: the menu, the panels, the\n     messages and a tool's bar. ui/root.ts sets --lt-opacity on the host from\n     the \"Popup opacity\" setting. Text and icons are drawn in --foreground and\n     friends, which are never touched, so the words stay solid while what is\n     behind them shows through. Without color-mix the surfaces simply stay\n     opaque: a custom property that fails to compute does not fall back to an\n     earlier declaration, it makes the background transparent, so the mix is\n     only declared where it is known to parse - and only while the setting is\n     below 100, so a fully opaque popup is the plain colour it always was. */\n  --lt-opacity: 100%;\n  --surface: var(--background);\n  --surface-muted: var(--muted);\n\n  font: 14px/1.45 system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;\n  color: var(--foreground);\n}\n@supports (background: color-mix(in srgb, red 50%, transparent)) {\n  :host([data-translucent]) {\n    --surface: color-mix(in srgb, var(--background) var(--lt-opacity), transparent);\n    --surface-muted: color-mix(in srgb, var(--muted) var(--lt-opacity), transparent);\n  }\n}\n/* A see-through popup over a photograph is a popup over noise, and the blur is\n   what turns the noise back into a tint. Only while it is see-through: a\n   backdrop filter costs a compositing pass under every surface that has one. */\n:host([data-translucent]) .lt-menu,\n:host([data-translucent]) .lt-panel,\n:host([data-translucent]) #lt-toast,\n:host([data-translucent]) .lt-bar {\n  -webkit-backdrop-filter: blur(14px) saturate(1.3);\n  backdrop-filter: blur(14px) saturate(1.3);\n}\n@supports (height: 1dvh) {\n  :host {\n    --lt-svh: 1svh;\n    --lt-dvh: 1dvh;\n  }\n}\n@media (prefers-color-scheme: dark) {\n  :host {\n    --background: #09090b;\n    --foreground: #fafafa;\n    --muted: #27272a;\n    --muted-foreground: #a1a1aa;\n    --accent: #27272a;\n    --border: #27272a;\n    --input: #3f3f46;\n    --ring: #71717a;\n    --primary: #fafafa;\n    --primary-foreground: #18181b;\n    --destructive: #ef4444;\n    --success: #10b981;\n    --shadow: 0 10px 30px -8px rgba(0, 0, 0, 0.7), 0 2px 6px -2px rgba(0, 0, 0, 0.5);\n  }\n}\n\n*,\n*::before,\n*::after {\n  box-sizing: border-box;\n}\n\n.lt-icon {\n  display: block;\n  flex: none;\n  width: 18px;\n}\n.lt-icon-loader {\n  animation: lt-spin 0.9s linear infinite;\n}\n@keyframes lt-spin {\n  to {\n    transform: rotate(360deg);\n  }\n}\n\n/* ------------------------------------------------------------- controls */\n\n/* Hung from a corner of the picture by its own matching corner, so the row\n   can be any size: main.ts measures it, sets its width and puts its top-left\n   where that corner lands - moved back onto the screen if it would leave it.\n   The controls are listed corner-first; a right-hand corner reverses them, so\n   the first - the main one - is the one in the corner whichever side that is.\n   A row wider than the screen wraps, and for a bottom corner the lines stack\n   upwards so the main control's line is still the one at the corner. */\n#lt-controls {\n  --lt-ctl: 32px;\n  --lt-idle: 1;\n  position: absolute;\n  z-index: 1;\n  display: flex;\n  flex-direction: row-reverse;\n  flex-wrap: wrap;\n  gap: 4px;\n  pointer-events: none;\n}\n#lt-controls[data-corner='br'] {\n  flex-wrap: wrap-reverse;\n}\n#lt-controls[data-corner='tl'] {\n  flex-direction: row;\n}\n#lt-controls[data-corner='bl'] {\n  flex-direction: row;\n  flex-wrap: wrap-reverse;\n}\n#lt-controls[data-size='s'] {\n  --lt-ctl: 28px;\n}\n#lt-controls[data-size='l'] {\n  --lt-ctl: 40px;\n}\n.lt-ctl {\n  flex: none;\n  width: var(--lt-ctl);\n  height: var(--lt-ctl);\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  gap: 6px;\n  /* These sit on somebody's photograph, not on a surface of ours, so they do\n     not follow the theme: dark glass reads on any picture. */\n  background: rgba(9, 9, 11, 0.72);\n  color: #fafafa;\n  border: 1px solid rgba(255, 255, 255, 0.18);\n  border-radius: var(--radius);\n  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);\n  -webkit-backdrop-filter: blur(6px);\n  backdrop-filter: blur(6px);\n  opacity: 0;\n  transform: scale(0.92);\n  pointer-events: none;\n  cursor: pointer;\n  transition: opacity 0.15s, transform 0.15s, background 0.15s;\n  -webkit-tap-highlight-color: transparent;\n}\n/* With its name beside the icon a control is as wide as the name. */\n.lt-ctl.lt-labelled {\n  width: auto;\n  padding: 0 10px 0 8px;\n  font-size: 13px;\n  font-weight: 500;\n  white-space: nowrap;\n}\n#lt-controls.lt-on .lt-main,\n/* A beat after the main button, so a passing cursor does not summon the row. */\n#lt-controls.lt-on.lt-extras .lt-ctl {\n  opacity: var(--lt-idle);\n  transform: none;\n  pointer-events: auto;\n}\n/* Dimmed until pointed at, when that was asked for; solid under the cursor. */\n#lt-controls.lt-on:hover .lt-main,\n#lt-controls.lt-on.lt-extras:hover .lt-ctl {\n  opacity: 1;\n}\n.lt-ctl:hover {\n  background: rgba(9, 9, 11, 0.92);\n}\n/* Held down, and on a touch screen a long press: the browser must not take\n   either for a scroll or a text selection. */\n.lt-main {\n  touch-action: none;\n  -webkit-user-select: none;\n  user-select: none;\n  -webkit-touch-callout: none;\n}\n/* Held down to look at the original: the button says so with a ring. */\n.lt-main.lt-peeking {\n  box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.6);\n}\n.lt-main .lt-icon-loader,\n.lt-main.lt-busy .lt-icon:not(.lt-icon-loader) {\n  display: none;\n}\n.lt-main.lt-busy .lt-icon-loader {\n  display: block;\n}\n.lt-ctl.lt-active {\n  background: var(--success);\n  border-color: transparent;\n}\n.lt-main.lt-error {\n  background: var(--destructive);\n  border-color: transparent;\n}\n\n/* -------------------------------------------------------- buttons, fields */\n\n.lt-btn {\n  display: inline-flex;\n  align-items: center;\n  justify-content: center;\n  gap: 6px;\n  height: 36px;\n  padding: 0 14px;\n  font: inherit;\n  font-weight: 500;\n  white-space: nowrap;\n  text-decoration: none;\n  color: var(--foreground);\n  background: var(--background);\n  border: 1px solid var(--border);\n  border-radius: calc(var(--radius) - 2px);\n  box-shadow: 0 1px 2px rgba(9, 9, 11, 0.05);\n  cursor: pointer;\n  -webkit-tap-highlight-color: transparent;\n}\n.lt-btn:hover {\n  background: var(--accent);\n}\n.lt-btn.lt-primary {\n  color: var(--primary-foreground);\n  background: var(--primary);\n  border-color: transparent;\n}\n.lt-btn.lt-primary:hover {\n  opacity: 0.9;\n}\n.lt-btn.lt-ghost {\n  border-color: transparent;\n  box-shadow: none;\n  background: transparent;\n}\n.lt-btn.lt-ghost:hover {\n  background: var(--accent);\n}\n.lt-btn.lt-square {\n  width: 36px;\n  padding: 0;\n  flex: none;\n}\n.lt-btn:disabled {\n  opacity: 0.5;\n  pointer-events: none;\n}\n.lt-btn.lt-small {\n  height: 28px;\n  padding: 0 10px;\n  font-size: 12px;\n}\n.lt-btn[hidden],\n.lt-reset[hidden] {\n  display: none;\n}\n.lt-btn:focus-visible,\n.lt-x:focus-visible,\n.lt-tab:focus-visible,\n.lt-reset:focus-visible,\n.lt-dot:focus-visible {\n  outline: 2px solid var(--ring);\n  outline-offset: 2px;\n}\n\n.lt-input {\n  height: 36px;\n  min-width: 0;\n  width: 100%;\n  padding: 0 12px;\n  font: inherit;\n  color: var(--foreground);\n  background: var(--background);\n  border: 1px solid var(--input);\n  border-radius: calc(var(--radius) - 2px);\n  box-shadow: 0 1px 2px rgba(9, 9, 11, 0.05);\n}\n.lt-input::placeholder {\n  color: var(--muted-foreground);\n}\n.lt-input:focus-visible {\n  outline: 2px solid var(--ring);\n  outline-offset: 1px;\n}\n.lt-input[type='checkbox'] {\n  justify-self: start;\n  width: 16px;\n  height: 16px;\n  padding: 0;\n  box-shadow: none;\n  accent-color: var(--primary);\n}\n\n/* ----------------------------------------------------------------- menu */\n\n.lt-menu {\n  position: absolute;\n  z-index: 4;\n  width: 260px;\n  padding: 4px;\n  display: flex;\n  flex-direction: column;\n  color: var(--foreground);\n  background: var(--surface);\n  border: 1px solid var(--border);\n  border-radius: var(--radius);\n  box-shadow: var(--shadow);\n  pointer-events: auto;\n}\n.lt-menu-item {\n  display: flex;\n  align-items: center;\n  gap: 10px;\n  width: 100%;\n  min-height: 36px;\n  padding: 6px 10px;\n  font: inherit;\n  text-align: left;\n  color: inherit;\n  background: transparent;\n  border: 0;\n  border-radius: calc(var(--radius) - 4px);\n  cursor: pointer;\n  -webkit-tap-highlight-color: transparent;\n}\n.lt-menu-item .lt-icon {\n  color: var(--muted-foreground);\n}\n/* The item the keyboard is on is highlighted like the one the cursor is on,\n   not ringed: the first item is focused when the menu opens, and a ring there\n   reads as a selection nobody made. */\n.lt-menu-item:hover:not(:disabled),\n.lt-menu-item:focus-visible {\n  background: var(--accent);\n  outline: none;\n}\n.lt-menu-item:disabled {\n  color: var(--muted-foreground);\n  opacity: 0.6;\n  cursor: default;\n}\n.lt-menu-rule {\n  height: 1px;\n  margin: 4px -4px;\n  background: var(--border);\n}\n/* The item and the field under it are one thing to ask. */\n.lt-field-row {\n  display: flex;\n  gap: 6px;\n  padding: 2px 6px 6px 38px;\n}\n\n/* A sheet has to sit on something that takes the press meant to dismiss it. */\n.lt-scrim {\n  position: absolute;\n  inset: 0;\n  z-index: 4;\n  background: rgba(9, 9, 11, 0.5);\n  pointer-events: auto;\n}\n.lt-menu.lt-sheet {\n  left: 0;\n  right: 0;\n  bottom: var(--lt-kb);\n  width: auto;\n  max-width: 560px;\n  margin: 0 auto;\n  max-height: calc(var(--lt-svh) * 100 - var(--lt-kb) - 24px);\n  overflow-y: auto;\n  overscroll-behavior: contain;\n  padding: 8px max(8px, env(safe-area-inset-right, 0px)) calc(8px + env(safe-area-inset-bottom, 0px))\n    max(8px, env(safe-area-inset-left, 0px));\n  border-width: 1px 0 0;\n  border-radius: 14px 14px 0 0;\n}\n/* The handle a sheet is expected to have; it says \"this slides\", nothing more. */\n.lt-menu.lt-sheet::before {\n  content: '';\n  flex: none;\n  align-self: center;\n  width: 40px;\n  height: 4px;\n  margin: 0 0 6px;\n  border-radius: 2px;\n  background: var(--input);\n}\n.lt-sheet .lt-menu-item {\n  min-height: 48px;\n  padding: 8px 12px;\n  gap: 14px;\n  font-size: 16px;\n}\n.lt-sheet .lt-menu-item .lt-icon {\n  width: 20px;\n  height: 20px;\n}\n.lt-sheet .lt-field-row {\n  padding: 2px 8px 8px 46px;\n}\n.lt-sheet .lt-menu-rule {\n  margin: 4px 0;\n}\n\n/* ---------------------------------------------------------------- toast */\n\n#lt-toast {\n  position: absolute;\n  z-index: 6;\n  left: 50%;\n  bottom: calc(16px + var(--lt-kb) + env(safe-area-inset-bottom, 0px));\n  transform: translateX(-50%);\n  display: flex;\n  align-items: center;\n  gap: 10px;\n  max-width: min(520px, calc(100% - 24px));\n  padding: 10px 14px;\n  font-size: 13px;\n  color: var(--foreground);\n  background: var(--surface);\n  border: 1px solid var(--border);\n  border-radius: var(--radius);\n  box-shadow: var(--shadow);\n  pointer-events: none;\n  opacity: 0;\n  visibility: hidden;\n  transition: opacity 0.2s, visibility 0.2s;\n}\n#lt-toast.lt-show {\n  opacity: 1;\n  visibility: visible;\n}\n/* A message with a link in it is something to press. */\n#lt-toast.lt-show.lt-has-link {\n  pointer-events: auto;\n  padding: 8px 8px 8px 14px;\n}\n#lt-toast > span {\n  flex: 1;\n  min-width: 0;\n}\n/* An address shown because it could not be opened: one line, cut short, and\n   selectable for a host where copying is out of reach too. */\n.lt-url {\n  display: block;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n  color: var(--muted-foreground);\n  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;\n  font-size: 11px;\n  user-select: text;\n  -webkit-user-select: text;\n}\n/* While a tool's bar has the bottom of the screen, messages go to the top. */\n:host([data-tool]) #lt-toast {\n  bottom: auto;\n  top: calc(12px + env(safe-area-inset-top, 0px));\n}\n\n/* --------------------------------------------------------------- panels */\n\n.lt-panel-backdrop {\n  position: absolute;\n  inset: 0;\n  z-index: 5;\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  background: rgba(9, 9, 11, 0.5);\n  pointer-events: auto;\n}\n.lt-panel {\n  width: min(560px, 92vw);\n  max-height: calc(var(--lt-dvh) * 86);\n  display: flex;\n  flex-direction: column;\n  color: var(--foreground);\n  background: var(--surface);\n  border: 1px solid var(--border);\n  border-radius: calc(var(--radius) + 4px);\n  box-shadow: var(--shadow);\n  overflow: hidden;\n}\n.lt-panel-head,\n.lt-panel-foot {\n  display: flex;\n  align-items: center;\n  gap: 8px;\n  padding: 12px 18px;\n  flex: none;\n}\n.lt-panel-head {\n  border-bottom: 1px solid var(--border);\n  justify-content: space-between;\n  font-size: 15px;\n  font-weight: 600;\n  padding-right: 10px;\n}\n.lt-panel-foot {\n  border-top: 1px solid var(--border);\n}\n.lt-spacer {\n  flex: 1;\n}\n.lt-panel-body {\n  padding: 8px 18px 16px;\n  overflow-y: auto;\n  overscroll-behavior: contain;\n}\n.lt-x {\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  width: 32px;\n  height: 32px;\n  padding: 0;\n  color: var(--muted-foreground);\n  background: transparent;\n  border: 0;\n  border-radius: calc(var(--radius) - 2px);\n  cursor: pointer;\n}\n.lt-x:hover {\n  color: var(--foreground);\n  background: var(--accent);\n}\n\n/* ------------------------------------------------------ settings window */\n\n/* A header, the tabs, the fields and a footer. The tabs are a strip along the\n   top by default - which is what a phone and a narrow window get - and become\n   a rail down the left side where there is room for one (see below). */\n.lt-settings-main {\n  flex: 1;\n  min-height: 0;\n  display: flex;\n  flex-direction: column;\n}\n.lt-settings .lt-panel-head {\n  gap: 12px;\n}\n.lt-settings .lt-panel-head strong {\n  flex: none;\n}\n.lt-search {\n  flex: 1;\n  max-width: 320px;\n  margin-left: auto;\n}\n.lt-search[hidden] {\n  display: none;\n}\n.lt-tabs {\n  flex: none;\n  display: flex;\n  gap: 4px;\n  padding: 8px 14px;\n  overflow-x: auto;\n  overscroll-behavior: contain;\n  border-bottom: 1px solid var(--border);\n  /* The strip scrolls under a finger; a bar across it would only be noise. */\n  scrollbar-width: none;\n}\n.lt-tabs::-webkit-scrollbar {\n  display: none;\n}\n.lt-tab {\n  flex: none;\n  display: flex;\n  align-items: center;\n  height: 32px;\n  padding: 0 12px;\n  font: inherit;\n  font-weight: 500;\n  white-space: nowrap;\n  color: var(--muted-foreground);\n  background: transparent;\n  border: 0;\n  border-radius: calc(var(--radius) - 2px);\n  cursor: pointer;\n  -webkit-tap-highlight-color: transparent;\n}\n.lt-tab:hover {\n  color: var(--foreground);\n  background: var(--accent);\n}\n.lt-tab[aria-selected='true'] {\n  color: var(--foreground);\n  background: var(--surface-muted);\n}\n.lt-settings .lt-panel-body {\n  flex: 1;\n  min-height: 0;\n  padding-top: 4px;\n}\n.lt-pane[hidden],\n.lt-row[hidden],\n.lt-extra[hidden],\n.lt-note[hidden],\n.lt-guard[hidden] {\n  display: none;\n}\n.lt-pane-head {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 8px;\n  min-height: 28px;\n  margin: 10px 0 2px;\n}\n.lt-pane-head h3 {\n  margin: 0;\n  font-size: 15px;\n  font-weight: 600;\n}\n/* One tab at a time needs no heading over it: the tab says where you are.\n   Search results come from several, and each group says which. */\n.lt-settings:not(.lt-searching) .lt-pane-head h3 {\n  visibility: hidden;\n}\n.lt-grid {\n  display: grid;\n  grid-template-columns: minmax(0, 1fr);\n  column-gap: 28px;\n}\n\n/* A field: its name, the control, and a line about what it does. Stacked, so\n   the control gets the full width of its column whatever the name's length. */\n.lt-row {\n  display: grid;\n  grid-template-columns: minmax(0, 1fr);\n  align-content: start;\n  gap: 6px;\n  padding: 9px 0;\n}\n.lt-row.lt-row-check {\n  grid-template-columns: minmax(0, 1fr) auto;\n  align-items: center;\n}\n.lt-label {\n  display: flex;\n  align-items: center;\n  gap: 6px;\n  min-height: 20px;\n  font-weight: 500;\n}\n/* The name is a <label for> its control: pressing it focuses or toggles. */\n.lt-label-text {\n  cursor: pointer;\n}\n.lt-hint {\n  grid-column: 1 / -1;\n  color: var(--muted-foreground);\n  font-size: 12px;\n}\n/* Back to the default; only there when the value is not the default. */\n.lt-reset {\n  display: inline-flex;\n  align-items: center;\n  justify-content: center;\n  width: 20px;\n  height: 20px;\n  padding: 0;\n  color: var(--muted-foreground);\n  background: transparent;\n  border: 0;\n  border-radius: 4px;\n  cursor: pointer;\n}\n.lt-reset:hover {\n  color: var(--foreground);\n  background: var(--accent);\n}\n.lt-reset .lt-icon {\n  width: 14px;\n}\n.lt-guard {\n  font-size: 13px;\n  font-weight: 500;\n}\n\n.lt-color,\n.lt-chord-row {\n  display: flex;\n  align-items: center;\n  gap: 8px;\n  min-width: 0;\n}\n.lt-swatch {\n  flex: none;\n  width: 36px;\n  height: 36px;\n  padding: 2px;\n  background: var(--background);\n  border: 1px solid var(--input);\n  border-radius: calc(var(--radius) - 2px);\n  cursor: pointer;\n}\n.lt-swatch.lt-unset {\n  opacity: 0.35;\n}\n.lt-chord {\n  flex: 1;\n  min-width: 0;\n  justify-content: flex-start;\n  font-variant-numeric: tabular-nums;\n}\n.lt-chord.lt-recording {\n  outline: 2px solid var(--ring);\n  outline-offset: 1px;\n  color: var(--muted-foreground);\n}\n\n/* The buttons over a picture, as a list to tick and to drag into order. */\n.lt-order,\n.lt-site-list {\n  margin: 0;\n  padding: 0;\n  list-style: none;\n}\n.lt-order {\n  border: 1px solid var(--border);\n  border-radius: calc(var(--radius) - 2px);\n  overflow: hidden;\n}\n.lt-order-item,\n.lt-site {\n  display: flex;\n  align-items: center;\n  gap: 10px;\n  min-height: 40px;\n  padding: 2px 6px 2px 4px;\n  background: var(--background);\n}\n.lt-order-item + .lt-order-item,\n.lt-site + .lt-site {\n  border-top: 1px solid var(--border);\n}\n.lt-order-item.lt-dragging {\n  background: var(--accent);\n}\n/* The handle is the only part that drags, so the rest of the row still\n   scrolls the sheet under a finger. */\n.lt-grip {\n  flex: none;\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  width: 28px;\n  height: 36px;\n  color: var(--muted-foreground);\n  cursor: grab;\n  touch-action: none;\n}\n.lt-order-name {\n  flex: 1;\n  min-width: 0;\n  display: flex;\n  align-items: center;\n  gap: 8px;\n}\n.lt-order-name .lt-icon {\n  color: var(--muted-foreground);\n}\n.lt-order-moves {\n  display: flex;\n  flex: none;\n}\n.lt-order-moves .lt-btn {\n  width: 32px;\n  height: 32px;\n}\n.lt-site {\n  padding-left: 10px;\n}\n.lt-site-host {\n  flex: 1;\n  min-width: 0;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  font-weight: 500;\n}\n.lt-site-rule {\n  color: var(--muted-foreground);\n  font-size: 12px;\n}\n\n.lt-version {\n  padding-top: 4px;\n  font-weight: 600;\n}\n.lt-link {\n  display: inline-flex;\n  align-items: center;\n  height: 32px;\n  color: var(--foreground);\n  text-underline-offset: 3px;\n}\n.lt-facts {\n  border-radius: calc(var(--radius) - 2px);\n  padding: 10px 12px;\n}\n\n/* Room for a rail: the tabs go down the left and short fields sit two to a\n   row. Only for a pointer that can aim - a wide tablet keeps the strip. */\n@media (min-width: 900px) and (pointer: fine) {\n  .lt-settings.lt-pro {\n    width: min(960px, 94vw);\n    height: min(720px, calc(var(--lt-dvh) * 88));\n    max-height: none;\n  }\n  .lt-pro .lt-settings-main {\n    flex-direction: row;\n  }\n  .lt-pro .lt-tabs {\n    flex-direction: column;\n    width: 196px;\n    padding: 12px 8px;\n    overflow-x: hidden;\n    overflow-y: auto;\n    border-bottom: 0;\n    border-right: 1px solid var(--border);\n  }\n  .lt-pro .lt-tab {\n    width: 100%;\n    height: 34px;\n  }\n  .lt-pro .lt-panel-body {\n    padding: 4px 24px 20px;\n  }\n  .lt-pro .lt-grid {\n    grid-template-columns: repeat(2, minmax(0, 1fr));\n  }\n  .lt-pro .lt-row-wide {\n    grid-column: 1 / -1;\n  }\n}\n\n/* Outline slider with its live sample. */\n.lt-slider {\n  display: flex;\n  align-items: center;\n  gap: 10px;\n  min-width: 0;\n}\n.lt-slider input[type='range'] {\n  flex: 1;\n  width: auto;\n  height: 24px;\n  padding: 0;\n  border: 0;\n  box-shadow: none;\n  background: transparent;\n  accent-color: var(--primary);\n}\n.lt-readout {\n  min-width: 42px;\n  text-align: right;\n  font-variant-numeric: tabular-nums;\n  color: var(--muted-foreground);\n}\n.lt-preview {\n  grid-column: 1 / -1;\n  width: 100%;\n  height: auto;\n  border-radius: calc(var(--radius) - 2px);\n  border: 1px solid var(--border);\n  margin-top: 6px;\n}\n\n/* Section headings. */\n.lt-group {\n  margin: 18px 0 4px;\n  padding-bottom: 6px;\n  border-bottom: 1px solid var(--border);\n  font-size: 12px;\n  font-weight: 600;\n  color: var(--muted-foreground);\n}\n.lt-group:first-child {\n  margin-top: 6px;\n}\n\n/* Menu commands, for a host that has no menu of its own. */\n.lt-actions {\n  display: flex;\n  flex-wrap: wrap;\n  gap: 8px;\n  padding: 6px 0 0;\n}\n.lt-note {\n  color: var(--muted-foreground);\n  font-size: 12px;\n  padding-top: 10px;\n}\n\n/* The diagnostics report: fixed width, so columns line up as written. */\n.lt-report {\n  margin: 0;\n  padding: 14px 18px;\n  overflow: auto;\n  white-space: pre-wrap;\n  word-break: break-word;\n  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;\n  font-size: 12px;\n  line-height: 1.5;\n  color: var(--foreground);\n  background: var(--surface-muted);\n  user-select: text;\n  -webkit-user-select: text;\n}\n\n/* ---------------------------------------------------------------- tools */\n\n/* The layer over a picture while an area, an object or words are being\n   chosen. It scrolls by default: a webtoon page is taller than the screen,\n   and a layer that swallowed every pan would strand the reader halfway down\n   it with only the close button for a way out. Only a gesture that has to be\n   a drag locks the page - see the region layer and the words. */\n.lt-tool {\n  position: absolute;\n  z-index: 2;\n  overflow: hidden;\n  background: rgba(9, 9, 11, 0.2);\n  outline: 2px solid rgba(255, 255, 255, 0.85);\n  outline-offset: -2px;\n  pointer-events: auto;\n  touch-action: pan-x pan-y;\n  -webkit-user-select: none;\n  user-select: none;\n  -webkit-touch-callout: none;\n}\n/* Dragging out a rectangle is the whole of this tool; without `none` the\n   finger scrolls the page instead. */\n.lt-tool-region {\n  cursor: crosshair;\n  touch-action: none;\n}\n/* The chosen area is the one part left undimmed; the shadow is the dimming,\n   clipped by the layer so it stops at the picture's edge. */\n.lt-sel {\n  position: absolute;\n  border: 2px solid #fff;\n  border-radius: 4px;\n  box-shadow: 0 0 0 9999px rgba(9, 9, 11, 0.45);\n  pointer-events: none;\n}\n.lt-sel[hidden] {\n  display: none;\n}\n\n/* A dot is 16px to look at and 44px to hit. */\n.lt-dot {\n  position: absolute;\n  width: 44px;\n  height: 44px;\n  margin: -22px 0 0 -22px;\n  padding: 0;\n  background: transparent;\n  border: 0;\n  border-radius: 50%;\n  cursor: pointer;\n  -webkit-tap-highlight-color: transparent;\n}\n.lt-dot::after {\n  content: '';\n  position: absolute;\n  inset: 14px;\n  border-radius: 50%;\n  background: #fff;\n  box-shadow: 0 0 0 3px rgba(9, 9, 11, 0.55), 0 1px 5px rgba(0, 0, 0, 0.6);\n  transition: transform 0.12s;\n}\n.lt-dot:hover::after,\n.lt-dot:focus-visible::after,\n.lt-dot:active::after {\n  transform: scale(1.3);\n}\n.lt-objbox {\n  position: absolute;\n  border: 2px solid #fff;\n  border-radius: 6px;\n  box-shadow: 0 0 0 1px rgba(9, 9, 11, 0.5);\n  opacity: 0;\n  pointer-events: none;\n  transition: opacity 0.12s;\n}\n.lt-dot:hover + .lt-objbox,\n.lt-dot:focus-visible + .lt-objbox,\n.lt-dot:active + .lt-objbox {\n  opacity: 1;\n}\n\n/* A stroke that starts on a word is a drag across words and must not pan; one\n   that starts between them scrolls. touch-action is read from where the touch\n   lands, intersected up the tree, and settled before any pointer event - so it\n   has to be on the word itself; setting it from a handler is too late. */\n.lt-word {\n  position: absolute;\n  border-radius: 3px;\n  background: rgba(255, 255, 255, 0.28);\n  box-shadow: 0 0 0 1px rgba(9, 9, 11, 0.45);\n  cursor: pointer;\n  touch-action: none;\n}\n.lt-word.lt-on {\n  background: rgba(56, 189, 248, 0.5);\n  box-shadow: 0 0 0 2px #fff, 0 0 0 3px rgba(9, 9, 11, 0.6);\n}\n\n.lt-bar {\n  position: absolute;\n  z-index: 3;\n  left: 50%;\n  bottom: calc(16px + var(--lt-kb) + env(safe-area-inset-bottom, 0px));\n  transform: translateX(-50%);\n  display: flex;\n  flex-wrap: wrap;\n  align-items: center;\n  gap: 8px;\n  width: max-content;\n  max-width: min(720px, calc(100% - 24px));\n  padding: 8px 8px 8px 14px;\n  color: var(--foreground);\n  background: var(--surface);\n  border: 1px solid var(--border);\n  border-radius: calc(var(--radius) + 4px);\n  box-shadow: var(--shadow);\n  pointer-events: auto;\n}\n.lt-bar-text {\n  flex: 1 1 180px;\n  min-width: 0;\n  max-height: 2.9em;\n  overflow: hidden;\n  display: flex;\n  align-items: center;\n  gap: 8px;\n}\n.lt-bar .lt-input {\n  flex: 1 1 200px;\n  width: auto;\n}\n.lt-bar-buttons {\n  display: flex;\n  gap: 6px;\n  margin-left: auto;\n}\n\n/* ------------------------------------------------ a thumb, not a cursor */\n\n/* The same question ui/menu.ts asks. Narrow, or touched: either way the\n   targets are 44px, the fields are 16px so iOS does not zoom into them, and\n   whatever opens does so from the bottom edge, where the thumb already is. */\n@media (max-width: 640px), (pointer: coarse) {\n  /* Never under 44px here, whatever size was chosen: small is a mouse's size. */\n  #lt-controls,\n  #lt-controls[data-size='s'] {\n    --lt-ctl: 44px;\n    gap: 6px;\n  }\n  #lt-controls[data-size='l'] {\n    --lt-ctl: 52px;\n  }\n  .lt-btn,\n  .lt-input {\n    height: 44px;\n  }\n  .lt-btn.lt-square,\n  .lt-x {\n    width: 44px;\n    height: 44px;\n  }\n  .lt-input {\n    font-size: 16px;\n  }\n  .lt-input[type='checkbox'] {\n    width: 22px;\n    height: 22px;\n  }\n  .lt-slider input[type='range'] {\n    height: 44px;\n  }\n\n  .lt-panel-backdrop {\n    align-items: flex-end;\n  }\n  .lt-panel {\n    width: 100%;\n    max-width: 640px;\n    margin-bottom: var(--lt-kb);\n    max-height: calc(var(--lt-svh) * 100 - var(--lt-kb) - 24px);\n    border-width: 1px 0 0;\n    border-radius: 14px 14px 0 0;\n  }\n  .lt-panel-head,\n  .lt-panel-foot {\n    padding-left: max(14px, env(safe-area-inset-left, 0px));\n    padding-right: max(14px, env(safe-area-inset-right, 0px));\n  }\n  .lt-panel-head {\n    padding-right: max(6px, env(safe-area-inset-right, 0px));\n  }\n  .lt-panel-foot {\n    padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px));\n  }\n  .lt-panel-body {\n    padding-left: max(14px, env(safe-area-inset-left, 0px));\n    padding-right: max(14px, env(safe-area-inset-right, 0px));\n  }\n  /* The settings sheet is as tall as it may be whatever tab is open, so\n     changing tab does not move the strip out from under the thumb. */\n  .lt-settings {\n    height: calc(var(--lt-svh) * 100 - var(--lt-kb) - 24px);\n  }\n  .lt-tabs {\n    padding-left: max(10px, env(safe-area-inset-left, 0px));\n    padding-right: max(10px, env(safe-area-inset-right, 0px));\n  }\n  .lt-tab {\n    height: 44px;\n    padding: 0 14px;\n  }\n  .lt-search {\n    max-width: none;\n  }\n  .lt-reset {\n    width: 32px;\n    height: 32px;\n  }\n  .lt-swatch {\n    width: 44px;\n    height: 44px;\n  }\n  .lt-order-item {\n    min-height: 52px;\n  }\n  .lt-grip,\n  .lt-order-moves .lt-btn {\n    width: 40px;\n    height: 44px;\n  }\n  .lt-panel-foot {\n    flex-wrap: wrap;\n  }\n\n  .lt-bar {\n    left: max(8px, env(safe-area-inset-left, 0px));\n    right: max(8px, env(safe-area-inset-right, 0px));\n    bottom: calc(8px + var(--lt-kb) + env(safe-area-inset-bottom, 0px));\n    transform: none;\n    width: auto;\n    max-width: none;\n  }\n  .lt-bar .lt-input {\n    flex-basis: 100%;\n  }\n  #lt-toast {\n    left: max(8px, env(safe-area-inset-left, 0px));\n    right: max(8px, env(safe-area-inset-right, 0px));\n    transform: none;\n    max-width: none;\n    font-size: 14px;\n  }\n}\n\n@media (prefers-reduced-motion: reduce) {\n  .lt-ctl,\n  #lt-toast,\n  .lt-dot::after,\n  .lt-objbox {\n    transition: none;\n  }\n}\n";
   const HOST_ID = "lens-translate-root";
   let shadow = null;
   let host = null;
@@ -3824,6 +4583,7 @@ ${OVERLAY_CSS}`;
     entry.type = "button";
     entry.className = "lt-menu-item";
     entry.setAttribute("role", "menuitem");
+    if (item.id) entry.dataset["item"] = item.id;
     entry.innerHTML = item.icon ? icon(item.icon) : '<span class="lt-icon"></span>';
     const label = document.createElement("span");
     label.textContent = item.label;
@@ -3937,7 +4697,22 @@ ${OVERLAY_CSS}`;
     };
     element.querySelector(".lt-menu-item:not(:disabled)")?.focus({ preventScroll: true });
   }
+  const REPO = "https://github.com/bropines/chrome-lens-userscript";
+  const BUTTON_ICONS = {
+    translate: "translate",
+    search: "search",
+    ask: "sparkles",
+    area: "area",
+    objects: "objects",
+    text: "text",
+    copy: "copy",
+    settings: "settings",
+    menu: "more"
+  };
   let panel$1 = null;
+  let requestClose = null;
+  let stopListening = null;
+  let recording = false;
   function drawOutlinePreview(canvas, scale) {
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
@@ -3993,209 +4768,656 @@ ${OVERLAY_CSS}`;
     ctx.lineTo(width / 2, height);
     ctx.stroke();
   }
-  function buildField(field, settings) {
-    const row = document.createElement("label");
-    row.className = "lt-row";
-    const label = document.createElement("span");
-    label.className = "lt-label";
-    label.textContent = field.label;
-    row.appendChild(label);
-    let input;
-    if (field.type === "range") {
-      const slider = document.createElement("input");
-      slider.type = "range";
-      if (field.min) slider.min = field.min;
-      if (field.max) slider.max = field.max;
-      if (field.step) slider.step = field.step;
-      slider.value = String(settings[field.key]);
-      const readout = document.createElement("span");
-      readout.className = "lt-readout";
-      const wantsPreview = field.key === "outlineScale";
-      const livePopup = field.key === "popupOpacity";
-      const preview = document.createElement("canvas");
-      preview.className = "lt-preview";
-      preview.width = 460;
-      preview.height = 64;
-      const refresh = () => {
-        const value = Number(slider.value);
-        readout.textContent = field.unit === "%" ? `${Math.round(value * 100)}%` : field.unit === "pct" ? `${Math.round(value)}%` : `${value.toFixed(1)}x`;
-        if (wantsPreview) drawOutlinePreview(preview, value);
-        if (livePopup) applyPopupOpacity(value);
-      };
-      slider.addEventListener("input", refresh);
-      refresh();
-      const holder = document.createElement("span");
-      holder.className = "lt-slider";
-      holder.append(slider, readout);
-      slider.className = "lt-input";
-      slider.dataset["key"] = field.key;
-      row.appendChild(holder);
-      if (wantsPreview) row.appendChild(preview);
-      if (field.hint) {
-        const hint = document.createElement("span");
-        hint.className = "lt-hint";
-        hint.textContent = field.hint;
-        row.appendChild(hint);
+  function el(tag, className, text2) {
+    const element = document.createElement(tag);
+    if (className) element.className = className;
+    if (text2 !== void 0) element.textContent = text2;
+    return element;
+  }
+  function button(className, text2, act) {
+    const element = el("button", className, text2);
+    element.type = "button";
+    if (act) element.dataset["act"] = act;
+    return element;
+  }
+  const changed = (input) => {
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  };
+  function readout(field, value) {
+    if (field.unit === "%") return `${Math.round(value * 100)}%`;
+    if (field.unit === "pct") return `${Math.round(value)}%`;
+    return `${value.toFixed((field.step ?? 1) < 0.1 ? 2 : 1)}x`;
+  }
+  function buildRange(field, settings) {
+    const slider = el("input", "lt-input");
+    slider.type = "range";
+    if (field.min !== void 0) slider.min = String(field.min);
+    if (field.max !== void 0) slider.max = String(field.max);
+    if (field.step !== void 0) slider.step = String(field.step);
+    slider.value = String(settings[field.key]);
+    slider.dataset["key"] = field.key;
+    const value = el("span", "lt-readout");
+    const wantsPreview = field.key === "outlineScale";
+    const livePopup = field.key === "popupOpacity";
+    const preview = el("canvas", "lt-preview");
+    preview.width = 460;
+    preview.height = 64;
+    const refresh = () => {
+      const number = Number(slider.value);
+      value.textContent = readout(field, number);
+      if (wantsPreview) drawOutlinePreview(preview, number);
+      if (livePopup) applyPopupOpacity(number);
+    };
+    slider.addEventListener("input", refresh);
+    refresh();
+    const holder = el("span", "lt-slider");
+    holder.append(slider, value);
+    return wantsPreview ? [holder, preview] : [holder];
+  }
+  function buildColor(field, settings) {
+    const text2 = el("input", "lt-input");
+    text2.type = "text";
+    text2.value = String(settings[field.key]);
+    text2.placeholder = t("color.auto");
+    text2.dataset["key"] = field.key;
+    text2.maxLength = 7;
+    text2.spellcheck = false;
+    const swatch = el("input", "lt-swatch");
+    swatch.type = "color";
+    swatch.setAttribute("aria-label", t("color.pick"));
+    const sync = () => {
+      const set = /^#[0-9a-f]{6}$/i.test(text2.value.trim());
+      if (set) swatch.value = text2.value.trim();
+      swatch.classList.toggle("lt-unset", !set);
+    };
+    sync();
+    text2.addEventListener("input", sync);
+    swatch.addEventListener("input", () => {
+      text2.value = swatch.value;
+      changed(text2);
+    });
+    const holder = el("span", "lt-color");
+    holder.append(swatch, text2);
+    return [holder];
+  }
+  function buildChord(field, settings) {
+    const value = el("input");
+    value.type = "hidden";
+    value.value = String(settings[field.key]);
+    value.dataset["key"] = field.key;
+    const record = button("lt-btn lt-chord", "");
+    const clear = button("lt-btn lt-ghost lt-square", "");
+    clear.innerHTML = icon("close", 16);
+    clear.setAttribute("aria-label", t("chord.clear"));
+    let listening = false;
+    const show = () => {
+      record.textContent = listening ? t("chord.record") : formatChord(value.value) || t("chord.none");
+      record.classList.toggle("lt-recording", listening);
+      clear.hidden = !value.value;
+    };
+    const stop = () => {
+      listening = false;
+      recording = false;
+      show();
+    };
+    const set = (next) => {
+      value.value = next;
+      stop();
+      changed(value);
+    };
+    record.addEventListener("click", () => {
+      listening = !listening;
+      recording = listening;
+      show();
+    });
+    record.addEventListener("blur", () => {
+      if (listening) stop();
+    });
+    record.addEventListener("keydown", (event) => {
+      if (!listening) return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (event.key === "Escape") return stop();
+      if (event.key === "Backspace" || event.key === "Delete") return set("");
+      const chord = chordFromEvent(event);
+      if (chord) set(serializeChord(chord));
+      return void 0;
+    });
+    clear.addEventListener("click", () => set(""));
+    show();
+    const holder = el("span", "lt-chord-row");
+    holder.append(value, record, clear);
+    return [holder];
+  }
+  function buildButtons(field, settings) {
+    const value = el("input");
+    value.type = "hidden";
+    value.value = String(settings[field.key]);
+    value.dataset["key"] = field.key;
+    let entries2 = parseButtons(value.value);
+    const list = el("ul", "lt-order");
+    const rows = /* @__PURE__ */ new Map();
+    const commit = (next, focus) => {
+      entries2 = next;
+      value.value = serializeButtons(entries2);
+      for (const entry of entries2) {
+        const row = rows.get(entry.id);
+        if (row) list.appendChild(row);
       }
-      return row;
+      if (focus) rows.get(focus.id)?.querySelector(`[data-move="${focus.act}"]`)?.focus();
+      changed(value);
+    };
+    for (const entry of entries2) {
+      const name = t(`act.${entry.id}`);
+      const row = el("li", "lt-order-item");
+      row.dataset["button"] = entry.id;
+      const grip = el("span", "lt-grip");
+      grip.innerHTML = icon("grip", 16);
+      grip.title = t("buttons.drag");
+      const pin = el("input", "lt-input");
+      pin.type = "checkbox";
+      pin.checked = entry.pinned;
+      pin.setAttribute("aria-label", t("buttons.pin", { name }));
+      pin.addEventListener("change", () => commit(togglePinned(entries2, entry.id)));
+      const label = el("span", "lt-order-name");
+      label.innerHTML = icon(BUTTON_ICONS[entry.id], 16);
+      label.append(name);
+      const up = button("lt-btn lt-ghost lt-square", "");
+      up.innerHTML = icon("up", 16);
+      up.dataset["move"] = "up";
+      up.setAttribute("aria-label", t("buttons.up", { name }));
+      up.addEventListener("click", () => commit(moveButton(entries2, entry.id, -1), { id: entry.id, act: "up" }));
+      const down = button("lt-btn lt-ghost lt-square", "");
+      down.innerHTML = icon("down", 16);
+      down.dataset["move"] = "down";
+      down.setAttribute("aria-label", t("buttons.down", { name }));
+      down.addEventListener("click", () => commit(moveButton(entries2, entry.id, 1), { id: entry.id, act: "down" }));
+      let dragging = false;
+      grip.addEventListener("pointerdown", (event) => {
+        if (event.button !== 0) return;
+        event.preventDefault();
+        dragging = true;
+        row.classList.add("lt-dragging");
+        try {
+          grip.setPointerCapture(event.pointerId);
+        } catch {
+        }
+      });
+      grip.addEventListener("pointermove", (event) => {
+        if (!dragging) return;
+        const items = [...list.children];
+        let index = items.length;
+        for (const [at, item] of items.entries()) {
+          const box = item.getBoundingClientRect();
+          if (event.clientY < box.top + box.height / 2) {
+            index = at;
+            break;
+          }
+        }
+        const current = entries2.findIndex((candidate) => candidate.id === entry.id);
+        const target = index > current ? index - 1 : index;
+        if (target !== current) commit(placeButton(entries2, entry.id, target));
+      });
+      const drop2 = () => {
+        dragging = false;
+        row.classList.remove("lt-dragging");
+      };
+      grip.addEventListener("pointerup", drop2);
+      grip.addEventListener("pointercancel", drop2);
+      const moves = el("span", "lt-order-moves");
+      moves.append(up, down);
+      row.append(grip, pin, label, moves);
+      rows.set(entry.id, row);
+      list.appendChild(row);
     }
-    if (field.type === "select") {
-      const select = document.createElement("select");
-      for (const [value, text2] of field.options ?? []) {
-        const option = document.createElement("option");
+    return [value, list];
+  }
+  function buildField(field, settings) {
+    const compound = field.type === "buttons" || field.type === "chord";
+    const row = el("div", "lt-row");
+    row.dataset["field"] = field.key;
+    if (field.wide) row.classList.add("lt-row-wide");
+    const id = `lt-field-${field.key}`;
+    const label = el("span", "lt-label");
+    if (compound) label.textContent = fieldLabel(field);
+    else {
+      const name = el("label", "lt-label-text", fieldLabel(field));
+      name.htmlFor = id;
+      label.appendChild(name);
+    }
+    const reset = button("lt-reset", "");
+    reset.innerHTML = icon("undo", 14);
+    reset.dataset["reset"] = field.key;
+    reset.title = t("panel.resetField");
+    reset.setAttribute("aria-label", `${t("panel.resetField")}: ${fieldLabel(field)}`);
+    reset.hidden = true;
+    label.appendChild(reset);
+    row.appendChild(label);
+    if (field.type === "range") row.append(...buildRange(field, settings));
+    else if (field.type === "color") row.append(...buildColor(field, settings));
+    else if (field.type === "chord") row.append(...buildChord(field, settings));
+    else if (field.type === "buttons") row.append(...buildButtons(field, settings));
+    else if (field.type === "select") {
+      const select = el("select", "lt-input");
+      for (const [value, text2] of fieldChoices(field)) {
+        const option = el("option", void 0, text2);
         option.value = value;
-        option.textContent = text2;
         select.appendChild(option);
       }
       select.value = String(settings[field.key]);
-      input = select;
+      select.dataset["key"] = field.key;
+      row.appendChild(select);
     } else {
-      const control = document.createElement("input");
-      control.type = field.type;
-      if (field.step) control.step = field.step;
+      const control2 = el("input", "lt-input");
+      control2.type = field.type;
       if (field.type === "checkbox") {
-        control.checked = Boolean(settings[field.key]);
+        control2.checked = Boolean(settings[field.key]);
         row.classList.add("lt-row-check");
       } else {
-        control.value = field.key === "cacheBytes" ? String(Math.round(settings.cacheBytes / (1024 * 1024) * 10) / 10) : String(settings[field.key]);
+        if (field.step !== void 0) control2.step = String(field.step);
+        if (field.min !== void 0) control2.min = String(field.min);
+        if (field.max !== void 0) control2.max = String(field.max);
+        control2.value = shown(field, settings[field.key]);
       }
-      input = control;
+      control2.dataset["key"] = field.key;
+      row.appendChild(control2);
     }
-    input.className = "lt-input";
-    input.dataset["key"] = field.key;
-    row.appendChild(input);
-    if (field.hint) {
-      const hint = document.createElement("span");
-      hint.className = "lt-hint";
-      hint.textContent = field.hint;
-      row.appendChild(hint);
+    const control = compound ? null : row.querySelector(`[data-key="${field.key}"]`);
+    if (control) control.id = id;
+    const hint = fieldHint(field);
+    if (hint) {
+      const note = el("span", "lt-hint", hint);
+      note.id = `${id}-hint`;
+      control?.setAttribute("aria-describedby", note.id);
+      row.appendChild(note);
     }
     return row;
   }
-  function buildActions(pro) {
-    const commands2 = panelCommands().filter((command) => pro || command.essential);
-    if (!commands2.length) return null;
-    const fragment = document.createDocumentFragment();
-    const heading = document.createElement("div");
-    heading.className = "lt-group";
-    heading.textContent = "Actions";
-    fragment.appendChild(heading);
-    const row = document.createElement("div");
-    row.className = "lt-actions";
-    for (const command of commands2) {
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = "lt-btn";
-      button.textContent = command.label;
-      button.addEventListener("click", () => {
-        closeSettings();
-        command.run();
-      });
-      row.appendChild(button);
-    }
-    fragment.appendChild(row);
-    const note = document.createElement("div");
-    note.className = "lt-note";
-    note.textContent = "These run at once, and discard anything unsaved above.";
-    fragment.appendChild(note);
-    return fragment;
+  function readControl(field, input) {
+    return field.type === "checkbox" ? input.checked : input.value;
   }
-  function collect(root) {
-    const patch = {};
+  function controlsOf(root) {
+    const found = [];
     for (const field of FIELDS) {
-      const input = root.querySelector(
-        `[data-key="${field.key}"]`
-      );
-      if (!input) continue;
-      const raw = field.type === "checkbox" ? input.checked : input.value;
-      patch[field.key] = coerce(field, raw);
+      const input = root.querySelector(`[data-key="${field.key}"]`);
+      if (input) found.push([field, input]);
     }
-    return patch;
+    return found;
   }
-  function closeSettings() {
+  function recordBaseline(root, baseline) {
+    for (const [field, input] of controlsOf(root)) baseline.set(input, readControl(field, input));
+  }
+  function collect(root, baseline) {
+    return formPatch(
+      controlsOf(root).map(([field, input]) => {
+        const now = readControl(field, input);
+        return [field, now, baseline.get(input) ?? now];
+      })
+    );
+  }
+  function closeNow() {
+    stopListening?.();
+    stopListening = null;
+    requestClose = null;
+    recording = false;
     panel$1?.remove();
     panel$1 = null;
     applyPopupOpacity(getSettings().popupOpacity);
   }
-  function openSettings(onSaved) {
+  function openSettings(context, restore) {
     if (panel$1) {
-      closeSettings();
+      requestClose?.();
       return;
     }
-    const settings = getSettings();
-    const backdrop = document.createElement("div");
-    backdrop.className = "lt-panel-backdrop";
-    backdrop.innerHTML = `
-    <div class="lt-panel" role="dialog" aria-label="Lens Translate settings">
-      <header class="lt-panel-head">
-        <strong>Lens Translate</strong>
-        <button class="lt-x" type="button" aria-label="Close" data-act="cancel">${icon("close")}</button>
-      </header>
-      <div class="lt-panel-body"></div>
-      <footer class="lt-panel-foot">
-        <button class="lt-btn lt-ghost" type="button" data-act="reset">Reset</button>
-        <span class="lt-spacer"></span>
-        <button class="lt-btn lt-ghost" type="button" data-act="cancel">Cancel</button>
-        <button class="lt-btn lt-primary" type="button" data-act="save">Save</button>
-      </footer>
-    </div>`;
+    const backdrop = el("div", "lt-panel-backdrop");
     panel$1 = backdrop;
-    const body2 = backdrop.querySelector(".lt-panel-body");
-    const fill = (draft) => {
-      if (!body2) return;
-      body2.textContent = "";
-      const pro = draft.uiMode === "pro";
-      for (const group of GROUPS) {
-        const fields = FIELDS.filter((field) => field.group === group && (pro || field.essential));
-        if (!fields.length) continue;
-        const heading = document.createElement("div");
-        heading.className = "lt-group";
-        heading.textContent = group;
-        body2.appendChild(heading);
-        for (const field of fields) body2.appendChild(buildField(field, draft));
-      }
-      const actions = buildActions(pro);
-      if (actions) body2.appendChild(actions);
-      if (!pro) {
-        const note = document.createElement("div");
-        note.className = "lt-note";
-        note.textContent = 'Switch Interface to "pro" for layout, legibility, caching and the rest.';
-        body2.appendChild(note);
-      }
-      body2.querySelector('[data-key="uiMode"]')?.addEventListener("change", () => fill({ ...draft, ...collect(backdrop) }));
+    const dialog = el("div", "lt-panel lt-settings");
+    dialog.setAttribute("role", "dialog");
+    dialog.setAttribute("aria-label", t("panel.aria"));
+    const head = el("header", "lt-panel-head");
+    const search = el("input", "lt-input lt-search");
+    search.type = "search";
+    search.placeholder = t("panel.search");
+    search.setAttribute("aria-label", t("panel.search"));
+    const x = button("lt-x", "", "cancel");
+    x.innerHTML = icon("close");
+    x.setAttribute("aria-label", t("panel.close"));
+    head.append(el("strong", void 0, t("panel.title")), search, x);
+    const tabs = el("nav", "lt-tabs");
+    tabs.setAttribute("role", "tablist");
+    const body2 = el("div", "lt-panel-body");
+    const main = el("div", "lt-settings-main");
+    main.append(tabs, body2);
+    const foot = el("footer", "lt-panel-foot");
+    const guard = el("span", "lt-guard", t("panel.unsaved"));
+    guard.hidden = true;
+    const discard = button("lt-btn lt-ghost", t("panel.discard"), "discard");
+    discard.hidden = true;
+    const keep = button("lt-btn", t("panel.keepEditing"), "keep");
+    keep.hidden = true;
+    const cancel = button("lt-btn lt-ghost", t("panel.cancel"), "cancel");
+    const save = button("lt-btn lt-primary", t("panel.save"), "save");
+    foot.append(guard, el("span", "lt-spacer"), discard, keep, cancel, save);
+    dialog.append(head, main, foot);
+    backdrop.appendChild(dialog);
+    let draft = restore?.draft ?? getSettings();
+    let active2 = restore?.tab ?? "general";
+    let importNote = "";
+    const baseline = /* @__PURE__ */ new WeakMap();
+    const current = () => ({ ...draft, ...collect(backdrop, baseline) });
+    const isDirty = () => settingsDiffer(current(), getSettings());
+    const setGuard = (on) => {
+      guard.hidden = !on;
+      discard.hidden = !on;
+      keep.hidden = !on;
+      cancel.hidden = on;
     };
-    fill(settings);
+    const markChanged = () => {
+      const now = current();
+      for (const reset of body2.querySelectorAll("[data-reset]")) {
+        const key = reset.dataset["reset"];
+        reset.hidden = now[key] === DEFAULTS[key];
+      }
+      for (const pane of body2.querySelectorAll("[data-pane]")) {
+        const tabReset = pane.querySelector('[data-act="reset-tab"]');
+        if (tabReset) tabReset.hidden = !pane.querySelector("[data-reset]:not([hidden])");
+      }
+    };
+    const applyFilter = () => {
+      const query = search.value.trim();
+      let any = false;
+      for (const pane of body2.querySelectorAll("[data-pane]")) {
+        let matches = 0;
+        for (const row of pane.querySelectorAll("[data-field]")) {
+          const field = FIELDS.find((candidate) => candidate.key === row.dataset["field"]);
+          const hit = !query || field !== void 0 && fieldMatches(field, query);
+          row.hidden = !hit;
+          if (hit) matches += 1;
+        }
+        for (const extra of pane.querySelectorAll(".lt-extra")) extra.hidden = Boolean(query);
+        pane.hidden = query ? matches === 0 : pane.dataset["pane"] !== active2;
+        if (!pane.hidden) any = true;
+      }
+      dialog.classList.toggle("lt-searching", Boolean(query));
+      for (const tab of tabs.querySelectorAll("[data-tab]")) {
+        tab.setAttribute("aria-selected", String(!query && tab.dataset["tab"] === active2));
+      }
+      const empty = body2.querySelector(".lt-empty");
+      if (empty) {
+        empty.hidden = any;
+        empty.textContent = t("panel.noMatches", { query });
+      }
+    };
+    const show = (tab) => {
+      active2 = tab;
+      search.value = "";
+      applyFilter();
+      body2.scrollTop = 0;
+      tabs.querySelector(`[data-tab="${tab}"]`)?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    };
+    const buildActions = (pro) => {
+      const commands2 = panelCommands().filter((command) => pro || command.essential);
+      if (!commands2.length) return null;
+      const section = el("div", "lt-extra");
+      section.appendChild(el("div", "lt-group", t("panel.actions")));
+      const row = el("div", "lt-actions");
+      for (const command of commands2) {
+        const action = button("lt-btn", command.label);
+        action.addEventListener("click", () => {
+          closeNow();
+          command.run();
+        });
+        row.appendChild(action);
+      }
+      section.append(row, el("div", "lt-note", t("panel.actionsNote")));
+      return section;
+    };
+    const buildSites = () => {
+      const section = el("div", "lt-extra lt-sites");
+      const here = hostOf();
+      const row = el("label", "lt-row lt-row-wide");
+      row.appendChild(el("span", "lt-label", t("sites.current", { host: here })));
+      const select = el("select", "lt-input lt-site-mode");
+      for (const mode of ["default", "off", "auto"]) {
+        const option = el("option", void 0, t(`sites.${mode}`));
+        option.value = mode;
+        select.appendChild(option);
+      }
+      select.value = context.site();
+      select.addEventListener("change", () => {
+        context.setSite(select.value);
+        redrawSites();
+      });
+      row.appendChild(select);
+      section.appendChild(row);
+      section.appendChild(el("div", "lt-group", t("sites.others")));
+      const others = Object.entries(siteRules()).filter(([host2]) => host2 !== here);
+      if (!others.length) section.appendChild(el("div", "lt-note", t("sites.none")));
+      const list = el("ul", "lt-site-list");
+      for (const [host2, mode] of others.sort(([a], [b]) => a.localeCompare(b))) {
+        const item = el("li", "lt-site");
+        const remove = button("lt-btn lt-ghost lt-square", "");
+        remove.innerHTML = icon("close", 16);
+        remove.setAttribute("aria-label", t("sites.remove", { host: host2 }));
+        remove.addEventListener("click", () => {
+          setSiteMode("default", host2);
+          redrawSites();
+        });
+        item.append(el("span", "lt-site-host", host2), el("span", "lt-site-rule", t(`sites.${mode}`)), remove);
+        list.appendChild(item);
+      }
+      section.append(list, el("div", "lt-note", t("sites.note")));
+      return section;
+    };
+    const redrawSites = () => {
+      body2.querySelector(".lt-sites")?.replaceWith(buildSites());
+    };
+    const link = (href, text2) => {
+      const anchor = el("a", "lt-link", text2);
+      anchor.href = href;
+      anchor.target = "_blank";
+      anchor.rel = "noopener noreferrer";
+      return anchor;
+    };
+    const buildAbout = () => {
+      const section = el("div", "lt-extra lt-about");
+      section.appendChild(el("div", "lt-version", t("about.version", { version: VERSION })));
+      section.appendChild(el("div", "lt-group", t("about.links")));
+      const links = el("div", "lt-actions");
+      links.append(
+        link(REPO, t("about.repo")),
+        link(`${REPO}/issues`, t("about.issues")),
+        link(`${REPO}/blob/main/docs/lens-capabilities.md`, t("about.docs"))
+      );
+      section.appendChild(links);
+      section.appendChild(el("div", "lt-group", t("about.host")));
+      section.appendChild(el("pre", "lt-report lt-facts", hostFacts().join("\n")));
+      section.appendChild(el("div", "lt-group", t("about.tools")));
+      const tools = el("div", "lt-actions");
+      for (const command of panelCommands()) {
+        if (command.id !== "diagnostics" && command.id !== "clearCache") continue;
+        const action = button("lt-btn", command.label);
+        action.dataset["command"] = command.id;
+        action.addEventListener("click", () => {
+          if (command.id === "diagnostics") closeNow();
+          command.run();
+        });
+        tools.appendChild(action);
+      }
+      section.appendChild(tools);
+      section.appendChild(el("div", "lt-group", t("about.backup")));
+      const backup = el("div", "lt-actions");
+      const file = el("input", "lt-import-file");
+      file.type = "file";
+      file.accept = "application/json,.json";
+      file.hidden = true;
+      file.addEventListener("change", () => {
+        const chosen = file.files?.[0];
+        if (!chosen) return;
+        void chosen.text().then((text2) => {
+          let report = null;
+          try {
+            report = importSettings(JSON.parse(text2));
+          } catch {
+            report = null;
+          }
+          const now = current();
+          if (!report || !report.applied.length) importNote = t("about.importInvalid");
+          else {
+            importNote = t("about.importDone", { count: report.applied.length });
+            const left = [...report.unknown, ...report.invalid];
+            if (left.length) importNote += ` ${t("about.importIgnored", { keys: left.join(", ") })}`;
+          }
+          fill(report?.applied.length ? { ...now, ...report.patch } : now);
+        });
+      });
+      const importer = button("lt-btn", t("about.import"), "import");
+      importer.addEventListener("click", () => file.click());
+      backup.append(
+        button("lt-btn", t("about.export"), "export"),
+        importer,
+        file,
+        button("lt-btn lt-ghost", t("panel.resetAll"), "reset")
+      );
+      section.appendChild(backup);
+      if (importNote) section.appendChild(el("div", "lt-note lt-import-note", importNote));
+      section.appendChild(el("div", "lt-note", t("about.locale")));
+      return section;
+    };
+    function fill(values) {
+      draft = values;
+      const pro = values.uiMode === "pro";
+      const scroll = body2.scrollTop;
+      dialog.classList.toggle("lt-pro", pro);
+      search.hidden = !pro;
+      if (!pro) search.value = "";
+      const shownTabs = pro ? [...TABS] : ["general", "about"];
+      if (!shownTabs.includes(active2)) active2 = "general";
+      tabs.textContent = "";
+      body2.textContent = "";
+      for (const tab of shownTabs) {
+        const tabButton = button("lt-tab", t(`tab.${tab}`));
+        tabButton.dataset["tab"] = tab;
+        tabButton.setAttribute("role", "tab");
+        tabs.appendChild(tabButton);
+        const pane = el("section", "lt-pane");
+        pane.dataset["pane"] = tab;
+        const fields = FIELDS.filter((field) => pro ? field.tab === tab : tab === "general" && field.essential);
+        const paneHead = el("div", "lt-pane-head");
+        paneHead.appendChild(el("h3", void 0, t(`tab.${tab}`)));
+        if (fields.length) {
+          const tabReset = button("lt-btn lt-ghost lt-small", t("panel.resetTab"), "reset-tab");
+          tabReset.hidden = true;
+          paneHead.appendChild(tabReset);
+        }
+        pane.appendChild(paneHead);
+        if (fields.length) {
+          const grid = el("div", "lt-grid");
+          for (const field of fields) grid.appendChild(buildField(field, values));
+          pane.appendChild(grid);
+        }
+        if (tab === "general") {
+          const actions = buildActions(pro);
+          if (actions) pane.appendChild(actions);
+          if (!pro) pane.appendChild(el("div", "lt-note lt-extra", t("panel.simpleNote")));
+        }
+        if (tab === "sites") pane.appendChild(buildSites());
+        if (tab === "about") pane.appendChild(buildAbout());
+        body2.appendChild(pane);
+      }
+      const empty = el("div", "lt-note lt-empty");
+      empty.hidden = true;
+      body2.appendChild(empty);
+      recordBaseline(body2, baseline);
+      applyFilter();
+      markChanged();
+      body2.scrollTop = scroll;
+    }
+    fill(draft);
+    const download2 = () => {
+      const blob = new Blob([exportSettings(current(), VERSION)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const anchor = el("a");
+      anchor.href = url;
+      anchor.download = "lens-translate-settings.json";
+      backdrop.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1e4);
+    };
+    requestClose = () => {
+      if (guard.hidden && isDirty()) setGuard(true);
+      else closeNow();
+    };
+    backdrop.addEventListener("input", (event) => {
+      setGuard(false);
+      markChanged();
+      const target = event.target;
+      if (target === search) applyFilter();
+    });
+    backdrop.addEventListener("change", (event) => {
+      markChanged();
+      if (event.target.dataset["key"] === "uiMode") fill(current());
+    });
     backdrop.addEventListener("click", (event) => {
       const target = event.target;
-      if (target === backdrop) return closeSettings();
-      const action = target.closest("[data-act]")?.dataset["act"];
-      if (action === "cancel") return closeSettings();
+      if (target === backdrop) return requestClose?.();
+      const reset = target.closest("[data-reset]");
+      if (reset) {
+        event.preventDefault();
+        const key = reset.dataset["reset"];
+        fill({ ...current(), [key]: DEFAULTS[key] });
+        return void 0;
+      }
+      const tab = target.closest("[data-tab]")?.dataset["tab"];
+      if (tab) return show(tab);
+      const actor = target.closest("[data-act]");
+      const action = actor?.dataset["act"];
+      if (action === "cancel") return requestClose?.();
+      if (action === "discard") return closeNow();
+      if (action === "keep") return setGuard(false);
+      if (action === "export") return download2();
       if (action === "save") {
-        const saved = saveSettings(collect(backdrop));
-        closeSettings();
-        onSaved?.(saved);
+        const saved = saveSettings(current());
+        closeNow();
+        context.onSaved(saved);
+      } else if (action === "reset-tab") {
+        const pane = actor?.closest("[data-pane]");
+        const next = { ...current() };
+        for (const row of pane?.querySelectorAll("[data-field]") ?? []) {
+          const key = row.dataset["field"];
+          next[key] = DEFAULTS[key];
+        }
+        fill(next);
       } else if (action === "reset") {
-        const fresh = resetSettings();
-        closeSettings();
-        onSaved?.(fresh);
-        openSettings(onSaved);
+        fill({ ...DEFAULTS, uiMode: current().uiMode });
       }
       return void 0;
     });
+    for (const type of ["keydown", "keyup", "keypress"]) {
+      backdrop.addEventListener(type, (event) => {
+        if (event.key !== "Escape") event.stopPropagation();
+      });
+    }
     const onKey = (event) => {
-      if (!panel$1) {
-        document.removeEventListener("keydown", onKey, true);
-        return;
-      }
-      if (event.key === "Escape") {
-        event.stopPropagation();
-        closeSettings();
-        document.removeEventListener("keydown", onKey, true);
-      }
+      if (event.key !== "Escape" || recording) return;
+      event.stopPropagation();
+      if (!guard.hidden) setGuard(false);
+      else requestClose?.();
     };
     document.addEventListener("keydown", onKey, true);
+    const unsubscribe = onLocaleChange(() => {
+      if (panel$1 !== backdrop) return;
+      const state = { draft: current(), tab: active2 };
+      closeNow();
+      openSettings(context, state);
+    });
+    stopListening = () => {
+      document.removeEventListener("keydown", onKey, true);
+      unsubscribe();
+    };
     uiRoot().appendChild(backdrop);
-    if (!isCompact()) backdrop.querySelector(".lt-input")?.focus();
+    if (!isCompact()) body2.querySelector(".lt-input")?.focus();
   }
   let panel = null;
   let body = null;
@@ -4216,19 +5438,24 @@ ${OVERLAY_CSS}`;
     const backdrop = document.createElement("div");
     backdrop.className = "lt-panel-backdrop";
     backdrop.innerHTML = `
-    <div class="lt-panel lt-panel-report" role="dialog" aria-label="Lens Translate diagnostics">
+    <div class="lt-panel lt-panel-report" role="dialog">
       <header class="lt-panel-head">
-        <strong>Diagnostics</strong>
-        <button class="lt-x" type="button" aria-label="Close" data-act="close">${icon("close")}</button>
+        <strong data-t="report.title"></strong>
+        <button class="lt-x" type="button" data-act="close">${icon("close")}</button>
       </header>
       <pre class="lt-report"></pre>
       <footer class="lt-panel-foot">
-        <button class="lt-btn lt-ghost" type="button" data-act="settings">Settings</button>
+        <button class="lt-btn lt-ghost" type="button" data-act="settings" data-t="report.settings"></button>
         <span class="lt-spacer"></span>
-        <button class="lt-btn lt-ghost" type="button" data-act="copy">Copy</button>
-        <button class="lt-btn lt-primary" type="button" data-act="close">Close</button>
+        <button class="lt-btn lt-ghost" type="button" data-act="copy" data-t="report.copy"></button>
+        <button class="lt-btn lt-primary" type="button" data-act="close" data-t="report.close"></button>
       </footer>
     </div>`;
+    backdrop.querySelector(".lt-panel")?.setAttribute("aria-label", t("report.aria"));
+    backdrop.querySelector(".lt-x")?.setAttribute("aria-label", t("report.close"));
+    for (const element of backdrop.querySelectorAll("[data-t]")) {
+      element.textContent = t(element.dataset["t"]);
+    }
     panel = backdrop;
     body = backdrop.querySelector(".lt-report");
     if (body) body.textContent = text2;
@@ -4247,8 +5474,8 @@ ${OVERLAY_CSS}`;
         const report = body.textContent ?? "";
         void navigator.clipboard?.writeText(report).then(
           () => {
-            target.textContent = "Copied";
-            window.setTimeout(() => target.textContent = "Copy", 1500);
+            target.textContent = t("report.copied");
+            window.setTimeout(() => target.textContent = t("report.copy"), 1500);
           },
           () => {
             const range = document.createRange();
@@ -4256,7 +5483,7 @@ ${OVERLAY_CSS}`;
             const selection = window.getSelection();
             selection?.removeAllRanges();
             selection?.addRange(range);
-            target.textContent = "Selected - copy it";
+            target.textContent = t("report.selected");
           }
         );
       }
@@ -4351,20 +5578,20 @@ ${OVERLAY_CSS}`;
       }
       const row = document.createElement("div");
       row.className = "lt-bar-buttons";
-      for (const button of content.buttons ?? []) {
+      for (const button2 of content.buttons ?? []) {
         const element = document.createElement("button");
         element.type = "button";
-        element.className = button.primary ? "lt-btn lt-primary" : "lt-btn";
-        element.innerHTML = button.icon ? icon(button.icon, 16) : "";
-        element.append(button.label);
-        element.disabled = button.disabled === true;
-        element.addEventListener("click", () => button.run());
+        element.className = button2.primary ? "lt-btn lt-primary" : "lt-btn";
+        element.innerHTML = button2.icon ? icon(button2.icon, 16) : "";
+        element.append(button2.label);
+        element.disabled = button2.disabled === true;
+        element.addEventListener("click", () => button2.run());
         row.appendChild(element);
       }
       const close = document.createElement("button");
       close.type = "button";
       close.className = "lt-btn lt-ghost lt-square";
-      close.setAttribute("aria-label", "Close");
+      close.setAttribute("aria-label", t("tool.close"));
       close.innerHTML = icon("close", 16);
       close.addEventListener("click", closeTool);
       row.appendChild(close);
@@ -4390,22 +5617,22 @@ ${OVERLAY_CSS}`;
     if (!frame) return false;
     frame.layer.appendChild(selection);
     const idle = () => {
-      frame.setBar({ text: "Drag over the part of the picture to search" });
+      frame.setBar({ text: t("tool.regionIdle") });
     };
     const chosen = () => {
       const chosenBox = box;
       if (!chosenBox) return;
       const input = frame.setBar({
-        text: "Search this area",
-        input: { placeholder: "Add a question (optional)" },
+        text: t("tool.regionChosen"),
+        input: { placeholder: t("tool.regionQuestion") },
         buttons: [
           {
-            label: "Search",
+            label: t("tool.search"),
             icon: "search",
             primary: true,
             run: () => send("visual")
           },
-          { label: "Ask AI", icon: "sparkles", run: () => send("ai") }
+          { label: t("tool.askAi"), icon: "sparkles", run: () => send("ai") }
         ]
       });
       const send = (mode) => {
@@ -4496,7 +5723,7 @@ ${OVERLAY_CSS}`;
         const list = source.objects;
         const found = list.filter((object) => object.geometry);
         if (!found.length) {
-          frame.setBar({ text: "Lens found no separate objects in this picture" });
+          frame.setBar({ text: t("tool.noObjects") });
           return void 0;
         }
         found.forEach((object, index) => {
@@ -4505,10 +5732,10 @@ ${OVERLAY_CSS}`;
           const dot = document.createElement("button");
           dot.type = "button";
           dot.className = "lt-dot";
-          dot.setAttribute("aria-label", `Search object ${index + 1}`);
+          dot.setAttribute("aria-label", t("tool.objectLabel", { n: index + 1 }));
           dot.addEventListener("click", () => {
             if (!objectsStillValid(source, list)) {
-              show("Looking for objects again...");
+              show(t("tool.objectsAgain"));
               return;
             }
             closeTool();
@@ -4518,11 +5745,11 @@ ${OVERLAY_CSS}`;
           dots.push({ object, dot, outline });
         });
         layout();
-        frame.setBar({ text: `Tap a dot to search that object (${found.length} found)` });
+        frame.setBar({ text: t("tool.objectsHint", { count: found.length }) });
         return void 0;
       });
     };
-    show("Looking for objects...");
+    show(t("tool.objectsLooking"));
     return true;
   }
   function openTextTool(options) {
@@ -4545,24 +5772,24 @@ ${OVERLAY_CSS}`;
     };
     const frame = openFrame(options, "text", layout);
     if (!frame) return false;
-    frame.setBar({ text: "Reading the text...", busy: true });
+    frame.setBar({ text: t("tool.reading"), busy: true });
     const mine = active;
     const bar = () => {
       const text2 = joinPicked(items, picked);
       frame.setBar({
-        text: picked.size ? text2 : "Tap or drag across words to pick them",
+        text: picked.size ? text2 : t("tool.wordsHint"),
         buttons: [
           {
-            label: picked.size === items.length ? "None" : "All",
+            label: picked.size === items.length ? t("tool.none") : t("tool.all"),
             run: () => {
               const all2 = picked.size !== items.length;
               items.forEach((_, index) => set(index, all2));
               bar();
             }
           },
-          { label: "Copy", icon: "copy", disabled: !picked.size, run: () => options.onCopy(text2) },
+          { label: t("tool.copy"), icon: "copy", disabled: !picked.size, run: () => options.onCopy(text2) },
           {
-            label: "Search",
+            label: t("tool.search"),
             icon: "search",
             primary: true,
             disabled: !picked.size,
@@ -4613,7 +5840,7 @@ ${OVERLAY_CSS}`;
       if (!paragraphs) return closeTool();
       items = pickables(paragraphs);
       if (!items.length) {
-        frame.setBar({ text: "Lens found no text in this picture" });
+        frame.setBar({ text: t("tool.noText") });
         return void 0;
       }
       for (const item of items) {
@@ -4631,6 +5858,7 @@ ${OVERLAY_CSS}`;
   }
   function start({ framed, hovered }) {
     let settings = getSettings();
+    if (storageReady()) useLanguage(settings.language);
     let site = siteMode();
     const active2 = () => settings.enabled && site !== "off";
     setTransport(gmTransport);
@@ -4648,14 +5876,12 @@ ${OVERLAY_CSS}`;
       element.setAttribute("aria-label", label);
       return element;
     }
-    const button = control(
-      "lt-button",
-      "Translate the text in this image (click again to undo)",
-      icon("translate") + icon("loader")
-    );
-    const gear = control("lt-gear", "Lens Translate settings", icon("settings", 16));
-    const more = control("lt-more", "Search, ask, copy and more", icon("more", 16));
-    controls.append(more, gear, button);
+    let button2 = document.createElement("div");
+    let translateControl = null;
+    let menuControl = button2;
+    const markTranslated = (on) => {
+      translateControl?.classList.toggle("lt-active", on);
+    };
     const toastEl = document.createElement("div");
     toastEl.id = "lt-toast";
     toastEl.setAttribute("role", "status");
@@ -4682,7 +5908,7 @@ ${OVERLAY_CSS}`;
         const close = document.createElement("button");
         close.type = "button";
         close.className = "lt-btn lt-ghost lt-square";
-        close.setAttribute("aria-label", "Dismiss");
+        close.setAttribute("aria-label", t("toast.dismiss"));
         close.innerHTML = icon("close", 16);
         close.addEventListener("click", hideToast);
         if (link.copy) {
@@ -4694,11 +5920,11 @@ ${OVERLAY_CSS}`;
           copy.type = "button";
           copy.className = "lt-btn";
           copy.innerHTML = icon("copy", 16);
-          copy.append("Copy");
+          copy.append(t("toast.copy"));
           copy.addEventListener("click", () => {
             void copyText(link.href).then((done) => {
-              if (done) toast("Address copied");
-              else toast("Could not copy; select the address instead", 0, link);
+              if (done) toast(t("toast.addressCopied"));
+              else toast(t("toast.addressNotCopied"), 0, link);
             });
           });
           toastEl.append(anchor, copy, close);
@@ -4720,7 +5946,7 @@ ${OVERLAY_CSS}`;
     }
     const forgetter = (img) => () => {
       showing.delete(img);
-      if (currentTarget?.element === img) button.classList.remove("lt-active");
+      if (currentTarget?.element === img) markTranslated(false);
     };
     const SWEEP_MS = 3e3;
     function sweep() {
@@ -4739,7 +5965,7 @@ ${OVERLAY_CSS}`;
       showing.delete(img);
       results.delete(img);
       const restored = uncoverImage(img) || clearOverlay(img);
-      if (restored) button.classList.remove("lt-active");
+      if (restored) markTranslated(false);
       return restored;
     }
     const results = /* @__PURE__ */ new WeakMap();
@@ -4747,7 +5973,7 @@ ${OVERLAY_CSS}`;
     let working = 0;
     function setWorking(delta) {
       working += delta;
-      button.classList.toggle("lt-busy", working > 0);
+      button2.classList.toggle("lt-busy", working > 0);
     }
     let lastFailure = "";
     async function translate(target, options = {}) {
@@ -4757,17 +5983,17 @@ ${OVERLAY_CSS}`;
       };
       if (busy.has(img)) return "skipped";
       if (!settings.enabled) {
-        say("Translation is switched off in settings");
+        say(t("toast.off"));
         return "skipped";
       }
       if (site === "off") {
-        say(`Lens Translate is switched off on ${hostOf()} (userscript menu: toggle for this site)`);
+        say(t("toast.siteOffHint", { host: hostOf() }));
         return "skipped";
       }
       if (undo(img)) return "undone";
       busy.add(img);
       setWorking(1);
-      button.classList.remove("lt-error");
+      button2.classList.remove("lt-error");
       try {
         const key = cacheKey(target.url, settings);
         const displayedWidth = img.getBoundingClientRect().width;
@@ -4777,8 +6003,8 @@ ${OVERLAY_CSS}`;
             settings,
             naturalSizeOf(target)
           );
-          if (done && coverImage(img, URL.createObjectURL(done), { onGone: forgetter(img) })) {
-            shown(img, target, getCached(key, settings, naturalSizeOf(target)));
+          if (done && coverImage(img, URL.createObjectURL(done), { onGone: forgetter(img), ...seeThrough() })) {
+            shown2(img, target, getCached(key, settings, naturalSizeOf(target)));
             return "shown";
           }
         }
@@ -4804,7 +6030,7 @@ ${OVERLAY_CSS}`;
             const detected = result.ocr.some((p) => p.lines.length > 0);
             results.set(img, result);
             say(
-              detected ? "Lens read the text but returned no translation (same language?)" : "Lens found no text in this image"
+              detected ? t("toast.noTranslation") : t("toast.noText")
             );
             return "empty";
           }
@@ -4823,6 +6049,7 @@ ${OVERLAY_CSS}`;
             }
             const covered = coverImage(img, URL.createObjectURL(blob), {
               onGone: forgetter(img),
+              ...seeThrough(),
               ...target.background ? {
                 background: {
                   spec: target.background,
@@ -4831,15 +6058,13 @@ ${OVERLAY_CSS}`;
               } : {}
             });
             if (!covered) {
-              lastFailure = "it cannot be covered here";
-              say(
-                target.kind === "background" ? "This background is tiled or clipped in a way a translation cannot follow" : "This image cannot be covered here"
-              );
+              lastFailure = target.kind === "background" ? t("toast.backgroundTiled") : t("toast.cannotCover");
+              say(lastFailure);
               return "failed";
             }
           } else if (target.kind === "background") {
-            lastFailure = "backgrounds need the canvas renderer";
-            say("Backgrounds need the canvas renderer (Render as, in settings)");
+            lastFailure = t("toast.backgroundNeedsCanvas");
+            say(lastFailure);
             return "failed";
           } else if (!renderTranslation(
             img,
@@ -4847,39 +6072,43 @@ ${OVERLAY_CSS}`;
             settings,
             { width: prepared.width, height: prepared.height },
             root,
-            { onGone: forgetter(img) }
+            { onGone: forgetter(img), ...seeThrough() }
           )) {
-            lastFailure = "nothing could be placed on it";
-            say("Nothing could be placed on this image");
+            lastFailure = t("toast.nothingPlaced");
+            say(lastFailure);
             return "failed";
           }
-          shown(img, target, result);
+          shown2(img, target, result);
           return "shown";
         } finally {
           prepared.release();
         }
       } catch (error) {
         lastFailure = error.message;
-        button.classList.add("lt-error");
-        say(`Lens: ${lastFailure}`, 5e3);
-        window.setTimeout(() => button.classList.remove("lt-error"), 3e3);
+        button2.classList.add("lt-error");
+        say(t("toast.lensError", { message: lastFailure }), 5e3);
+        window.setTimeout(() => button2.classList.remove("lt-error"), 3e3);
         return "failed";
       } finally {
         busy.delete(img);
         setWorking(-1);
       }
     }
-    function shown(img, target, result) {
+    function shown2(img, target, result) {
       showing.set(img, target);
       if (result) results.set(img, result);
       lastShown = new WeakRef(img);
-      if (currentTarget?.element === img) button.classList.add("lt-active");
+      if (currentTarget?.element === img) markTranslated(true);
     }
-    const CONCURRENCY = 2;
+    function seeThrough() {
+      const percent = Math.min(100, Math.max(20, Number(settings.coverOpacity) || 100));
+      return percent < 100 ? { opacity: percent / 100 } : {};
+    }
+    const concurrency = () => Math.min(6, Math.max(1, Math.round(settings.concurrency) || 2));
     const queued = [];
     let running = 0;
     function pump() {
-      while (running < CONCURRENCY) {
+      while (running < concurrency()) {
         const start2 = queued.shift();
         if (!start2) return;
         running += 1;
@@ -4911,7 +6140,6 @@ ${OVERLAY_CSS}`;
       );
       return tally;
     }
-    const plural = (count, word) => `${count} ${word}${count === 1 ? "" : "s"}`;
     function inView(target) {
       if (!target.element.isConnected) return false;
       const part = visiblePart(target.element);
@@ -4923,24 +6151,24 @@ ${OVERLAY_CSS}`;
       );
     }
     function summarise(tally, total2) {
-      const parts = [`Translated ${tally.shown} of ${plural(total2, "image")}`];
-      if (tally.empty) parts.push(`${tally.empty} had no text`);
-      if (tally.failed) parts.push(`${tally.failed} failed (${lastFailure})`);
+      const parts = [t("toast.batchDone", { shown: tally.shown, total: total2 })];
+      if (tally.empty) parts.push(t("toast.batchEmpty", { count: tally.empty }));
+      if (tally.failed) parts.push(t("toast.batchFailed", { count: tally.failed, reason: lastFailure }));
       return parts.join("; ");
     }
     async function translateVisible() {
       if (!settings.enabled || site === "off") {
         toast(
-          site === "off" ? `Lens Translate is switched off on ${hostOf()}` : "Translation is switched off in settings"
+          site === "off" ? t("toast.siteOff", { host: hostOf() }) : t("toast.off")
         );
         return;
       }
       const targets2 = untranslatedInView(collect$1(settings.minImageSize));
       if (!targets2.length) {
-        toast("Nothing left to translate in view");
+        toast(t("toast.nothingLeft"));
         return;
       }
-      toast(`Translating ${plural(targets2.length, "image")}...`, 12e4);
+      toast(t("toast.batchStart", { count: targets2.length }), 12e4);
       toast(summarise(await translateAll(targets2), targets2.length), 5e3);
     }
     const autoTried = /* @__PURE__ */ new WeakMap();
@@ -4956,7 +6184,7 @@ ${OVERLAY_CSS}`;
       void translateAll(targets2).then((tally) => {
         if (tally.failed && Date.now() - lastAutoComplaint > 3e4) {
           lastAutoComplaint = Date.now();
-          toast(`Auto-translate: ${plural(tally.failed, "image")} failed (${lastFailure})`, 5e3);
+          toast(t("toast.autoFailed", { count: tally.failed, reason: lastFailure }), 5e3);
         }
       });
     }
@@ -4970,7 +6198,6 @@ ${OVERLAY_CSS}`;
     let currentTarget = null;
     let hideTimer;
     let gearTimer;
-    const GEAR_DELAY_MS = 550;
     let extrasShown = false;
     function showGear() {
       extrasShown = true;
@@ -4981,17 +6208,45 @@ ${OVERLAY_CSS}`;
       extrasShown = false;
       controls.classList.remove("lt-extras");
     }
+    function visibleViewport() {
+      const visual = window.visualViewport;
+      if (visual && visual.width > 0 && visual.height > 0) {
+        return { left: visual.offsetLeft, top: visual.offsetTop, width: visual.width, height: visual.height };
+      }
+      return { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight };
+    }
+    function placeControls(rect) {
+      const view = visibleViewport();
+      const margin = 4;
+      const gap = Number.parseFloat(getComputedStyle(controls).columnGap) || 0;
+      const widths = [...controls.children].map((child) => child.offsetWidth);
+      const width = Math.ceil(wrapWidth(widths, gap, view.width - margin * 2)) + 1;
+      controls.style.width = `${width}px`;
+      const at = placeRow(
+        settings.buttonCorner,
+        rect,
+        { width, height: controls.offsetHeight },
+        view,
+        margin,
+        6
+      );
+      controls.style.left = `${at.x}px`;
+      controls.style.top = `${at.y}px`;
+    }
     function showButton(target, anchor) {
       if (!settings.showButton || site === "off") return;
       const img = target.element;
       currentTarget = target;
       const rect = anchor ?? img.getBoundingClientRect();
-      controls.style.top = `${rect.top + 6}px`;
-      controls.style.left = `${rect.left + rect.width - 6}px`;
+      placeControls(rect);
       controls.classList.add("lt-on");
-      button.classList.toggle("lt-active", isTranslated(img));
+      markTranslated(isTranslated(img));
       window.clearTimeout(gearTimer);
-      if (!extrasShown) gearTimer = window.setTimeout(showGear, GEAR_DELAY_MS);
+      if (!extrasShown) {
+        const wait = Math.max(0, Number(settings.extrasDelayMs) || 0);
+        if (wait === 0) showGear();
+        else gearTimer = window.setTimeout(showGear, wait);
+      }
     }
     function hideButton() {
       controls.classList.remove("lt-on");
@@ -5120,18 +6375,17 @@ ${OVERLAY_CSS}`;
       (event) => {
         if (pinned) return;
         if (targetFromEvent(event, settings.minImageSize, isOurs)) {
-          hideTimer = window.setTimeout(hideButton, 300);
+          hideTimer = window.setTimeout(hideButton, hideDelay());
         }
       },
       true
     );
-    for (const control2 of [button, gear, more]) {
-      control2.addEventListener("mouseover", () => window.clearTimeout(hideTimer));
-      control2.addEventListener("mouseout", () => {
-        if (pinned) return;
-        hideTimer = window.setTimeout(hideButton, 300);
-      });
-    }
+    const hideDelay = () => Math.max(0, Number(settings.hideDelayMs) || 0);
+    controls.addEventListener("mouseover", () => window.clearTimeout(hideTimer));
+    controls.addEventListener("mouseout", () => {
+      if (pinned) return;
+      hideTimer = window.setTimeout(hideButton, hideDelay());
+    });
     async function redrawShowing() {
       const targets2 = [...showing.values()].filter((target) => target.element.isConnected);
       if (!targets2.length) return;
@@ -5142,58 +6396,142 @@ ${OVERLAY_CSS}`;
     }
     function showSettings() {
       hideToast();
-      openSettings(onSaved);
+      openSettings({ onSaved, site: () => site, setSite: chooseSite });
     }
     function onSaved(saved) {
       settings = saved;
+      useLanguage(settings.language);
+      applySettings();
       applyButtonMode();
       void redrawShowing();
-      toast("Settings saved");
+      toast(t("toast.saved"));
     }
-    gear.addEventListener(
-      "click",
-      (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        showSettings();
-      },
-      true
-    );
-    more.addEventListener(
-      "click",
-      (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        if (isMenuOpen()) closeMenu();
-        else openActions();
-      },
-      true
-    );
-    button.addEventListener(
-      "click",
-      (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        if (swallowClick) {
-          swallowClick = false;
-          return;
+    const REPEATABLE = ["translate", "search", "ask", "area", "objects", "text", "copy"];
+    function mainButton() {
+      const last = getState().lastAction;
+      return settings.repeatLast && REPEATABLE.includes(last) ? last : settings.mainAction;
+    }
+    function question() {
+      return settings.rememberQuestion && getState().lastQuestion || settings.aiPrompt;
+    }
+    function runAction(id, target, origin, text2) {
+      if ((origin === "menu" || origin === "row") && REPEATABLE.includes(id)) {
+        const before = mainButton();
+        setState({ lastAction: id });
+        if (mainButton() !== before) buildControls();
+      }
+      switch (id) {
+        case "translate":
+          void translate(target);
+          break;
+        case "search":
+          searchPicture(target, { kind: "image" }, "visual", "");
+          break;
+        case "ask": {
+          const asked = (text2 ?? question()).trim();
+          if (text2 !== void 0 && asked) setState({ lastQuestion: asked });
+          searchPicture(target, { kind: "image" }, "ai", asked);
+          break;
         }
-        if (currentTarget) void translate(currentTarget);
-      },
-      true
-    );
-    button.addEventListener("contextmenu", (event) => {
+        case "area":
+          void selectArea(target);
+          break;
+        case "objects":
+          void showObjects(target);
+          break;
+        case "text":
+          void pickText(target);
+          break;
+        case "copy":
+          void copyAny(target);
+          break;
+        case "settings":
+          showSettings();
+          break;
+        case "menu":
+          openActions(target);
+          break;
+      }
+    }
+    function pressed(id, isMain, event) {
       event.preventDefault();
       event.stopPropagation();
-      if (!holding && !swallowClick) openActions();
-    });
+      if (isMain && swallowClick) {
+        swallowClick = false;
+        return;
+      }
+      if (id === "settings") return showSettings();
+      if (id === "menu") {
+        if (isMenuOpen()) closeMenu();
+        else openActions();
+        return void 0;
+      }
+      if (currentTarget) runAction(id, currentTarget, isMain ? "main" : "row");
+      return void 0;
+    }
+    function buildControls() {
+      endHold();
+      const main = mainButton();
+      const ids = rowOf(parseButtons(settings.buttons), main);
+      controls.textContent = "";
+      controls.dataset["corner"] = settings.buttonCorner;
+      controls.dataset["size"] = settings.buttonSize;
+      const idle = Math.min(100, Math.max(20, Number(settings.idleOpacity) || 100));
+      controls.style.setProperty("--lt-idle", String(idle / 100));
+      translateControl = null;
+      let menuFound = null;
+      for (const id of ids) {
+        const isMain = id === main;
+        const label = id === "translate" ? t("btn.translate") : id === "settings" ? t("btn.settings") : id === "menu" ? t("btn.more") : t(`act.${id}`);
+        const element = control(
+          isMain ? "lt-button" : id === "settings" ? "lt-gear" : id === "menu" ? "lt-more" : `lt-act-${id}`,
+          label,
+          // The spinner is a second icon rather than the first one turning:
+          // letters going round do not read as "working".
+          isMain ? icon(BUTTON_ICONS[id]) + icon("loader") : icon(BUTTON_ICONS[id], 16)
+        );
+        element.className = isMain ? "lt-ctl lt-main" : "lt-ctl";
+        element.dataset["action"] = id;
+        if (settings.buttonLabels) {
+          const words = document.createElement("span");
+          words.className = "lt-ctl-label";
+          words.textContent = t(`act.${id}`);
+          element.appendChild(words);
+          element.classList.add("lt-labelled");
+        }
+        element.addEventListener("click", (event) => pressed(id, isMain, event), true);
+        if (id === "translate") translateControl = element;
+        if (id === "menu") menuFound = element;
+        if (isMain) {
+          button2 = element;
+          element.addEventListener("pointerdown", startHold);
+          for (const type of ["pointerup", "pointercancel"]) element.addEventListener(type, endHold);
+          element.addEventListener("contextmenu", (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            const held = holding !== null || swallowClick;
+            window.clearTimeout(holdTimer);
+            if (!held) openActions();
+          });
+        }
+        controls.appendChild(element);
+      }
+      menuControl = menuFound ?? button2;
+      button2.classList.toggle("lt-busy", working > 0);
+      if (currentTarget) markTranslated(isTranslated(currentTarget.element));
+      if (controls.classList.contains("lt-on")) reposition();
+    }
+    function applySettings() {
+      buildControls();
+      bindKeys();
+    }
     document.addEventListener(
       "click",
       (event) => {
         const modifier = settings.hotkey;
         if (modifier === "none") return;
-        const pressed = modifier === "alt" && event.altKey || modifier === "ctrl" && event.ctrlKey || modifier === "shift" && event.shiftKey;
-        if (!pressed) return;
+        const pressed2 = modifier === "alt" && event.altKey || modifier === "ctrl" && event.ctrlKey || modifier === "shift" && event.shiftKey;
+        if (!pressed2) return;
         if (site === "off") return;
         const found = targetFromEvent(event, settings.minImageSize, isOurs);
         if (!found) return;
@@ -5237,18 +6575,15 @@ ${OVERLAY_CSS}`;
     async function copyFrom(kind, element = subject()) {
       const result = element ? results.get(element) : void 0;
       if (!result) {
-        toast("Translate an image first, then its text can be copied");
+        toast(t("toast.translateFirst"));
         return;
       }
       const text2 = kind === "translation" ? translationText(result) : ocrText(result);
-      const what = kind === "translation" ? "the translation" : "the original text";
       if (!text2) {
-        toast(`There is no text to copy from ${what}`);
+        toast(t("toast.nothingToCopy"));
         return;
       }
-      toast(
-        await copyText(text2) ? `Copied ${what} (${plural(text2.length, "character")})` : "The browser would not let the script use the clipboard"
-      );
+      await copied(text2, kind === "translation" ? "toast.copiedTranslation" : "toast.copiedOriginal");
     }
     const MAX_UPLOADS = 4;
     const uploads = /* @__PURE__ */ new Map();
@@ -5296,24 +6631,25 @@ ${OVERLAY_CSS}`;
     const onTouch = () => window.matchMedia(TOUCH_QUERY).matches;
     const prefersDark = () => window.matchMedia("(prefers-color-scheme: dark)").matches;
     const pageOptions = () => ({
-      uiLanguage: settings.targetLang,
-      dark: prefersDark()
+      uiLanguage: settings.searchLang || settings.targetLang,
+      dark: settings.searchTheme === "auto" ? prefersDark() : settings.searchTheme === "dark"
     });
+    const tabFor = (preopen) => prepareTab(preopen, { background: settings.backgroundTabs, waiting: t("toast.searching") });
     function deliver(tab, url) {
-      if (tab.go(url)) toast("Results opened in a new tab", 9e3, { href: url, label: "Open again" });
-      else if (framed) toast("The results are ready", 0, { href: url, label: "Open", copy: true });
-      else toast("The results are ready", 0, { href: url, label: "Open results" });
+      if (tab.go(url)) toast(t("toast.opened"), 9e3, { href: url, label: t("toast.openAgain") });
+      else if (framed) toast(t("toast.ready"), 0, { href: url, label: t("toast.open"), copy: true });
+      else toast(t("toast.ready"), 0, { href: url, label: t("toast.openResults") });
     }
     function searchPicture(target, pick, mode, text2, held) {
       if (!stillShows(target)) {
         closeTool();
-        toast(CHANGED);
+        toast(t("toast.changed"));
         return;
       }
-      const tab = prepareTab(!onTouch());
+      const tab = tabFor(!onTouch());
       setWorking(1);
-      button.classList.remove("lt-error");
-      toast(mode === "ai" ? "Asking Lens..." : "Searching with Lens...", 12e4);
+      button2.classList.remove("lt-error");
+      toast(mode === "ai" ? t("toast.asking") : t("toast.searching"), 12e4);
       void (async () => {
         const search = held ?? await sessionFor(target);
         let selection = pick;
@@ -5337,14 +6673,14 @@ ${OVERLAY_CSS}`;
         (error) => {
           tab.cancel();
           lastFailure = error.message;
-          button.classList.add("lt-error");
+          button2.classList.add("lt-error");
           toast(lensSaid(error), 5e3);
-          window.setTimeout(() => button.classList.remove("lt-error"), 3e3);
+          window.setTimeout(() => button2.classList.remove("lt-error"), 3e3);
         }
       ).finally(() => setWorking(-1));
     }
     function openNow(url) {
-      deliver(prepareTab(true), url);
+      deliver(tabFor(true), url);
     }
     function naturalSize(target) {
       const element = target.element;
@@ -5405,7 +6741,7 @@ ${OVERLAY_CSS}`;
     async function frameOf(target) {
       const natural = await naturalSize(target);
       if (!natural || !pictureRect(target, natural)) {
-        toast("This picture cannot be measured yet");
+        toast(t("toast.cannotMeasure"));
         return null;
       }
       return () => pictureRect(target, natural);
@@ -5415,7 +6751,7 @@ ${OVERLAY_CSS}`;
       toast(lensSaid(error), 5e3);
       return null;
     }
-    const lensSaid = (error) => error.message === CHANGED ? CHANGED : `Lens: ${error.message}`;
+    const lensSaid = (error) => error.message === CHANGED ? t("toast.changed") : t("toast.lensError", { message: error.message });
     async function selectArea(target) {
       const rect = await frameOf(target);
       if (!rect) return;
@@ -5445,21 +6781,19 @@ ${OVERLAY_CSS}`;
         rect,
         paragraphs: readText(target).then((paragraphs) => paragraphs, failed),
         onSearch: (text2) => openNow(textSearchUrl(text2, pageOptions())),
-        onCopy: (text2) => void copied(text2, "the selected text")
+        onCopy: (text2) => void copied(text2, "toast.copiedText")
       });
     }
-    async function copied(text2, what) {
-      toast(
-        await copyText(text2) ? `Copied ${what} (${plural(text2.length, "character")})` : "The browser would not let the script use the clipboard"
-      );
+    async function copied(text2, done) {
+      toast(await copyText(text2) ? t(done, { count: text2.length }) : t("toast.clipboardDenied"));
     }
     async function copyAny(target) {
       const result = results.get(target.element);
       const translated = result ? translationText(result) : "";
-      if (translated) return copied(translated, "the translation");
+      if (translated) return copied(translated, "toast.copiedTranslation");
       let text2 = result ? ocrText(result) : "";
       if (!text2) {
-        toast("Reading the text...", 12e4);
+        toast(t("toast.reading"), 12e4);
         try {
           text2 = (await readText(target)).map((paragraph) => paragraph.lines.map((line) => line.text.trim()).filter(Boolean).join("\n")).filter(Boolean).join("\n\n");
         } catch (error) {
@@ -5468,91 +6802,116 @@ ${OVERLAY_CSS}`;
         }
       }
       if (!text2) {
-        toast("Lens found no text in this image");
+        toast(t("toast.noText"));
         return void 0;
       }
-      return copied(text2, "the text");
+      return copied(text2, "toast.copiedText");
     }
-    function openActions() {
-      const target = currentTarget;
+    function openActions(target = currentTarget) {
       if (!target) return;
       closeTool();
       hideToast();
       const translated = isTranslated(target.element);
       const words = results.has(target.element);
       const pro = settings.uiMode === "pro";
-      const items = [
-        {
-          label: translated ? "Show the original" : "Translate this image",
-          icon: translated ? "undo" : "translate",
-          run: () => void translate(target)
-        },
-        {
-          label: "Search this image",
-          icon: "search",
-          run: () => searchPicture(target, { kind: "image" }, "visual", "")
-        },
-        {
-          label: "Ask AI about it",
-          icon: "sparkles",
-          run: () => {
-          },
-          field: {
-            value: settings.aiPrompt,
-            placeholder: "Ask about this picture (optional)",
-            sendLabel: "Ask",
-            submit: (text2) => searchPicture(target, { kind: "image" }, "ai", text2.trim())
-          }
-        }
-      ];
-      if (pro) {
-        items.push(
-          { label: "Select an area", icon: "area", divider: true, run: () => void selectArea(target) },
-          { label: "Detected objects", icon: "objects", run: () => void showObjects(target) },
-          { label: "Search selected text", icon: "text", run: () => void pickText(target) },
-          {
-            label: "Copy translation",
+      const items = [];
+      let lastKind = "";
+      const add = (kind, item) => {
+        items.push(lastKind && kind !== lastKind ? { ...item, divider: true } : item);
+        lastKind = kind;
+      };
+      const act = (id) => () => runAction(id, target, "menu");
+      for (const { id } of parseButtons(settings.buttons)) {
+        if (id === "translate") {
+          add("core", {
+            id,
+            label: translated ? t("menu.original") : t("menu.translate"),
+            icon: translated ? "undo" : "translate",
+            run: act(id)
+          });
+        } else if (id === "search") {
+          add("core", { id, label: t("menu.search"), icon: "search", run: act(id) });
+        } else if (id === "ask") {
+          add("core", {
+            id,
+            label: t("menu.ask"),
+            icon: "sparkles",
+            run: () => {
+            },
+            field: {
+              value: question(),
+              placeholder: t("menu.askPlaceholder"),
+              sendLabel: t("menu.askSend"),
+              submit: (text2) => runAction("ask", target, "menu", text2)
+            }
+          });
+        } else if (id === "area" && pro) {
+          add("tools", { id, label: t("menu.area"), icon: "area", run: act(id) });
+        } else if (id === "objects" && pro) {
+          add("tools", { id, label: t("menu.objects"), icon: "objects", run: act(id) });
+        } else if (id === "text" && pro) {
+          add("tools", { id, label: t("menu.text"), icon: "text", run: act(id) });
+        } else if (id === "copy" && pro) {
+          add("copy", {
+            id: "copyTranslation",
+            label: t("menu.copyTranslation"),
             icon: "copy",
-            divider: true,
             run: () => void copyFrom("translation", target.element),
             disabled: !words
-          },
-          {
-            label: "Copy original text",
+          });
+          add("copy", {
+            id: "copyOriginal",
+            label: t("menu.copyOriginal"),
             icon: "copy",
             run: () => void copyFrom("original", target.element),
             disabled: !words
-          },
-          { label: "Translate everything in view", icon: "images", run: () => void translateVisible() }
-        );
-      } else {
-        items.push({
-          label: translated ? "Copy translation" : "Copy text",
-          icon: "copy",
-          run: () => void copyAny(target)
+          });
+        } else if (id === "copy") {
+          add("copy", {
+            id,
+            label: translated ? t("menu.copyTranslation") : t("menu.copyText"),
+            icon: "copy",
+            run: act(id)
+          });
+        }
+      }
+      if (pro) {
+        add(lastKind === "copy" ? "copy" : "all", {
+          id: "all",
+          label: t("menu.all"),
+          icon: "images",
+          run: () => void translateVisible()
         });
       }
-      items.push({ label: "Settings", icon: "settings", divider: true, run: () => showSettings() });
-      const rect = more.getBoundingClientRect();
-      openMenu({ top: rect.bottom + 6, left: rect.right - 260 }, items, more);
+      add("settings", { id: "settings", label: t("menu.settings"), icon: "settings", run: () => showSettings() });
+      const rect = menuControl.getBoundingClientRect();
+      const onLeft = settings.buttonCorner === "tl" || settings.buttonCorner === "bl";
+      openMenu({ top: rect.bottom + 6, left: onLeft ? rect.left : rect.right - 260 }, items, menuControl);
     }
     const peek = (element, peeking) => peekCover(element, peeking) || peekOverlay(element, peeking);
-    const HOLD_MS = 350;
     let holdTimer = 0;
     let holding = null;
     let swallowClick = false;
     function startHold(event) {
-      if (event.button !== 0 || !currentTarget || !isTranslated(currentTarget.element)) return;
-      const element = currentTarget.element;
+      const action = settings.longPressAction;
+      if (event.button !== 0 || !currentTarget || action === "none") return;
+      const target = currentTarget;
+      const element = target.element;
+      if (action === "peek" && !isTranslated(element)) return;
       window.clearTimeout(holdTimer);
-      holdTimer = window.setTimeout(() => {
-        holding = element;
-        swallowClick = true;
-        peek(element, true);
-        button.classList.add("lt-peeking");
-      }, HOLD_MS);
+      holdTimer = window.setTimeout(
+        () => {
+          swallowClick = true;
+          if (action === "peek") {
+            holding = element;
+            peek(element, true);
+            button2.classList.add("lt-peeking");
+          } else runAction(action, target, "hold");
+        },
+        Math.min(2e3, Math.max(150, Number(settings.holdMs) || 350))
+      );
       try {
-        button.setPointerCapture(event.pointerId);
+        button2.setPointerCapture(event.pointerId);
       } catch {
       }
     }
@@ -5561,14 +6920,12 @@ ${OVERLAY_CSS}`;
       if (holding) {
         peek(holding, false);
         holding = null;
-        button.classList.remove("lt-peeking");
+        button2.classList.remove("lt-peeking");
       }
       window.setTimeout(() => {
         swallowClick = false;
       }, 0);
     }
-    button.addEventListener("pointerdown", startHold);
-    for (const type of ["pointerup", "pointercancel"]) button.addEventListener(type, endHold);
     const PEEK_CODES = {
       backquote: ["Backquote"],
       shift: ["ShiftLeft", "ShiftRight"],
@@ -5586,14 +6943,43 @@ ${OVERLAY_CSS}`;
       peekAllCovers(false);
       peekAllOverlays(false);
     }
+    let chords = [];
+    function pictureForKey() {
+      if (currentTarget?.element.isConnected) return currentTarget;
+      if (!watching) known = collect$1(settings.minImageSize);
+      return mostVisible()?.target ?? null;
+    }
+    function bindKeys() {
+      chords = [];
+      const bind = (raw, run) => {
+        const chord = parseChord(raw);
+        if (chord) chords.push([chord, run]);
+      };
+      const onPicture = (id) => () => {
+        const target = pictureForKey();
+        if (target) runAction(id, target, "key");
+        else toast(t("toast.noPicture"));
+      };
+      bind(settings.keyTranslateAll, () => void translateVisible());
+      bind(settings.keyTranslate, onPicture("translate"));
+      bind(settings.keySearch, onPicture("search"));
+      bind(settings.keyAsk, onPicture("ask"));
+      bind(settings.keyArea, onPicture("area"));
+      bind(settings.keyCopy, onPicture("copy"));
+      bind(settings.keyUndoAll, undoAll);
+    }
     document.addEventListener(
       "keydown",
       (event) => {
-        if (isTyping(event)) return;
-        if (settings.batchHotkey && event.altKey && event.shiftKey && !event.ctrlKey && !event.metaKey && event.code === "KeyT") {
-          event.preventDefault();
-          void translateVisible();
-          return;
+        if (isTyping(event) || isOurs(event.composedPath()[0] ?? null)) return;
+        if (site !== "off" && !event.repeat) {
+          const hit = chords.find(([chord]) => matchesChord(chord, event));
+          if (hit) {
+            event.preventDefault();
+            event.stopPropagation();
+            hit[1]();
+            return;
+          }
         }
         if (settings.peekKey === "off" || event.repeat || keyPeeking) return;
         if (!PEEK_CODES[settings.peekKey].includes(event.code)) return;
@@ -5613,53 +6999,38 @@ ${OVERLAY_CSS}`;
       true
     );
     window.addEventListener("blur", endKeyPeek);
-    const addCommand = (command) => registerCommand(command, !framed);
-    addCommand({
-      menuLabel: "Lens Translate: settings",
-      // The panel is where these are drawn, so it does not offer to open itself.
-      label: null,
-      run: () => showSettings()
+    const addCommand = (command2) => registerCommand(command2, !framed);
+    const command = (id, key, run, options = {}) => addCommand({
+      id,
+      menuLabel: `Lens Translate: ${t(key)}`,
+      // The panel is where these are drawn, so it does not offer what it makes redundant.
+      label: options.panel === false ? null : () => t(key),
+      ...options.essential ? { essential: true } : {},
+      run
     });
-    addCommand({
-      menuLabel: "Lens Translate: clear cache",
-      label: "Clear cache",
-      run: () => {
-        const memory = cacheStats();
-        clearCache();
-        void storedStats().then(({ entries: entries2, bytes: bytes2 }) => {
-          void clearStored();
-          const total2 = memory.entries + entries2;
-          toast(
-            total2 ? `Cleared ${total2} cached result${total2 === 1 ? "" : "s"} (${((memory.bytes + bytes2) / 1048576).toFixed(1)} MB)` : "The cache was already empty"
-          );
-        });
-      }
-    });
-    addCommand({
-      menuLabel: "Lens Translate: undo all on this page",
-      label: "Undo all on this page",
-      essential: true,
-      run: () => {
-        showing.clear();
-        const restored = uncoverAll() + clearAllOverlays();
-        toast(restored ? `Restored ${restored} image${restored === 1 ? "" : "s"}` : "Nothing to restore");
-      }
-    });
-    addCommand({
-      menuLabel: "Lens Translate: translate all visible images",
-      label: "Translate all in view",
-      run: () => void translateVisible()
-    });
-    addCommand({
-      menuLabel: "Lens Translate: copy translation",
-      label: null,
-      run: () => void copyFrom("translation")
-    });
-    addCommand({
-      menuLabel: "Lens Translate: copy original text",
-      label: null,
-      run: () => void copyFrom("original")
-    });
+    function clearEverything() {
+      const memory = cacheStats();
+      clearCache();
+      void storedStats().then(({ entries: entries2, bytes: bytes2 }) => {
+        void clearStored();
+        const total2 = memory.entries + entries2;
+        toast(
+          total2 ? t("toast.cleared", { count: total2, size: ((memory.bytes + bytes2) / 1048576).toFixed(1) }) : t("toast.cacheEmpty")
+        );
+      });
+    }
+    function undoAll() {
+      showing.clear();
+      const restored = uncoverAll() + clearAllOverlays();
+      markTranslated(false);
+      toast(restored ? t("toast.restored", { count: restored }) : t("toast.nothingToRestore"));
+    }
+    command("settings", "cmd.settings", () => showSettings(), { panel: false });
+    command("clearCache", "cmd.clearCache", clearEverything);
+    command("undoAll", "cmd.undoAll", undoAll, { essential: true });
+    command("translateAll", "cmd.translateAll", () => void translateVisible());
+    command("copyTranslation", "cmd.copyTranslation", () => void copyFrom("translation"), { panel: false });
+    command("copyOriginal", "cmd.copyOriginal", () => void copyFrom("original"), { panel: false });
     function chooseSite(next) {
       site = next;
       setSiteMode(next);
@@ -5673,48 +7044,30 @@ ${OVERLAY_CSS}`;
       if (next === "auto" && !started) refresh();
       const host2 = hostOf();
       toast(
-        next === "off" ? `Lens Translate is off on ${host2}` : next === "auto" ? `Images on ${host2} will be translated as they come into view` : `${host2} is back to the default`
+        next === "off" ? t("toast.siteNowOff", { host: host2 }) : next === "auto" ? t("toast.siteNowAuto", { host: host2 }) : t("toast.siteNowDefault", { host: host2 })
       );
     }
-    addCommand({
-      menuLabel: "Lens Translate: toggle on/off for this site",
-      label: "Toggle for this site",
-      essential: true,
-      run: () => chooseSite(site === "off" ? "default" : "off")
+    command("toggleSite", "cmd.toggleSite", () => chooseSite(site === "off" ? "default" : "off"), {
+      essential: true
     });
-    addCommand({
-      menuLabel: "Lens Translate: toggle auto-translate for this site",
-      label: "Toggle auto-translate here",
-      run: () => chooseSite(site === "auto" ? "default" : "auto")
-    });
-    if (!framed) {
-      addCommand({
-        menuLabel: "Lens Translate: diagnostics",
-        label: "Run diagnostics",
-        essential: true,
-        run: openDiagnostics
-      });
-    }
-    addCommand({
-      menuLabel: "Lens Translate: toggle on/off",
-      label: "Toggle on/off",
-      run: () => {
-        settings = saveSettings({ enabled: !settings.enabled });
-        if (!settings.enabled) {
-          showing.clear();
-          uncoverAll();
-          clearAllOverlays();
-          hideButton();
-        }
-        toast(settings.enabled ? "Translation enabled" : "Translation disabled");
+    command("toggleAuto", "cmd.toggleAuto", () => chooseSite(site === "auto" ? "default" : "auto"));
+    if (!framed) command("diagnostics", "cmd.diagnostics", openDiagnostics, { essential: true });
+    command("toggle", "cmd.toggle", () => {
+      settings = saveSettings({ enabled: !settings.enabled });
+      if (!settings.enabled) {
+        showing.clear();
+        uncoverAll();
+        clearAllOverlays();
+        hideButton();
       }
+      toast(settings.enabled ? t("toast.enabled") : t("toast.disabled"));
     });
     const DEBUG_HASH = "#lens-debug";
     function openDiagnostics() {
-      openReport("Probing...");
+      openReport(t("report.probing"));
       void diagnose({ pinned }).then(
         openReport,
-        (error) => openReport(`Diagnostics failed: ${error.message}`)
+        (error) => openReport(t("report.failed", { message: error.message }))
       );
     }
     function checkDebugHash() {
@@ -5725,14 +7078,19 @@ ${OVERLAY_CSS}`;
       window.addEventListener("hashchange", checkDebugHash);
       checkDebugHash();
     }
+    applySettings();
+    onLocaleChange(buildControls);
     applyButtonMode();
     if (hovered) showButton(hovered);
-    void preloadStored([...SETTINGS_KEYS, SITES_KEY]).then((arrived) => {
+    void preloadStored([...SETTINGS_KEYS, SITES_KEY, ...LOCALE_KEYS, STATE_KEY]).then((arrived) => {
       if (!arrived) return;
       settings = reloadSettings();
       reloadSites();
+      reloadState();
       site = siteMode();
+      useLanguage(settings.language);
       applyPopupOpacity(settings.popupOpacity);
+      applySettings();
       applyButtonMode();
     });
     window.matchMedia(TOUCH_QUERY).addEventListener("change", applyButtonMode);
@@ -5825,7 +7183,7 @@ ${OVERLAY_CSS}`;
     start({ framed: false, hovered: null });
   } else {
     void (async () => {
-      if (await preloadStored([...SETTINGS_KEYS, SITES_KEY])) {
+      if (await preloadStored([...SETTINGS_KEYS, SITES_KEY, ...LOCALE_KEYS])) {
         reloadSettings();
         reloadSites();
       }

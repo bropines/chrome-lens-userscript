@@ -214,7 +214,14 @@ const SEPARATOR = String.fromCharCode(0);
  */
 const DRAWN = Object.keys({
   fontFamily: 0,
+  fontWeight: 0,
+  textColor: 0,
+  outlineColor: 0,
+  fillColor: 0,
   drawBackground: 0,
+  patchPadding: 0,
+  maxCanvasSide: 0,
+  mangaMinPx: 0,
   verticalText: 0,
   minReadablePx: 0,
   supersample: 0,

@@ -25,6 +25,7 @@ bun run gen        # proto/ -> .protogen -> src/gen/fields.ts  (after updating p
 bun run typecheck  # tsc --noEmit, strict (src and test)
 bun run check      # layering: the engine stays clean, the host stays in gm.ts
 bun test           # unit tests, no browser; CI runs them before the build
+bun run locales:check  # locales/*.json against the English keys (the tests run the same rules)
 bun run build      # typecheck, check, then dist/lens-translate.user.js + .meta.js
 bun run dev        # live-reload userscript for development
 ```
@@ -46,6 +47,9 @@ proto/                  Chromium's Lens .proto files, copied verbatim
 scripts/gen-fields.ts   descriptors -> typed field-number table (build time only)
 scripts/check-layers.ts the engine may not import the application; the host
                         is only named in gm.ts; no dynamic import()
+scripts/locales-check.ts every locales/*.json has exactly the English keys
+locales/                the interface in other languages - downloaded at run
+                        time from this repo, never bundled
 test/                   bun test; setup.ts stubs the page with a predictable ruler
 src/
   engine.ts             the engine's public entry - everything below the line
@@ -57,7 +61,12 @@ src/
   transport.ts          the privileged request the engine cannot make itself
   gm.ts                 every difference between userscript hosts, in one place
   detect.ts             what counts as a picture, and where they are
-  settings.ts           GM-backed store, defaults, and the settings field list
+  settings.ts           GM-backed store, defaults, the field schema (which tab,
+                        which type, which range), export and import
+  state.ts              the last action and the last question, under their own key
+  version.ts            the version, as a build-time constant
+  i18n/                 en.ts is every string by key; locale.ts is the pure part
+                        (validate, pick, fetch); index.ts is t() and the loading
   sites.ts              per-hostname rules: default, off, auto-translate
   languages.ts          language codes; labels come from Intl.DisplayNames
   cache.ts              LRU over Lens responses and renderings, one byte budget
@@ -73,7 +82,9 @@ src/
     cover.ts            lays that bitmap over the image as a sibling
     watch.ts            notices that a covered element is no longer that picture
     overlay.ts          the alternative DOM-lines renderer
-  ui/                   shadow root, settings panel, menu, styles
+  ui/                   shadow root, settings window, menu, styles;
+                        buttons.ts and shortcuts.ts are the row and the key
+                        chords as plain data
     geometry.ts         pure: object-fit rect, drag -> region, keyboard inset
     tools.ts            the layer over a picture: area, objects, words
     icons.ts            stroke icons as path data
@@ -214,6 +225,62 @@ direction and line-height still reach in through the host, so the host carries
 `all: initial !important` — and then has to restate the font, because `initial`
 for `font-family` is the browser's serif default and an inline `!important`
 declaration outranks any `:host` rule.
+
+### Every word is a key, and the other languages are not in the bundle
+
+`src/i18n/en.ts` is the one place a user-visible string is written. Everything
+above the line calls `t('some.key', { name })`; the engine does not, cannot
+(the layering check lists `src/i18n/` as the application), and its error
+messages stay English - they arrive inside `Lens: {message}`.
+
+- **Other languages are downloaded, not bundled.** Ten locales are ~250 kB of
+  strings that would be parsed on every page load by people who read one of
+  them. The script fetches `locales/<code>.json` from
+  `raw.githubusercontent.com` at `v<version>`, falls back to `main` when the
+  tag answers 404 (a beta has no tag), and keeps the result in host storage
+  under `{ version, code }`. English, or *Auto* in an English browser, makes
+  no request at all - which the verification harness depends on: it counts
+  requests, so it pins `navigator.languages`.
+- **Through `gmTransport.get`, not `fetch`.** A page's CSP decides what its own
+  `fetch` may reach.
+- **The version is a build-time constant** (`src/version.ts`, `define` in
+  vite.config.ts), not `GM_info`: a tag is fetched by that number and
+  "unknown" is not a tag.
+- **A locale is somebody else's file by the time it arrives.** Unknown keys are
+  dropped, a string whose `{placeholders}` differ from English falls back to
+  English, and strings go in as `textContent`, never markup. Do not build UI
+  with `innerHTML` from a translated string.
+- **No plurals.** One key cannot hold the three or four forms Russian needs, and
+  the key sets must be identical across files, so counts are written as a
+  figure after a label ("Images restored: {count}").
+- **Nothing waits for a locale.** The UI is English until it lands; then
+  `onLocaleChange` listeners redraw - the control row, and the settings window
+  where it stands, on the same tab with the same unsaved values.
+- **The settings schema carries no words.** A field's label is
+  `set.<key>.label`, its hint `set.<key>.hint`, a choice
+  `set.<key>.opt.<value>`; `test/settings.test.ts` walks `FIELDS` and asks the
+  dictionary for each, and `test/i18n.test.ts` holds every locale to the
+  English key set. Add a setting and both fail until its words exist; then run
+  `bun run locales:check` and translate the new keys in all ten files.
+
+### The settings window draws every field at once
+
+A tab is only which pane is shown. That is what lets the search box look across
+all of them and `collect` read the whole form without knowing which tab was
+open - and it is why `[data-key]` is on exactly one element per setting, the
+one whose `.value` (or `.checked`) is the value. A compound field (the button
+list, a shortcut, a colour) keeps its value in one input and treats the rest as
+a way of editing it.
+
+One function decides what a setting may hold: `sanitize` in settings.ts. The
+form goes through it (`coerce`) and so does an imported file, so the two cannot
+disagree about a range. Import, reset and "reset all" write into the *form*;
+only Save writes the store.
+
+The control row is rebuilt from settings (`buildControls` in main.ts), so
+nothing may hold a reference to a control across a save: listeners are attached
+at build time or on `#lt-controls` itself. The main button is always first,
+in the corner, because it arrives alone a beat before the rest.
 
 ### Reading image pixels: three ways in, cheapest first
 
@@ -810,7 +877,9 @@ width `2 * pad`, then fill.
 normalisation and the cache budget, the layout maths (`test/layout.test.ts`,
 partly ported from `chrome-lens-py/tests/test_units.py` - and the rotated
 punctuation set is compared with the Python one when the sibling checkout is
-there), background geometry, the IndexedDB store, `gm.ts` and the per-site rules.
+there), background geometry, the IndexedDB store, `gm.ts`, the per-site rules,
+the settings schema and import (`test/settings.test.ts`), the button list and
+key chords (`test/controls.test.ts`) and the locales (`test/i18n.test.ts`).
 
 - `test/setup.ts` stands in for the page with a ruler anyone can do in their
   head (a Latin glyph is half an em, a CJK one a full em, the font box one em

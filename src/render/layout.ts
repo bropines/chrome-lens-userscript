@@ -33,6 +33,17 @@ function measurer(): CanvasRenderingContext2D | null {
   return measureCtx;
 }
 
+/**
+ * A canvas `font` value.
+ *
+ * The regular weight is left out rather than written as 400, so the string -
+ * and with it every measurement - is the one this drew with before there was
+ * a weight to choose.
+ */
+export function fontOf(px: number, family: string, weight = 400): string {
+  return weight === 400 ? `${px}px ${family}` : `${weight} ${px}px ${family}`;
+}
+
 const baseLang = (tag: string): string => tag.split('-')[0]?.toLowerCase() ?? '';
 
 /**
@@ -48,7 +59,8 @@ export function fitFontSize(
   boxWidth: number,
   boxHeight: number,
   fontFamily: string,
-  maxSize = MAX_FONT_SIZE
+  maxSize = MAX_FONT_SIZE,
+  fontWeight = 400
 ): number {
   const ctx = measurer();
   if (!ctx) return MIN_FONT_SIZE;
@@ -56,7 +68,7 @@ export function fitFontSize(
   let high = maxSize;
   while (low <= high) {
     const mid = (low + high) >> 1;
-    ctx.font = `${mid}px ${fontFamily}`;
+    ctx.font = fontOf(mid, fontFamily, fontWeight);
     const metrics = ctx.measureText(str);
     const height = metrics.fontBoundingBoxAscent + metrics.fontBoundingBoxDescent;
     if (metrics.width >= boxWidth || height >= boxHeight) high = mid - 1;

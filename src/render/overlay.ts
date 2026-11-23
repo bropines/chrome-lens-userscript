@@ -213,6 +213,8 @@ export function renderTranslation(
   options: {
     /** The overlay was removed because the picture changed, not because it was asked to be. */
     onGone?: () => void;
+    /** 0..1; how much of the original shows through the whole layer. */
+    opacity?: number;
   } = {}
 ): number {
   clearOverlay(img);
@@ -225,6 +227,7 @@ export function renderTranslation(
   const layer = document.createElement('div');
   layer.className = 'lt-layer';
   placeLayer(layer, img);
+  if (options.opacity !== undefined && options.opacity < 1) layer.style.opacity = String(options.opacity);
   root.append(layer);
 
   const objectUrls: string[] = [];
@@ -271,8 +274,16 @@ export function renderTranslation(
 
       const boxW = geometry.w * rect.width;
       const boxH = geometry.h * rect.height;
-      const size = fitFontSize(str, vertical ? boxH : boxW, vertical ? boxW : boxH, fontFamily);
-      const bgColor = argbToCss(line.bgColor);
+      const size = fitFontSize(
+        str,
+        vertical ? boxH : boxW,
+        vertical ? boxW : boxH,
+        fontFamily,
+        undefined,
+        settings.fontWeight
+      );
+      const bgColor = settings.fillColor || argbToCss(line.bgColor);
+      const outlineColor = settings.outlineColor || argbToCss(line.bgColor);
       const outline = size * OUTLINE_RATIO * settings.outlineScale;
 
       // Without a patch the background must be opaque, and Chromium adds a few
@@ -288,7 +299,8 @@ export function renderTranslation(
         `height:calc(${pct(geometry.h)} + ${padY * 2}px)`,
         `left:calc(${pct(geometry.cx - geometry.w / 2)} - ${padX}px)`,
         `top:calc(${pct(geometry.cy - geometry.h / 2)} - ${padY}px)`,
-        `color:${argbToCss(line.textColor)}`,
+        `color:${settings.textColor || argbToCss(line.textColor)}`,
+        settings.fontWeight === 400 ? '' : `font-weight:${settings.fontWeight}`,
         `background-color:${patch ? 'transparent' : bgColor}`,
         `font-size:${size}px`,
         `font-family:${fontFamily}`,
@@ -301,7 +313,7 @@ export function renderTranslation(
         // Eight directions rather than Chromium's four: the diagonals alone
         // separate into distinct copies once the offset grows past a pixel or
         // two, and this renderer has no stroke to fall back on.
-        patch ? `text-shadow:${textShadow(outline, bgColor)}` : '',
+        patch ? `text-shadow:${textShadow(outline, outlineColor)}` : '',
       ]
         .filter(Boolean)
         .join(';');

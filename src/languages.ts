@@ -6,6 +6,8 @@
  * translation table.
  */
 
+import { currentLocale } from './i18n/index.js';
+
 export const LANGUAGES: readonly string[] = [
   'af', 'ar', 'az', 'be', 'bg', 'bn', 'bs', 'ca', 'cs', 'cy', 'da', 'de', 'el',
   'en', 'eo', 'es', 'et', 'eu', 'fa', 'fi', 'fil', 'fr', 'ga', 'gl', 'gu', 'he',
@@ -16,11 +18,19 @@ export const LANGUAGES: readonly string[] = [
 ];
 
 let displayNames: Intl.DisplayNames | null = null;
+let namedIn = '';
 
+/**
+ * Names in the interface's language first, so the list reads like the rest of
+ * the window; the browser's own is next, for a locale that has not arrived.
+ */
 function labeller(): Intl.DisplayNames | null {
-  if (displayNames) return displayNames;
+  const locale = currentLocale();
+  if (displayNames && namedIn === locale) return displayNames;
+  namedIn = locale;
   try {
-    displayNames = new Intl.DisplayNames([navigator.language, 'en'], { type: 'language' });
+    const wanted = locale === 'en' ? [navigator.language, 'en'] : [locale, navigator.language, 'en'];
+    displayNames = new Intl.DisplayNames(wanted, { type: 'language' });
   } catch {
     displayNames = null;
   }

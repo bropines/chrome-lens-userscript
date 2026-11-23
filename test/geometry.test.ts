@@ -12,6 +12,8 @@ import {
   keyboardInset,
   objectsStillValid,
   pickables,
+  placeRow,
+  wrapWidth,
 } from '../src/ui/geometry.js';
 import type { DetectedObject, Geometry } from '../src/types.js';
 
@@ -250,5 +252,65 @@ describe('whether object ids still name what they named', () => {
 
   test('a session reopened since replaced the list, so the old ids are stale even though it is fresh', () => {
     expect(objectsStillValid({ objects: [...objects], fresh: true }, objects)).toBe(false);
+  });
+});
+
+describe('the row of controls on a small screen', () => {
+  const phone = { left: 0, top: 0, width: 375, height: 812 };
+  const nine = Array.from({ length: 9 }, () => 44);
+
+  test('a row that fits is one line, as wide as its controls', () => {
+    expect(wrapWidth([32, 32, 32], 4, 1000)).toBe(104);
+    expect(wrapWidth([44, 0, 44], 6, 1000)).toBe(94);
+  });
+
+  test('nine 44px buttons wrap to what a 375px phone can hold', () => {
+    // 444px laid end to end; seven to a line is 344, eight would be 394.
+    const width = wrapWidth(nine, 6, 375 - 8);
+    expect(width).toBe(344);
+    const at = placeRow('tr', { left: 0, top: 100, width: 375, height: 300 }, { width, height: 94 }, phone, 4, 6);
+    expect(at.x).toBeGreaterThanOrEqual(4);
+    expect(at.x + width).toBeLessThanOrEqual(371);
+    // Still hung from the corner: its right edge is the picture's, less the inset.
+    expect(at.x + width).toBe(369);
+    expect(at.y).toBe(106);
+  });
+
+  test('a control wider than the screen gets a line to itself', () => {
+    expect(wrapWidth([44, 500, 44], 6, 300)).toBe(500);
+  });
+
+  test('hung from each corner of a picture that is on screen, nothing moves', () => {
+    const pic = { left: 100, top: 100, width: 200, height: 200 };
+    const row = { width: 80, height: 32 };
+    expect(placeRow('tl', pic, row, phone, 4, 6)).toEqual({ x: 106, y: 106 });
+    expect(placeRow('tr', pic, row, phone, 4, 6)).toEqual({ x: 214, y: 106 });
+    expect(placeRow('bl', pic, row, phone, 4, 6)).toEqual({ x: 106, y: 262 });
+    expect(placeRow('br', pic, row, phone, 4, 6)).toEqual({ x: 214, y: 262 });
+  });
+
+  test('a picture running off the screen keeps the row on it', () => {
+    const row = { width: 150, height: 32 };
+    // A narrow picture at the left edge: a right-corner row would start at -94.
+    expect(placeRow('tr', { left: 0, top: -50, width: 50, height: 900 }, row, phone, 4, 6)).toEqual({ x: 4, y: 4 });
+    // Off the right and the bottom.
+    expect(placeRow('bl', { left: 300, top: 600, width: 400, height: 400 }, row, phone, 4, 6)).toEqual({
+      x: 221,
+      y: 776,
+    });
+  });
+
+  test('a row bigger than the screen keeps the end the main control is on', () => {
+    const huge = { width: 500, height: 32 };
+    const pic = { left: 0, top: 0, width: 375, height: 400 };
+    expect(placeRow('tl', pic, huge, phone, 4, 6).x).toBe(4);
+    expect(placeRow('tr', pic, huge, phone, 4, 6).x + huge.width).toBe(371);
+  });
+
+  test('the visible viewport is the bound, not the page: a pinch-zoomed window', () => {
+    const view = { left: 200, top: 300, width: 180, height: 300 };
+    const at = placeRow('tr', { left: 0, top: 0, width: 375, height: 812 }, { width: 94, height: 44 }, view, 4, 6);
+    // Its corner is inside the window across; down, it is above it and comes in.
+    expect(at).toEqual({ x: 275, y: 304 });
   });
 });

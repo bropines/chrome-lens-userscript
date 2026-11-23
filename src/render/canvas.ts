@@ -9,6 +9,7 @@ import {
   fitFontSize,
   fitInside,
   fitTextBlock,
+  fontOf,
   isRtl,
   justification,
   rectOf,
@@ -42,6 +43,7 @@ interface DrawContext {
   width: number;
   height: number;
   fontFamily: string;
+  fontWeight: number;
   /**
    * Smallest font size, in canvas pixels, that will still be readable once the
    * page scales this canvas down to its displayed size. Zero disables the floor.
@@ -169,7 +171,7 @@ function drawReflowedParagraph(
   const geometry = block.geometry;
   if (!geometry || geometry.w <= 0 || geometry.h <= 0) return;
 
-  const { ctx, width, height, fontFamily } = draw;
+  const { ctx, width, height, fontFamily, fontWeight } = draw;
   // The detected box hugs the glyphs. A speech bubble is round and has room
   // around them, so manga mode lays out wider than the box and lets the text
   // use it - otherwise a bubble's worth of Russian wraps into a thin column.
@@ -208,7 +210,7 @@ function drawReflowedParagraph(
   const perCharacter = wrapsPerCharacter(block);
   const measure = (candidate: string): number => ctx.measureText(candidate).width;
   const setFont = (px: number): void => {
-    ctx.font = `${px}px ${fontFamily}`;
+    ctx.font = fontOf(px, fontFamily, fontWeight);
   };
 
   const { size } = fitTextBlock(
@@ -257,7 +259,7 @@ function drawReflowedParagraph(
   ctx.textAlign = 'left';
   ctx.textBaseline = 'top';
 
-  const fill = argbToCss(style.textColor);
+  const fill = settings.textColor || argbToCss(style.textColor);
   // Reflowed text had no outline at all, which is why it sat unprotected on top
   // of whatever the inpainting left behind. Same four-offset shadow Chromium
   // uses per line.
@@ -265,7 +267,7 @@ function drawReflowedParagraph(
     0,
     Math.round(fontSize * OUTLINE_RATIO * 2 * settings.outlineScale)
   );
-  const outlineColor = argbToCss(style.bgColor);
+  const outlineColor = settings.outlineColor || argbToCss(style.bgColor);
   const justify = justification(block.alignment, isRtl(block), settings.textAlign);
 
   let y = -Math.min(boxH, lines.length * lineHeight) / 2;
@@ -309,7 +311,7 @@ function eraseTextArea(draw: DrawContext, block: TranslationBlock, settings: Ren
 
   // Padding in line heights, so it scales with the text rather than the image.
   const pad = Number.isFinite(thinnest) ? thinnest * settings.hullPadding : 0;
-  fillHull(ctx, convexHull(points), argbToCss(style.bgColor), pad);
+  fillHull(ctx, convexHull(points), settings.fillColor || argbToCss(style.bgColor), pad);
 }
 
 /**
@@ -370,7 +372,8 @@ async function drawLine(
   const geometry = line.geometry;
   if (!geometry || geometry.w <= 0 || geometry.h <= 0) return;
 
-  const { ctx, width, height, fontFamily } = draw;
+  const { ctx, width, height, fontFamily, fontWeight } = draw;
+  const flat = settings.fillColor || argbToCss(line.bgColor);
   const boxW = geometry.w * width;
   const boxH = geometry.h * height;
   const cx = geometry.cx * width;
@@ -391,19 +394,22 @@ async function drawLine(
     // 0.05 where a horizontal one gets 0.41, and the formula as written yields a
     // sane patch. Deriving the padding from the thickness instead under-covers
     // the text by roughly sevenfold.
-    const padW = patch.hPad * boxH;
-    const padH = patch.vPad * boxH;
+    //
+    // `patchPadding` scales the result and is 1 unless someone asked: the
+    // formula above is the server's contract and stays as written.
+    const padW = patch.hPad * boxH * settings.patchPadding;
+    const padH = patch.vPad * boxH * settings.patchPadding;
     try {
       const bitmap = await createImageBitmap(new Blob([patch.bytes], { type: 'image/webp' }));
       ctx.drawImage(bitmap, -(boxW + padW) / 2, -(boxH + padH) / 2, boxW + padW, boxH + padH);
       bitmap.close();
     } catch {
       // Fall back to a flat fill if the patch will not decode.
-      ctx.fillStyle = argbToCss(line.bgColor);
+      ctx.fillStyle = flat;
       ctx.fillRect(-boxW / 2, -boxH / 2, boxW, boxH);
     }
   } else if (settings.drawBackground && !skipBackground) {
-    ctx.fillStyle = argbToCss(line.bgColor);
+    ctx.fillStyle = flat;
     ctx.fillRect(-boxW / 2, -boxH / 2, boxW, boxH);
   }
 
@@ -415,21 +421,22 @@ async function drawLine(
       vertical ? boxH : boxW,
       vertical ? boxW : boxH,
       fontFamily,
-      draw.maxFontPx
+      draw.maxFontPx,
+      fontWeight
     );
     // Lens sizes text to the original line box, so fine print on a large image
     // comes back at a few pixels once the page scales the image down. Raising
     // it past the box is the only way to make it legible; lines can then
     // overlap, which is why the floor is a setting.
     const size = Math.max(fitted, draw.minFontPx);
-    ctx.font = `${size}px ${fontFamily}`;
+    ctx.font = fontOf(size, fontFamily, fontWeight);
     ctx.direction = isRtl(block) ? 'rtl' : 'ltr';
 
-    const fill = argbToCss(line.textColor);
+    const fill = settings.textColor || argbToCss(line.textColor);
     const outline = patch
       ? Math.max(1, Math.round(size * OUTLINE_RATIO * settings.outlineScale))
       : 0;
-    const outlineColor = patch ? argbToCss(line.bgColor) : null;
+    const outlineColor = patch ? settings.outlineColor || argbToCss(line.bgColor) : null;
 
     // When the readable-size floor pushes the font past its box, the text needs
     // room the box does not have. Sizing that room by the *ratio* is what
@@ -445,7 +452,7 @@ async function drawLine(
     // original, which has not moved.
     nudgeInside(draw, { w: drawW, h: drawH }, { cx, cy, angle: geometry.angle, rtl: isRtl(block) });
     if (enlarged && settings.drawBackground && !skipBackground) {
-      ctx.fillStyle = argbToCss(line.bgColor);
+      ctx.fillStyle = flat;
       ctx.fillRect(-drawW / 2, -drawH / 2, drawW, drawH);
     }
 
@@ -493,7 +500,7 @@ export async function renderToBlob(
   // size. Capped so a large photo does not turn into a huge bitmap.
   const scale = Math.min(
     Math.max(1, Math.round(settings.supersample)),
-    Math.max(1, Math.floor(8000 / Math.max(naturalWidth, naturalHeight)))
+    Math.max(1, Math.floor(settings.maxCanvasSide / Math.max(naturalWidth, naturalHeight)))
   );
   const width = naturalWidth * scale;
   const height = naturalHeight * scale;
@@ -512,13 +519,14 @@ export async function renderToBlob(
   const canvasPerCssPx = width / Math.max(1, displayedWidth);
   // Manga is read at a glance; a floor that is fine for a shop sign is not.
   const floorCssPx = settings.mangaMode
-    ? Math.max(settings.minReadablePx, 14)
+    ? Math.max(settings.minReadablePx, settings.mangaMinPx)
     : settings.minReadablePx;
   const draw: DrawContext = {
     ctx,
     width,
     height,
     fontFamily,
+    fontWeight: settings.fontWeight,
     minFontPx: floorCssPx > 0 ? floorCssPx * canvasPerCssPx : 0,
     maxFontPx: MAX_FONT_SIZE * scale,
   };

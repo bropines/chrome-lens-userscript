@@ -27,6 +27,8 @@ export interface MenuField {
 }
 
 export interface MenuItem {
+  /** Which action this is, for a test or a stylesheet to find it by. */
+  id?: string;
   label: string;
   icon?: IconName;
   /** Not called for an item with a `field`; that one submits instead. */
@@ -69,6 +71,7 @@ function buildItem(item: MenuItem): HTMLElement {
   entry.type = 'button';
   entry.className = 'lt-menu-item';
   entry.setAttribute('role', 'menuitem');
+  if (item.id) entry.dataset['item'] = item.id;
   entry.innerHTML = item.icon ? icon(item.icon) : '<span class="lt-icon"></span>';
   const label = document.createElement('span');
   label.textContent = item.label;

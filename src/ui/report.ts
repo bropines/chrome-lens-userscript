@@ -1,3 +1,5 @@
+import { t } from '../i18n/index.js';
+import type { Key } from '../i18n/index.js';
 import { icon } from './icons.js';
 import { uiRoot } from './root.js';
 
@@ -39,19 +41,26 @@ export function openReport(text: string): void {
   const backdrop = document.createElement('div');
   backdrop.className = 'lt-panel-backdrop';
   backdrop.innerHTML = `
-    <div class="lt-panel lt-panel-report" role="dialog" aria-label="Lens Translate diagnostics">
+    <div class="lt-panel lt-panel-report" role="dialog">
       <header class="lt-panel-head">
-        <strong>Diagnostics</strong>
-        <button class="lt-x" type="button" aria-label="Close" data-act="close">${icon('close')}</button>
+        <strong data-t="report.title"></strong>
+        <button class="lt-x" type="button" data-act="close">${icon('close')}</button>
       </header>
       <pre class="lt-report"></pre>
       <footer class="lt-panel-foot">
-        <button class="lt-btn lt-ghost" type="button" data-act="settings">Settings</button>
+        <button class="lt-btn lt-ghost" type="button" data-act="settings" data-t="report.settings"></button>
         <span class="lt-spacer"></span>
-        <button class="lt-btn lt-ghost" type="button" data-act="copy">Copy</button>
-        <button class="lt-btn lt-primary" type="button" data-act="close">Close</button>
+        <button class="lt-btn lt-ghost" type="button" data-act="copy" data-t="report.copy"></button>
+        <button class="lt-btn lt-primary" type="button" data-act="close" data-t="report.close"></button>
       </footer>
     </div>`;
+  // Words go in as text, never as markup: a translation is a file from the
+  // network, and nothing in it is allowed to be an element.
+  backdrop.querySelector('.lt-panel')?.setAttribute('aria-label', t('report.aria'));
+  backdrop.querySelector('.lt-x')?.setAttribute('aria-label', t('report.close'));
+  for (const element of backdrop.querySelectorAll<HTMLElement>('[data-t]')) {
+    element.textContent = t(element.dataset['t'] as Key);
+  }
   panel = backdrop;
   body = backdrop.querySelector<HTMLPreElement>('.lt-report');
   if (body) body.textContent = text;
@@ -75,8 +84,8 @@ export function openReport(text: string): void {
       // not have; a selection is something the user can always act on.
       void navigator.clipboard?.writeText(report).then(
         () => {
-          target.textContent = 'Copied';
-          window.setTimeout(() => (target.textContent = 'Copy'), 1500);
+          target.textContent = t('report.copied');
+          window.setTimeout(() => (target.textContent = t('report.copy')), 1500);
         },
         () => {
           const range = document.createRange();
@@ -84,7 +93,7 @@ export function openReport(text: string): void {
           const selection = window.getSelection();
           selection?.removeAllRanges();
           selection?.addRange(range);
-          target.textContent = 'Selected - copy it';
+          target.textContent = t('report.selected');
         }
       );
     }

@@ -53,6 +53,9 @@ export function siteMode(host: string = hostOf()): SiteMode {
   return load()[host] ?? 'default';
 }
 
+/** Every site somebody chose for, for a list of them. A copy: the rules are not the caller's to edit. */
+export const siteRules = (): Record<string, SiteMode> => ({ ...load() });
+
 /** `default` removes the rule, so the store only holds sites somebody chose for. */
 export function setSiteMode(mode: SiteMode, host: string = hostOf()): void {
   const next = { ...load() };

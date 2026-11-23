@@ -91,8 +91,20 @@ export async function preloadStored(keys: string[]): Promise<boolean> {
       }
     })
   );
+  preloaded = true;
   return true;
 }
+
+let preloaded = false;
+
+/**
+ * Whether a synchronous read now says what is stored.
+ *
+ * Always on a host with the synchronous API; on a promise-only one, only once
+ * a preload has settled. Before that every key reads empty, which is the same
+ * answer as "never stored" - and acting on it re-does whatever was kept.
+ */
+export const storageReady = (): boolean => preloaded || !hasAsyncStorage();
 
 export function readStored(key: string): unknown {
   if (typeof GM_getValue === 'function') return GM_getValue<unknown>(key, null);
@@ -225,9 +237,9 @@ export interface PendingTab {
  * object is truthy - so `{ active: true }` asks Greasemonkey for the opposite
  * of what it says. `false` means the foreground to every host.
  */
-function hostOpener(): ((url: string) => unknown) | null {
-  if (typeof GM_openInTab === 'function') return (url) => GM_openInTab(url, false);
-  if (typeof GM?.openInTab === 'function') return (url) => GM.openInTab(url, false);
+function hostOpener(): ((url: string, background: boolean) => unknown) | null {
+  if (typeof GM_openInTab === 'function') return (url, background) => GM_openInTab(url, background);
+  if (typeof GM?.openInTab === 'function') return (url, background) => GM.openInTab(url, background);
   return null;
 }
 
@@ -271,13 +283,23 @@ function navigate(tab: Window, url: string): void {
   }
 }
 
-export function prepareTab(preopen: boolean): PendingTab {
+export interface TabOptions {
+  /**
+   * Open behind the current tab. Only a host's own opener can: `window.open`
+   * always takes the foreground, so without one this changes nothing.
+   */
+  background?: boolean;
+  /** What the blank tab says while the address is still being worked out. */
+  waiting?: string;
+}
+
+export function prepareTab(preopen: boolean, options: TabOptions = {}): PendingTab {
   const viaHost = hostOpener();
   if (viaHost) {
     return {
       go(url) {
         try {
-          const tab = viaHost(url) as { closed?: boolean } | null | false | undefined;
+          const tab = viaHost(url, options.background === true) as { closed?: boolean } | null | false | undefined;
           // Hosts return a tab control, a window, a promise or nothing at all.
           // Only an explicit refusal is read as one.
           return tab !== null && tab !== false && tab?.closed !== true;
@@ -295,7 +317,7 @@ export function prepareTab(preopen: boolean): PendingTab {
     try {
       // A blank page for the length of an upload reads as something broken.
       tab.document.title = 'Lens';
-      tab.document.body.textContent = 'Searching with Lens...';
+      tab.document.body.textContent = options.waiting ?? 'Searching with Lens...';
     } catch {
       // Cosmetic.
     }
@@ -323,16 +345,24 @@ export function prepareTab(preopen: boolean): PendingTab {
 // --- Commands ---------------------------------------------------------------
 
 export interface Command {
+  /** A name the panel can ask for one by: its About tab draws two of them itself. */
+  id: string;
   /** What the host's menu shows, where it sits among every other script's. */
   menuLabel: string;
-  /** What our own panel shows, or null for one the panel makes redundant. */
-  label: string | null;
+  /**
+   * What our own panel shows, or null for one the panel makes redundant. A
+   * function, because the panel can be redrawn in a language that arrived
+   * after the command was registered; the host's menu cannot, and keeps the
+   * words it was given.
+   */
+  label: (() => string) | null;
   /** Worth showing even in the panel's short form, where most are left out. */
   essential?: boolean;
   run(): void;
 }
 
 export interface PanelCommand {
+  id: string;
   label: string;
   essential: boolean;
   run(): void;
@@ -361,7 +391,12 @@ export function panelCommands(): PanelCommand[] {
   const out: PanelCommand[] = [];
   for (const command of commands) {
     if (command.label !== null) {
-      out.push({ label: command.label, essential: command.essential === true, run: command.run });
+      out.push({
+        id: command.id,
+        label: command.label(),
+        essential: command.essential === true,
+        run: command.run,
+      });
     }
   }
   return out;
@@ -599,7 +634,7 @@ interface Rung {
   encoding: BodyEncoding;
 }
 
-function ladder(hasBody: boolean, remember: boolean): Rung[] {
+function ladder(hasBody: boolean, remember: boolean, allowFetch: boolean): Rung[] {
   const latchedEncoding = remember ? workingEncoding : null;
   const encodings: BodyEncoding[] = !hasBody
     ? ['typed']
@@ -608,7 +643,7 @@ function ladder(hasBody: boolean, remember: boolean): Rung[] {
       : ['typed', 'binary-string'];
 
   const rungs: Rung[] = encodings.map((encoding) => ({ transport: 'gm' as const, encoding }));
-  rungs.push({ transport: 'fetch', encoding: 'typed' });
+  if (allowFetch) rungs.push({ transport: 'fetch', encoding: 'typed' });
 
   const latchedTransport = remember ? workingTransport : null;
   return latchedTransport ? rungs.filter((rung) => rung.transport === latchedTransport) : rungs;
@@ -617,10 +652,10 @@ function ladder(hasBody: boolean, remember: boolean): Rung[] {
 /** The status a mangled body produces, and the only one worth another rung. */
 const BAD_REQUEST = 400;
 
-async function climb(attempt: Attempt, remember: boolean): Promise<HostResponse> {
+async function climb(attempt: Attempt, remember: boolean, allowFetch = true): Promise<HostResponse> {
   const failures: string[] = [];
 
-  for (const rung of ladder(attempt.body !== null, remember)) {
+  for (const rung of ladder(attempt.body !== null, remember, allowFetch)) {
     const next = { ...attempt, encoding: rung.encoding };
     let response: HostResponse;
     try {
@@ -698,6 +733,9 @@ export async function getBinary(
       current = new URL(response.location, current).href;
       continue;
     }
+    if ((redirected || isWebPage(response)) && options.noFetchFallback === true) {
+      throw new Error(`the host answered with a web page, not the file (HTTP ${response.status})`);
+    }
     if (redirected || isWebPage(response)) {
       try {
         const page = await sendViaFetch({
@@ -731,10 +769,12 @@ function getOnce(url: string, timeoutMs: number, options: GetOptions): Promise<H
       body: null,
       encoding: 'typed',
       timeoutMs,
-      // The same request the <img> would have made, cookies included.
-      withCookies: true,
+      // The same request the <img> would have made, cookies included - unless
+      // the caller is fetching something public and said so.
+      withCookies: options.anonymous !== true,
     },
-    false
+    false,
+    options.noFetchFallback !== true
   );
 }
 

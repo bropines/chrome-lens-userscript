@@ -41,6 +41,24 @@ export interface GetOptions {
    * `<img>` sends one, so the fetch that stands in for it has to as well.
    */
   referer?: string;
+  /**
+   * Send no cookies.
+   *
+   * An image is fetched the way the browser would have fetched it, session
+   * included, because that is what a hotlink-protected host checks. A file
+   * that is public to everyone needs none of that, and a request that does not
+   * need to say who is asking should not.
+   */
+  anonymous?: boolean;
+  /**
+   * Only the privileged request, never a page `fetch` behind it.
+   *
+   * The fetch rung is there for a host whose own transport is broken, and it
+   * is leaky: the browser attaches the page's `Origin`. For an image the page
+   * wanted that is no news; for a request of the script's own - a locale from
+   * GitHub - it tells a third party which site is being read.
+   */
+  noFetchFallback?: boolean;
 }
 
 export interface Transport {

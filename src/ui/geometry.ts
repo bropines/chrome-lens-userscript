@@ -266,3 +266,51 @@ export interface ObjectSource {
 /** Whether ids taken from `source` as `list` still name what they named. */
 export const objectsStillValid = (source: ObjectSource, list: readonly DetectedObject[]): boolean =>
   source.fresh && source.objects === list;
+
+/**
+ * How wide the row of controls over a picture has to be.
+ *
+ * Laid out the way `flex-wrap` will lay it: as many controls to a line as fit
+ * in `max`, the next one starting a new line. Nine pinned 44px buttons are
+ * 444px and a phone is 375, so a row that was never measured against the
+ * screen ran off it. A control with no width is not in the row (no gap for
+ * it); a single control wider than `max` still gets a line to itself.
+ */
+export function wrapWidth(widths: readonly number[], gap: number, max: number): number {
+  let widest = 0;
+  let line = 0;
+  for (const width of widths) {
+    if (!(width > 0)) continue;
+    const next = line === 0 ? width : line + gap + width;
+    if (line > 0 && next > max) {
+      widest = Math.max(widest, line);
+      line = width;
+    } else line = next;
+  }
+  return Math.max(widest, line);
+}
+
+export type Corner = 'tr' | 'tl' | 'br' | 'bl';
+
+/**
+ * Where the row goes: hung from a corner of the picture, `inset` inside it,
+ * then moved - never shrunk - until it is inside the visible part of the
+ * screen, `margin` from its edges. A row bigger than the screen keeps its
+ * start edge, which is where the main control is.
+ */
+export function placeRow(corner: Corner, anchor: Rect, row: Size, view: Rect, margin: number, inset: number): Point {
+  const onLeft = corner === 'tl' || corner === 'bl';
+  const onBottom = corner === 'br' || corner === 'bl';
+  const x = onLeft ? anchor.left + inset : anchor.left + anchor.width - inset - row.width;
+  const y = onBottom ? anchor.top + anchor.height - inset - row.height : anchor.top + inset;
+  const clamp = (value: number, start: number, room: number, size: number, keepEnd: boolean): number => {
+    const low = start + margin;
+    const high = start + room - margin - size;
+    if (high < low) return keepEnd ? high : low;
+    return Math.min(high, Math.max(low, value));
+  };
+  return {
+    x: clamp(x, view.left, view.width, row.width, !onLeft),
+    y: clamp(y, view.top, view.height, row.height, onBottom),
+  };
+}

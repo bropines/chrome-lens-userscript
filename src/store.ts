@@ -209,16 +209,20 @@ async function stored(): Promise<Meta[]> {
   return all;
 }
 
+/** The disk allowance: its own when one is set, otherwise the memory one's size. */
+const budgetOf = (settings: CacheOptions): number => settings.storeBytes ?? settings.cacheBytes;
+
 export async function putStored(
   hash: string,
   result: LensResult,
   settings: LensOptions & CacheOptions
 ): Promise<void> {
-  if (!hash || !settings.persistCache || settings.cacheBytes <= 0) return;
+  const budget = budgetOf(settings);
+  if (!hash || !settings.persistCache || budget <= 0) return;
 
   const bytes = weigh(result);
   // As in memory: one oversized page should not evict everything else to land.
-  if (bytes > settings.cacheBytes) return;
+  if (bytes > budget) return;
 
   const key = entryKey(hash, settings);
   const now = Date.now();
@@ -242,7 +246,7 @@ export async function putStored(
   writesSinceCount += 1;
   if (writesSinceCount >= RECOUNT_EVERY) total = null;
   if (total !== null) total += delta;
-  await evict(settings.cacheBytes);
+  await evict(budget);
 }
 
 /**

@@ -60,6 +60,8 @@ describe('storage on a host with the synchronous API', () => {
     // until the page reloads and then loses it.
     expect(backing.get('k')).toBe('{"a":1}');
     expect(gm.readStored('k')).toBe('{"a":1}');
+    // Nothing to wait for: a synchronous read is the stored value from the start.
+    expect(gm.storageReady()).toBe(true);
     expect(await gm.preloadStored(['k'])).toBe(false);
   });
 });
@@ -77,7 +79,9 @@ describe('storage on a host with only the promise API', () => {
 
     // Before the load there is nothing to read - and it is not the site's.
     expect(gm.readStored('k')).toBeNull();
+    expect(gm.storageReady()).toBe(false);
     expect(await gm.preloadStored(['k'])).toBe(true);
+    expect(gm.storageReady()).toBe(true);
     expect(gm.readStored('k')).toBe('{"saved":true}');
     expect(storage.size).toBe(0);
   });
@@ -288,6 +292,52 @@ describe('fetching an image', () => {
     try {
       const response = await gm.getBinary('https://cdn.example/a.png', 1000);
       expect(Array.from(response.bytes)).toEqual([7, 8]);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
+  test('noFetchFallback: a failed host request is not retried as a page fetch', async () => {
+    const gm = await loadWith({
+      GM_xmlhttpRequest: (options: Record<string, unknown>) =>
+        queueMicrotask(() =>
+          (options['onerror'] as (response: unknown) => void)({ status: 0, error: 'blocked' })
+        ),
+    });
+    const realFetch = globalThis.fetch;
+    let fetched = 0;
+    globalThis.fetch = (async () => {
+      fetched += 1;
+      return new Response(new Uint8Array([1]));
+    }) as unknown as typeof fetch;
+    try {
+      const url = 'https://raw.githubusercontent.com/x/y/main/locales/ru.json';
+      await expect(gm.getBinary(url, 1000, { anonymous: true, noFetchFallback: true })).rejects.toThrow('blocked');
+      expect(fetched).toBe(0);
+      // Control: without the option the page fetch is the next rung.
+      const response = await gm.getBinary(url, 1000, { anonymous: true });
+      expect(Array.from(response.bytes)).toEqual([1]);
+      expect(fetched).toBe(1);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
+  test('noFetchFallback: a web page where a file was asked for is not retried as a fetch either', async () => {
+    const page = Array.from(new TextEncoder().encode('<html>blocked</html>'));
+    const { request } = fakeRequest([{ status: 200, body: page, headers: 'Content-Type: text/html\r\n' }]);
+    const gm = await loadWith({ GM_xmlhttpRequest: request });
+    const realFetch = globalThis.fetch;
+    let fetched = 0;
+    globalThis.fetch = (async () => {
+      fetched += 1;
+      return new Response(new Uint8Array([1]));
+    }) as unknown as typeof fetch;
+    try {
+      await expect(
+        gm.getBinary('https://raw.githubusercontent.com/a.json', 1000, { noFetchFallback: true })
+      ).rejects.toThrow('web page');
+      expect(fetched).toBe(0);
     } finally {
       globalThis.fetch = realFetch;
     }

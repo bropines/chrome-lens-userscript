@@ -1,6 +1,7 @@
 import { collect } from './detect.js';
 import { hostFacts, probe } from './gm.js';
 import { getSettings } from './settings.js';
+import { t } from './i18n/index.js';
 import { LENS_ENDPOINT } from './lens/client.js';
 
 /**
@@ -55,6 +56,11 @@ function targets(): ReadonlyArray<readonly [string, Parameters<typeof probe>[1]]
 /** A request that came back at all, whatever it came back with. */
 const answered = (result: string): boolean => result.startsWith('HTTP');
 
+/**
+ * The one part of the report written for the person holding the device, and so
+ * the one part in their language. The lines above it are facts for whoever the
+ * report is pasted to, and stay as they are in every language.
+ */
 function verdict(results: Map<string, string>): string {
   const gmLens = answered(results.get('gm -> lens') ?? '');
   const fetchLens = answered(results.get('fetch -> lens') ?? '');
@@ -63,18 +69,18 @@ function verdict(results: Map<string, string>): string {
     answered(results.get('fetch -> control') ?? '');
 
   if (gmLens && fetchLens) {
-    return 'Lens is reachable both ways. If translating still fails, the problem is past the transport - send this report with the exact error the toast shows.';
+    return t('diag.both');
   }
   if (fetchLens) {
-    return "Lens is reachable, but this host's own transport is not. That is handled: the script falls back to fetch, which costs one failed attempt per page and sends an Origin header GM_xmlhttpRequest would not.";
+    return t('diag.fetchOnly');
   }
   if (gmLens) {
-    return "Lens is reachable through the host's transport, which is the path the script prefers anyway.";
+    return t('diag.gmOnly');
   }
   if (anyControl) {
-    return 'Nothing reaches Lens, but the control host answers. Something on this device is blocking lensfrontend-pa.googleapis.com specifically - check the DNS filtering and the HTTPS filtering exclusions, and search the activity log for "googleapis".';
+    return t('diag.blocked');
   }
-  return 'Nothing reaches anything, the control host included. The device has no working connection from this page.';
+  return t('diag.offline');
 }
 
 /**

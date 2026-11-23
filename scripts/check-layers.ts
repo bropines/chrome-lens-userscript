@@ -44,6 +44,9 @@ const APPLICATION = [
   'src/settings.ts',
   'src/languages.ts',
   'src/diagnose.ts',
+  'src/state.ts',
+  'src/version.ts',
+  'src/i18n/',
   'src/ui/',
 ];
 

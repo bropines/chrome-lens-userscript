@@ -24,7 +24,7 @@ bun install
 bun run build
 ```
 
-Alt+click an image, or use the button that appears when you hover one. Click again to undo. **On a touch screen there is no hover**, and the tap that would summon the button is the same tap a reader uses to turn the page - so there the button is pinned instead, sitting over whichever image fills most of the viewport and following the scroll. **When to show it** in settings forces either behaviour. Settings live in the userscript manager's menu under **Lens Translate: settings** — or, since AdGuard has no such menu, behind the gear that appears next to the hover button. Every command below is in that panel under **Actions** as well as in the menu, so every host can reach all of them.
+Alt+click an image, or use the button that appears when you hover one. Click again to undo. **On a touch screen there is no hover**, and the tap that would summon the button is the same tap a reader uses to turn the page - so there the button is pinned instead, sitting over whichever image fills most of the viewport and following the scroll. **When to show them** in settings forces either behaviour. Settings live in the userscript manager's menu under **Lens Translate: settings** — or, since AdGuard has no such menu, behind the gear that appears next to the hover button. Every command below is in that panel under **Actions** as well as in the menu, so every host can reach all of them.
 
 ## What you can do
 
@@ -39,6 +39,35 @@ Alt+click an image, or use the button that appears when you hover one. Click aga
 | Switch it off on one site | *Toggle for this site* - the button disappears, Alt+click is the page's again and any translations come down |
 | **Translate as you read** on one site | *Toggle auto-translate here* - every picture that scrolls into view is translated by itself, once: one that had no text is not asked about again, and one you undid stays undone |
 | Clear the cache, undo a whole page, switch everything off, run diagnostics | the menu, or **Actions** in the panel |
+
+### Settings, buttons and shortcuts
+
+The settings window has two lengths. **Simple**, the default, is eight fields on one page. **Pro** is every setting there is, in tabs - General, Translation, Search, Appearance, Buttons, Behaviour, Sites, Advanced, About - down the side on a wide screen and as a strip along the top of a sheet on a phone. In pro mode:
+
+- **Search** at the top finds a setting on any tab by its label, its hint or its key.
+- A field that is not at its default grows a small **reset** arrow beside its name, and each tab has **Reset this tab**. Nothing is kept until **Save**; closing with unsaved changes asks first.
+- **About** exports every setting to a JSON file and imports one back. An import is checked key by key against what each setting can hold: unknown keys and unusable values are skipped and named, and what was understood lands in the form for you to look at before saving.
+- **Appearance** holds everything about how a translation is drawn - font family and weight, text, outline and fill colours (blank follows what Lens sampled), outline width, erasing, the readable-size floor, line spacing, sharpness, opacity. Each has a line saying what it buys and what it costs. The defaults are Chromium's behaviour throughout.
+- **Buttons** chooses which controls sit over a picture and in what order - drag a row, or use its arrows - from translate, search image, ask AI, select area, detected objects, search text, copy, settings and the menu. Ticked ones are in the row; the list's order is also the menu's. The **main button** can translate (default), search, ask AI, select an area or open the menu, and can be set to repeat whatever you last chose. Holding it shows the original, as before, or does any of those instead. Size, corner, idle opacity, labels and the delays are there too.
+- **Behaviour** binds a key chord to each action: press the field's button, then the keys. Only *translate all in view* (Alt+Shift+T) is bound out of the box. Shortcuts are ignored while you type in a field, and a picture shortcut acts on the picture under the cursor or, failing that, the largest in view.
+- **Sites** shows this site's rule and every other site that has one.
+
+### Interface language
+
+The interface is in English out of the box and can be in Russian, Ukrainian, German, Spanish, French, Brazilian Portuguese, Japanese, Simplified Chinese, Korean or Turkish. **Interface language** in settings is *Auto* (the browser's language, when there is a translation for it) or one of those by name.
+
+Only English is inside the script. The others are JSON files in [`locales/`](locales/), and **the script downloads the one it needs from GitHub**: one request to `raw.githubusercontent.com` per version and language - the file for the release's tag, or the one on `main` for a beta, which has no tag. It is then kept by the userscript host and not asked for again until the version changes. GitHub sees that request like any other - your IP address and user agent - and nothing else: it is sent without cookies and without a referrer, so it does not say who you are or which page you were on. The one exception is a host whose own request does not work at all (see the diagnostics): there the script falls back to an ordinary page request, as it does for Lens, and the browser adds the site's origin to it. With the language set to English, or a browser in English on *Auto*, no request is made at all. If it fails - offline, the domain blocked - the interface stays English and the next page load tries again.
+
+What arrives is treated as somebody else's file: only known keys are used, a string whose `{placeholders}` do not match the English ones falls back to English, and every string is inserted as text, never as markup.
+
+**To add or fix a translation:**
+
+1. `bun run locales:check --template > locales/<code>.json` writes the English strings as a starting point (or copy an existing file).
+2. Translate the values. Keep the keys, keep every `{placeholder}` exactly as written, and leave product names (Lens, Google, GitHub, Chromium) alone. Counts are deliberately written as "label: {count}" so no plural forms are needed.
+3. For a new language, add its code to `LOCALES` in `src/i18n/locale.ts` - that is what puts it in the settings list.
+4. `bun run locales:check` and `bun test` must pass: both refuse a file with a missing key, an extra key or a changed placeholder.
+
+No rebuild is needed for a change to an existing locale; it reaches people when the next version is tagged.
 
 ### Search with the picture
 
@@ -365,6 +394,8 @@ Sites with a strict Content-Security-Policy may still block `blob:` URLs in `bac
 proto/               Chromium's Lens .proto files
 scripts/gen-fields.ts   descriptors -> typed field-number table
 scripts/check-layers.ts the engine may not import the application
+scripts/locales-check.ts every locales/*.json against the English keys
+locales/             the interface in other languages; fetched at run time, not bundled
 src/
   engine.ts          the engine's public entry; see below
   boot.ts            the userscript's entry: start now, or sleep in a frame
@@ -373,7 +404,9 @@ src/
   protobuf.ts        minimal wire codec
   types.ts           shared domain types
   transport.ts       the privileged request the engine cannot make itself
-  settings.ts        GM-backed settings store
+  settings.ts        GM-backed settings store, the field schema, export and import
+  state.ts           what was last done: the last action, the last question
+  i18n/              English strings by key, and loading the other languages
   sites.ts           what each hostname is told: default, off, auto-translate
   gm.ts              every difference between userscript hosts
   image.ts           fetch, downscale, JPEG encode
@@ -382,9 +415,10 @@ src/
   lens/              request builder, response parser, client, plain-text extraction
   render/            layout maths, canvas painter, DOM overlay, image swap,
                      background geometry, watching a picture for change
-  ui/                settings panel, menu, styles
+  ui/                settings window, menu, the button list and key chords, styles
 test/                bun test: the codec, the cache, the layout maths, gm.ts
-                     against fake hosts, the per-site rules
+                     against fake hosts, the per-site rules, the settings
+                     schema and import, the locales
 ```
 
 ```bash
@@ -392,6 +426,7 @@ bun run dev        # live-reload userscript for development
 bun run typecheck  # tsc --noEmit, strict
 bun run check      # layering: the engine stays clean, the host stays in gm.ts
 bun test           # unit tests; no browser needed
+bun run locales:check  # every locale has exactly the English keys and placeholders
 bun run build      # typecheck, check, then dist/lens-translate.user.js
 ```
 

@@ -1,6 +1,7 @@
 import { preloadStored } from './gm.js';
 import { start } from './main.js';
 import { isFramed, sleepUntilPicture, topHostname } from './frame.js';
+import { LOCALE_KEYS } from './i18n/index.js';
 import { SETTINGS_KEYS, getSettings, reloadSettings } from './settings.js';
 import { SITES_KEY, hostOf, reloadSites, siteMode } from './sites.js';
 
@@ -21,7 +22,9 @@ if (!isFramed()) {
     // A frame decides whether to exist from the settings, so on a host whose
     // storage is promise-only they have to arrive first; everywhere else this
     // resolves at once and changes nothing.
-    if (await preloadStored([...SETTINGS_KEYS, SITES_KEY])) {
+    // The locale keys too, so the frame that wakes reads its language from the
+    // store instead of downloading it again on every page.
+    if (await preloadStored([...SETTINGS_KEYS, SITES_KEY, ...LOCALE_KEYS])) {
       reloadSettings();
       reloadSites();
     }

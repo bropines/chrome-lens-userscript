@@ -1,4 +1,4 @@
-import { copyText, gmTransport, preloadStored, prepareTab, registerCommand } from './gm.js';
+import { copyText, gmTransport, preloadStored, prepareTab, registerCommand, storageReady } from './gm.js';
 import type { Command } from './gm.js';
 import { setTransport } from './transport.js';
 import { diagnose } from './diagnose.js';
@@ -34,6 +34,9 @@ import {
   uncoverImage,
 } from './render/cover.js';
 import { SETTINGS_KEYS, getSettings, reloadSettings, saveSettings } from './settings.js';
+import { LOCALE_KEYS, onLocaleChange, t, useLanguage } from './i18n/index.js';
+import type { Key } from './i18n/index.js';
+import { STATE_KEY, getState, reloadState, setState } from './state.js';
 import { SITES_KEY, hostOf, reloadSites, setSiteMode, siteMode } from './sites.js';
 import type { SiteMode } from './sites.js';
 import {
@@ -46,12 +49,16 @@ import {
   putRender,
   renderKey,
 } from './cache.js';
-import { openSettings } from './ui/settings-panel.js';
+import { BUTTON_ICONS, openSettings } from './ui/settings-panel.js';
+import { parseButtons, rowOf } from './ui/buttons.js';
+import type { ButtonId } from './ui/buttons.js';
+import { matchesChord, parseChord } from './ui/shortcuts.js';
+import type { Chord } from './ui/shortcuts.js';
 import { closeMenu, isMenuOpen, openMenu } from './ui/menu.js';
 import type { MenuItem } from './ui/menu.js';
 import { onReportSettings, openReport } from './ui/report.js';
 import { HOST_ID, applyPopupOpacity, isOurs, tendHost, uiRoot } from './ui/root.js';
-import { fittedRect, insetRect } from './ui/geometry.js';
+import { fittedRect, insetRect, placeRow, wrapWidth } from './ui/geometry.js';
 import type { Rect, Size } from './ui/geometry.js';
 import { icon } from './ui/icons.js';
 import { closeTool, openObjectsTool, openRegionTool, openTextTool, repositionTool } from './ui/tools.js';
@@ -75,6 +82,12 @@ export interface StartOptions {
 export function start({ framed, hovered }: StartOptions): void {
 
   let settings: Settings = getSettings();
+  // Before anything is drawn. A locale fetched earlier for this version is in
+  // the host's store and is in use by the next line; one that is not arrives
+  // later and redraws what is on screen. On a host whose storage is
+  // promise-only the store reads empty until the preload below settles, and
+  // asking now would download a locale that is already kept - every page load.
+  if (storageReady()) useLanguage(settings.language);
 
   /**
    * What this site has been told: nothing, switched off, or translate-as-you-go.
@@ -102,13 +115,16 @@ export function start({ framed, hovered }: StartOptions): void {
   const root = uiRoot();
 
   /**
-   * The three controls over a picture, as one row hung from its top right corner.
+   * The controls over a picture, as one row hung from a corner of it.
    *
    * One container, so the row is placed once and its own layout does the rest:
-   * the controls are 32px under a mouse and 44px under a finger, and three
-   * `left` offsets written out as numbers were only ever right for one of those.
-   * They stay `div`s rather than buttons on purpose - a button takes focus when
-   * pressed, and a reader that listens for keys loses them to it.
+   * the controls are 32px under a mouse and 44px under a finger, and offsets
+   * written out as numbers were only ever right for one of those. They stay
+   * `div`s rather than buttons on purpose - a button takes focus when pressed,
+   * and a reader that listens for keys loses them to it.
+   *
+   * Which controls, in what order and from which corner are settings, so the
+   * row is rebuilt from them (`buildControls`) rather than made once.
    */
   const controls = document.createElement('div');
   controls.id = 'lt-controls';
@@ -124,17 +140,20 @@ export function start({ framed, hovered }: StartOptions): void {
     return element;
   }
 
-  // The spinner is a second icon rather than the first one turning: letters
-  // going round do not read as "working".
-  const button = control(
-    'lt-button',
-    'Translate the text in this image (click again to undo)',
-    icon('translate') + icon('loader')
-  );
-  const gear = control('lt-gear', 'Lens Translate settings', icon('settings', 16));
-  const more = control('lt-more', 'Search, ask, copy and more', icon('more', 16));
-  // In reading order, so the main one ends up in the corner.
-  controls.append(more, gear, button);
+  /**
+   * The main control: the one that arrives first, spins while Lens is asked
+   * and takes the long press. A placeholder until the row is first built,
+   * which happens at the end of `start`, once everything it calls exists.
+   */
+  let button: HTMLDivElement = document.createElement('div');
+  /** The control that translates, which is the one that goes green. May be absent. */
+  let translateControl: HTMLElement | null = null;
+  /** The control the menu opens beside: its own button, or the main one. */
+  let menuControl: HTMLElement = button;
+
+  const markTranslated = (on: boolean): void => {
+    translateControl?.classList.toggle('lt-active', on);
+  };
 
   const toastEl = document.createElement('div');
   toastEl.id = 'lt-toast';
@@ -187,7 +206,7 @@ export function start({ framed, hovered }: StartOptions): void {
       const close = document.createElement('button');
       close.type = 'button';
       close.className = 'lt-btn lt-ghost lt-square';
-      close.setAttribute('aria-label', 'Dismiss');
+      close.setAttribute('aria-label', t('toast.dismiss'));
       close.innerHTML = icon('close', 16);
       close.addEventListener('click', hideToast);
       if (link.copy) {
@@ -201,12 +220,12 @@ export function start({ framed, hovered }: StartOptions): void {
         copy.type = 'button';
         copy.className = 'lt-btn';
         copy.innerHTML = icon('copy', 16);
-        copy.append('Copy');
+        copy.append(t('toast.copy'));
         copy.addEventListener('click', () => {
           void copyText(link.href).then((done) => {
             // A failed copy keeps the address on screen to be selected by hand.
-            if (done) toast('Address copied');
-            else toast('Could not copy; select the address instead', 0, link);
+            if (done) toast(t('toast.addressCopied'));
+            else toast(t('toast.addressNotCopied'), 0, link);
           });
         });
         toastEl.append(anchor, copy, close);
@@ -248,7 +267,7 @@ export function start({ framed, hovered }: StartOptions): void {
    */
   const forgetter = (img: HTMLElement) => (): void => {
     showing.delete(img);
-    if (currentTarget?.element === img) button.classList.remove('lt-active');
+    if (currentTarget?.element === img) markTranslated(false);
   };
 
   /**
@@ -283,7 +302,7 @@ export function start({ framed, hovered }: StartOptions): void {
     showing.delete(img);
     results.delete(img);
     const restored = uncoverImage(img) || clearOverlay(img);
-    if (restored) button.classList.remove('lt-active');
+    if (restored) markTranslated(false);
     return restored;
   }
 
@@ -332,11 +351,11 @@ export function start({ framed, hovered }: StartOptions): void {
 
     if (busy.has(img)) return 'skipped';
     if (!settings.enabled) {
-      say('Translation is switched off in settings');
+      say(t('toast.off'));
       return 'skipped';
     }
     if (site === 'off') {
-      say(`Lens Translate is switched off on ${hostOf()} (userscript menu: toggle for this site)`);
+      say(t('toast.siteOffHint', { host: hostOf() }));
       return 'skipped';
     }
     if (undo(img)) return 'undone';
@@ -363,7 +382,7 @@ export function start({ framed, hovered }: StartOptions): void {
         );
         // coverImage owns the URL from here, so a cover that cannot be laid does
         // not leave one behind.
-        if (done && coverImage(img, URL.createObjectURL(done), { onGone: forgetter(img) })) {
+        if (done && coverImage(img, URL.createObjectURL(done), { onGone: forgetter(img), ...seeThrough() })) {
           shown(img, target, getCached(key, settings, naturalSizeOf(target)));
           return 'shown';
         }
@@ -405,9 +424,7 @@ export function start({ framed, hovered }: StartOptions): void {
           // The words are still worth having even when there is nothing to draw.
           results.set(img, result);
           say(
-            detected
-              ? 'Lens read the text but returned no translation (same language?)'
-              : 'Lens found no text in this image'
+            detected ? t('toast.noTranslation') : t('toast.noText')
           );
           return 'empty';
         }
@@ -427,6 +444,7 @@ export function start({ framed, hovered }: StartOptions): void {
           }
           const covered = coverImage(img, URL.createObjectURL(blob), {
             onGone: forgetter(img),
+            ...seeThrough(),
             ...(target.background
               ? {
                   background: {
@@ -437,19 +455,15 @@ export function start({ framed, hovered }: StartOptions): void {
               : {}),
           });
           if (!covered) {
-            lastFailure = 'it cannot be covered here';
-            say(
-              target.kind === 'background'
-                ? 'This background is tiled or clipped in a way a translation cannot follow'
-                : 'This image cannot be covered here'
-            );
+            lastFailure = target.kind === 'background' ? t('toast.backgroundTiled') : t('toast.cannotCover');
+            say(lastFailure);
             return 'failed';
           }
         } else if (target.kind === 'background') {
           // The DOM renderer lays its lines over the element's whole box, which is
           // only where the picture is for a replaced element.
-          lastFailure = 'backgrounds need the canvas renderer';
-          say('Backgrounds need the canvas renderer (Render as, in settings)');
+          lastFailure = t('toast.backgroundNeedsCanvas');
+          say(lastFailure);
           return 'failed';
         } else if (
           !renderTranslation(
@@ -458,11 +472,11 @@ export function start({ framed, hovered }: StartOptions): void {
             settings,
             { width: prepared.width, height: prepared.height },
             root,
-            { onGone: forgetter(img) }
+            { onGone: forgetter(img), ...seeThrough() }
           )
         ) {
-          lastFailure = 'nothing could be placed on it';
-          say('Nothing could be placed on this image');
+          lastFailure = t('toast.nothingPlaced');
+          say(lastFailure);
           return 'failed';
         }
         shown(img, target, result);
@@ -473,7 +487,7 @@ export function start({ framed, hovered }: StartOptions): void {
     } catch (error) {
       lastFailure = (error as Error).message;
       button.classList.add('lt-error');
-      say(`Lens: ${lastFailure}`, 5000);
+      say(t('toast.lensError', { message: lastFailure }), 5000);
       window.setTimeout(() => button.classList.remove('lt-error'), 3000);
       return 'failed';
     } finally {
@@ -487,7 +501,17 @@ export function start({ framed, hovered }: StartOptions): void {
     showing.set(img, target);
     if (result) results.set(img, result);
     lastShown = new WeakRef(img);
-    if (currentTarget?.element === img) button.classList.add('lt-active');
+    if (currentTarget?.element === img) markTranslated(true);
+  }
+
+  /**
+   * How much of the original shows through a translation, as the renderers
+   * take it. Nothing at all when it is fully opaque, so the cover carries no
+   * opacity rule it does not need.
+   */
+  function seeThrough(): { opacity?: number } {
+    const percent = Math.min(100, Math.max(20, Number(settings.coverOpacity) || 100));
+    return percent < 100 ? { opacity: percent / 100 } : {};
   }
 
 
@@ -498,16 +522,17 @@ export function start({ framed, hovered }: StartOptions): void {
    *
    * Every picture is a round trip to Lens and an upload, and a page of forty of
    * them asked for all at once is forty parallel uploads on a phone's connection
-   * and a good way to be rate-limited. Two keeps the pipe full without that.
+   * and a good way to be rate-limited. Two keeps the pipe full without that,
+   * and is the default; the setting is capped where being refused starts.
    * One queue serves every caller, so automatic translation and a button press
    * cannot add up to more than this between them.
    */
-  const CONCURRENCY = 2;
+  const concurrency = (): number => Math.min(6, Math.max(1, Math.round(settings.concurrency) || 2));
   const queued: Array<() => void> = [];
   let running = 0;
 
   function pump(): void {
-    while (running < CONCURRENCY) {
+    while (running < concurrency()) {
       const start = queued.shift();
       if (!start) return;
       running += 1;
@@ -550,8 +575,6 @@ export function start({ framed, hovered }: StartOptions): void {
     return tally;
   }
 
-  const plural = (count: number, word: string): string => `${count} ${word}${count === 1 ? '' : 's'}`;
-
   /** Whether any of a picture is on screen and it is big enough to be one. */
   function inView(target: Target): boolean {
     if (!target.element.isConnected) return false;
@@ -572,9 +595,9 @@ export function start({ framed, hovered }: StartOptions): void {
 
   /** One line for a batch, saying what happened to the ones that did not work. */
   function summarise(tally: Tally, total: number): string {
-    const parts = [`Translated ${tally.shown} of ${plural(total, 'image')}`];
-    if (tally.empty) parts.push(`${tally.empty} had no text`);
-    if (tally.failed) parts.push(`${tally.failed} failed (${lastFailure})`);
+    const parts = [t('toast.batchDone', { shown: tally.shown, total })];
+    if (tally.empty) parts.push(t('toast.batchEmpty', { count: tally.empty }));
+    if (tally.failed) parts.push(t('toast.batchFailed', { count: tally.failed, reason: lastFailure }));
     return parts.join('; ');
   }
 
@@ -582,19 +605,17 @@ export function start({ framed, hovered }: StartOptions): void {
   async function translateVisible(): Promise<void> {
     if (!settings.enabled || site === 'off') {
       toast(
-        site === 'off'
-          ? `Lens Translate is switched off on ${hostOf()}`
-          : 'Translation is switched off in settings'
+        site === 'off' ? t('toast.siteOff', { host: hostOf() }) : t('toast.off')
       );
       return;
     }
     const targets = untranslatedInView(collect(settings.minImageSize));
     if (!targets.length) {
-      toast('Nothing left to translate in view');
+      toast(t('toast.nothingLeft'));
       return;
     }
     // Held until the summary replaces it: a long batch should not look finished.
-    toast(`Translating ${plural(targets.length, 'image')}...`, 120_000);
+    toast(t('toast.batchStart', { count: targets.length }), 120_000);
     toast(summarise(await translateAll(targets), targets.length), 5000);
   }
 
@@ -622,7 +643,7 @@ export function start({ framed, hovered }: StartOptions): void {
       // every picture, and a toast per scroll is worse than the problem.
       if (tally.failed && Date.now() - lastAutoComplaint > 30_000) {
         lastAutoComplaint = Date.now();
-        toast(`Auto-translate: ${plural(tally.failed, 'image')} failed (${lastFailure})`, 5000);
+        toast(t('toast.autoFailed', { count: tally.failed, reason: lastFailure }), 5000);
       }
     });
   }
@@ -639,9 +660,6 @@ export function start({ framed, hovered }: StartOptions): void {
   let currentTarget: Target | null = null;
   let hideTimer: number | undefined;
   let gearTimer: number | undefined;
-
-  /** How long the cursor has to linger before the settings button joins in. */
-  const GEAR_DELAY_MS = 550;
 
   /**
    * Where a control sits. Usually the image's own box, but a pinned button
@@ -672,20 +690,63 @@ export function start({ framed, hovered }: StartOptions): void {
     controls.classList.remove('lt-extras');
   }
 
+  /** The part of the page on screen, in the coordinates the fixed host uses. */
+  function visibleViewport(): Rect {
+    // Pinch-zoomed, the visual viewport is a window into the layout one, and a
+    // row placed against the layout viewport can sit entirely out of sight.
+    const visual = window.visualViewport;
+    if (visual && visual.width > 0 && visual.height > 0) {
+      return { left: visual.offsetLeft, top: visual.offsetTop, width: visual.width, height: visual.height };
+    }
+    return { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight };
+  }
+
+  /**
+   * Hang the row from the chosen corner of `rect`, wrapped to the screen's width
+   * and kept on it. Measured rather than assumed: the row is whatever buttons
+   * were pinned, at whatever size, with or without their names.
+   */
+  function placeControls(rect: Anchor): void {
+    const view = visibleViewport();
+    const margin = 4;
+    const gap = Number.parseFloat(getComputedStyle(controls).columnGap) || 0;
+    // offsetWidth, not the bounding box: a control not yet shown is scaled down
+    // by a transform, and the space it takes is its untransformed size.
+    const widths = [...controls.children].map((child) => (child as HTMLElement).offsetWidth);
+    // A pixel of slack, since offsetWidth rounds and a row a fraction too narrow
+    // would wrap its last control for nothing.
+    const width = Math.ceil(wrapWidth(widths, gap, view.width - margin * 2)) + 1;
+    controls.style.width = `${width}px`;
+    const at = placeRow(
+      settings.buttonCorner,
+      rect,
+      { width, height: controls.offsetHeight },
+      view,
+      margin,
+      6
+    );
+    controls.style.left = `${at.x}px`;
+    controls.style.top = `${at.y}px`;
+  }
+
   function showButton(target: Target, anchor?: Anchor): void {
     if (!settings.showButton || site === 'off') return;
     const img = target.element;
     currentTarget = target;
     // Viewport coordinates: the shadow host is fixed and covers the viewport.
-    // The row hangs from this point by its right edge, whatever its width.
+    // The row hangs from the chosen corner by its own matching corner.
     const rect = anchor ?? img.getBoundingClientRect();
-    controls.style.top = `${rect.top + 6}px`;
-    controls.style.left = `${rect.left + rect.width - 6}px`;
+    placeControls(rect);
     controls.classList.add('lt-on');
-    button.classList.toggle('lt-active', isTranslated(img));
+    markTranslated(isTranslated(img));
 
     window.clearTimeout(gearTimer);
-    if (!extrasShown) gearTimer = window.setTimeout(showGear, GEAR_DELAY_MS);
+    if (!extrasShown) {
+      // No wait asked for is no timer: the row arrives whole.
+      const wait = Math.max(0, Number(settings.extrasDelayMs) || 0);
+      if (wait === 0) showGear();
+      else gearTimer = window.setTimeout(showGear, wait);
+    }
   }
 
   function hideButton(): void {
@@ -902,19 +963,21 @@ export function start({ framed, hovered }: StartOptions): void {
     (event) => {
       if (pinned) return;
       if (targetFromEvent(event, settings.minImageSize, isOurs)) {
-        hideTimer = window.setTimeout(hideButton, 300);
+        hideTimer = window.setTimeout(hideButton, hideDelay());
       }
     },
     true
   );
 
-  for (const control of [button, gear, more]) {
-    control.addEventListener('mouseover', () => window.clearTimeout(hideTimer));
-    control.addEventListener('mouseout', () => {
-      if (pinned) return;
-      hideTimer = window.setTimeout(hideButton, 300);
-    });
-  }
+  const hideDelay = (): number => Math.max(0, Number(settings.hideDelayMs) || 0);
+
+  // On the row rather than on each control: the controls come and go with the
+  // settings, and both events bubble up from whichever one the cursor is on.
+  controls.addEventListener('mouseover', () => window.clearTimeout(hideTimer));
+  controls.addEventListener('mouseout', () => {
+    if (pinned) return;
+    hideTimer = window.setTimeout(hideButton, hideDelay());
+  });
 
   /**
    * Draw everything again under the settings just saved.
@@ -944,59 +1007,190 @@ export function start({ framed, hovered }: StartOptions): void {
    */
   function showSettings(): void {
     hideToast();
-    openSettings(onSaved);
+    openSettings({ onSaved, site: () => site, setSite: chooseSite });
   }
 
   function onSaved(saved: Settings): void {
     settings = saved;
+    useLanguage(settings.language);
+    applySettings();
     applyButtonMode();
     void redrawShowing();
-    toast('Settings saved');
+    toast(t('toast.saved'));
   }
 
-  gear.addEventListener(
-    'click',
-    (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      showSettings();
-    },
-    true
-  );
+  /** The actions a main button set to repeat may take over. */
+  const REPEATABLE: readonly ButtonId[] = ['translate', 'search', 'ask', 'area', 'objects', 'text', 'copy'];
 
-  more.addEventListener(
-    'click',
-    (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      if (isMenuOpen()) closeMenu();
-      else openActions();
-    },
-    true
-  );
+  /**
+   * What the main button does right now: the setting, or - when it is set to
+   * repeat - whatever was last picked from the menu or the row.
+   */
+  function mainButton(): ButtonId {
+    const last = getState().lastAction as ButtonId;
+    return settings.repeatLast && REPEATABLE.includes(last) ? last : settings.mainAction;
+  }
 
-  button.addEventListener(
-    'click',
-    (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      if (swallowClick) {
-        swallowClick = false;
-        return;
+  /** The question "ask AI" starts from. */
+  function question(): string {
+    return (settings.rememberQuestion && getState().lastQuestion) || settings.aiPrompt;
+  }
+
+  /** Where an action was asked for from, which decides whether it is remembered. */
+  type Origin = 'main' | 'row' | 'menu' | 'key' | 'hold';
+
+  /**
+   * Do one of the things a control, a menu item or a shortcut can ask for.
+   *
+   * Not `async`, and nothing is awaited before the action itself: a search
+   * asks for its tab on its first line, and a browser only grants one while
+   * the press that led here is still being handled.
+   */
+  function runAction(id: ButtonId, target: Target, origin: Origin, text?: string): void {
+    // A choice made from the menu or a secondary button is what "repeat the
+    // last action" repeats. The main button repeating itself is not news.
+    if ((origin === 'menu' || origin === 'row') && REPEATABLE.includes(id)) {
+      const before = mainButton();
+      setState({ lastAction: id });
+      if (mainButton() !== before) buildControls();
+    }
+    switch (id) {
+      case 'translate':
+        void translate(target);
+        break;
+      case 'search':
+        searchPicture(target, { kind: 'image' }, 'visual', '');
+        break;
+      case 'ask': {
+        const asked = (text ?? question()).trim();
+        if (text !== undefined && asked) setState({ lastQuestion: asked });
+        searchPicture(target, { kind: 'image' }, 'ai', asked);
+        break;
       }
-      if (currentTarget) void translate(currentTarget);
-    },
-    true
-  );
+      case 'area':
+        void selectArea(target);
+        break;
+      case 'objects':
+        void showObjects(target);
+        break;
+      case 'text':
+        void pickText(target);
+        break;
+      case 'copy':
+        void copyAny(target);
+        break;
+      case 'settings':
+        showSettings();
+        break;
+      case 'menu':
+        openActions(target);
+        break;
+    }
+  }
 
-  // A right click, or the long press on a touch screen, opens the same menu. On
-  // a touch screen the hold has usually started peeking by then; the menu would
-  // open as the finger lifts, which is not what holding meant.
-  button.addEventListener('contextmenu', (event) => {
+  function pressed(id: ButtonId, isMain: boolean, event: Event): void {
     event.preventDefault();
     event.stopPropagation();
-    if (!holding && !swallowClick) openActions();
-  });
+    if (isMain && swallowClick) {
+      swallowClick = false;
+      return;
+    }
+    if (id === 'settings') return showSettings();
+    if (id === 'menu') {
+      if (isMenuOpen()) closeMenu();
+      else openActions();
+      return undefined;
+    }
+    if (currentTarget) runAction(id, currentTarget, isMain ? 'main' : 'row');
+    return undefined;
+  }
+
+  /**
+   * Make the row the settings describe.
+   *
+   * The main control keeps the id the stylesheet and every earlier version
+   * knew it by, as do the settings and menu buttons; the rest are named for
+   * what they do. The row is listed corner-first and the stylesheet reverses
+   * it for a right-hand corner, so the main one is always the one in the corner.
+   */
+  function buildControls(): void {
+    // A hold in progress belongs to the button about to be thrown away: its
+    // release goes to an element no longer in the page, which would leave the
+    // picture peeking and the next click swallowed. A locale arriving mid-press
+    // is all it takes.
+    endHold();
+    const main = mainButton();
+    const ids = rowOf(parseButtons(settings.buttons), main);
+    controls.textContent = '';
+    controls.dataset['corner'] = settings.buttonCorner;
+    controls.dataset['size'] = settings.buttonSize;
+    const idle = Math.min(100, Math.max(20, Number(settings.idleOpacity) || 100));
+    controls.style.setProperty('--lt-idle', String(idle / 100));
+
+    translateControl = null;
+    let menuFound: HTMLElement | null = null;
+    for (const id of ids) {
+      const isMain = id === main;
+      const label =
+        id === 'translate'
+          ? t('btn.translate')
+          : id === 'settings'
+            ? t('btn.settings')
+            : id === 'menu'
+              ? t('btn.more')
+              : t(`act.${id}` as Key);
+      const element = control(
+        isMain ? 'lt-button' : id === 'settings' ? 'lt-gear' : id === 'menu' ? 'lt-more' : `lt-act-${id}`,
+        label,
+        // The spinner is a second icon rather than the first one turning:
+        // letters going round do not read as "working".
+        isMain ? icon(BUTTON_ICONS[id]) + icon('loader') : icon(BUTTON_ICONS[id], 16)
+      );
+      element.className = isMain ? 'lt-ctl lt-main' : 'lt-ctl';
+      element.dataset['action'] = id;
+      if (settings.buttonLabels) {
+        const words = document.createElement('span');
+        words.className = 'lt-ctl-label';
+        words.textContent = t(`act.${id}` as Key);
+        element.appendChild(words);
+        element.classList.add('lt-labelled');
+      }
+      element.addEventListener('click', (event) => pressed(id, isMain, event), true);
+      if (id === 'translate') translateControl = element;
+      if (id === 'menu') menuFound = element;
+      if (isMain) {
+        button = element;
+        element.addEventListener('pointerdown', startHold);
+        for (const type of ['pointerup', 'pointercancel']) element.addEventListener(type, endHold);
+        // A right click, or the long press on a touch screen, opens the menu.
+        // On a touch screen the hold has usually acted by then; the menu
+        // would open as the finger lifts, which is not what holding meant.
+        // Android sends this at about 500 ms with the finger still down, so a
+        // longer hold has not fired yet: the menu wins, and the hold is called
+        // off rather than running behind it.
+        element.addEventListener('contextmenu', (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          const held = holding !== null || swallowClick;
+          window.clearTimeout(holdTimer);
+          if (!held) openActions();
+        });
+      }
+      controls.appendChild(element);
+    }
+    menuControl = menuFound ?? button;
+    button.classList.toggle('lt-busy', working > 0);
+    if (currentTarget) markTranslated(isTranslated(currentTarget.element));
+    // A different set of buttons is a different width; the one on screen was
+    // measured for the old row.
+    if (controls.classList.contains('lt-on')) reposition();
+  }
+
+  /** Everything derived from the settings that is not read at the point of use. */
+  function applySettings(): void {
+    buildControls();
+    bindKeys();
+  }
 
   // Modifier + click works even with the hover button switched off.
   document.addEventListener(
@@ -1074,20 +1268,15 @@ export function start({ framed, hovered }: StartOptions): void {
   async function copyFrom(kind: 'translation' | 'original', element = subject()): Promise<void> {
     const result = element ? results.get(element) : undefined;
     if (!result) {
-      toast('Translate an image first, then its text can be copied');
+      toast(t('toast.translateFirst'));
       return;
     }
     const text = kind === 'translation' ? translationText(result) : ocrText(result);
-    const what = kind === 'translation' ? 'the translation' : 'the original text';
     if (!text) {
-      toast(`There is no text to copy from ${what}`);
+      toast(t('toast.nothingToCopy'));
       return;
     }
-    toast(
-      (await copyText(text))
-        ? `Copied ${what} (${plural(text.length, 'character')})`
-        : 'The browser would not let the script use the clipboard'
-    );
+    await copied(text, kind === 'translation' ? 'toast.copiedTranslation' : 'toast.copiedOriginal');
   }
 
 
@@ -1132,6 +1321,10 @@ export function start({ framed, hovered }: StartOptions): void {
     return Boolean(now?.url) && cacheKey(now?.url ?? '', settings) === cacheKey(target.url, settings);
   }
 
+  /**
+   * What an error says when the picture was swapped mid-action. A marker to
+   * compare against, never shown: `lensSaid` puts the reader's words in its place.
+   */
   const CHANGED = 'The picture changed while it was open; try again on the new one';
 
   async function upload(target: Target): Promise<ImageSearch> {
@@ -1182,9 +1375,13 @@ export function start({ framed, hovered }: StartOptions): void {
 
   /** How the results page is asked to look: in the reader's language and theme. */
   const pageOptions = (): { uiLanguage: string; dark: boolean } => ({
-    uiLanguage: settings.targetLang,
-    dark: prefersDark(),
+    uiLanguage: settings.searchLang || settings.targetLang,
+    dark: settings.searchTheme === 'auto' ? prefersDark() : settings.searchTheme === 'dark',
   });
+
+  /** A tab for results, opened the way the settings ask. */
+  const tabFor = (preopen: boolean): ReturnType<typeof prepareTab> =>
+    prepareTab(preopen, { background: settings.backgroundTabs, waiting: t('toast.searching') });
 
   /**
    * Hand over a results address: in a tab if one could be had, as a link if not.
@@ -1193,14 +1390,14 @@ export function start({ framed, hovered }: StartOptions): void {
    * nothing, and a tab opened behind the current one is easy to miss on a phone.
    */
   function deliver(tab: ReturnType<typeof prepareTab>, url: string): void {
-    if (tab.go(url)) toast('Results opened in a new tab', 9000, { href: url, label: 'Open again' });
+    if (tab.go(url)) toast(t('toast.opened'), 9000, { href: url, label: t('toast.openAgain') });
     // A frame sandboxed without `allow-popups` refuses `window.open` and a
     // `target=_blank` link alike, silently in the second case, and nothing in
     // here can read its own sandbox flags to know beforehand. A refused open is
     // the evidence; in a frame the address is then printed and offered to copy
     // as well, which is the one way out no sandbox can close.
-    else if (framed) toast('The results are ready', 0, { href: url, label: 'Open', copy: true });
-    else toast('The results are ready', 0, { href: url, label: 'Open results' });
+    else if (framed) toast(t('toast.ready'), 0, { href: url, label: t('toast.open'), copy: true });
+    else toast(t('toast.ready'), 0, { href: url, label: t('toast.openResults') });
   }
 
   /** What to search for; a region's pixels are cut out when the time comes. */
@@ -1230,13 +1427,13 @@ export function start({ framed, hovered }: StartOptions): void {
     // message rather than an empty tab.
     if (!stillShows(target)) {
       closeTool();
-      toast(CHANGED);
+      toast(t('toast.changed'));
       return;
     }
-    const tab = prepareTab(!onTouch());
+    const tab = tabFor(!onTouch());
     setWorking(1);
     button.classList.remove('lt-error');
-    toast(mode === 'ai' ? 'Asking Lens...' : 'Searching with Lens...', 120_000);
+    toast(mode === 'ai' ? t('toast.asking') : t('toast.searching'), 120_000);
 
     void (async (): Promise<string> => {
       // An object id belongs to the upload that found it; that upload is passed
@@ -1281,7 +1478,7 @@ export function start({ framed, hovered }: StartOptions): void {
    * allowed on any device - and if it is refused all the same, the link.
    */
   function openNow(url: string): void {
-    deliver(prepareTab(true), url);
+    deliver(tabFor(true), url);
   }
 
   /** The picture's own size in pixels, which is what its proportions are read from. */
@@ -1368,7 +1565,7 @@ export function start({ framed, hovered }: StartOptions): void {
   async function frameOf(target: Target): Promise<(() => Rect | null) | null> {
     const natural = await naturalSize(target);
     if (!natural || !pictureRect(target, natural)) {
-      toast('This picture cannot be measured yet');
+      toast(t('toast.cannotMeasure'));
       return null;
     }
     return () => pictureRect(target, natural);
@@ -1382,7 +1579,8 @@ export function start({ framed, hovered }: StartOptions): void {
   }
 
   /** A failure as a message; a picture that changed is ours to say, not Lens's. */
-  const lensSaid = (error: Error): string => (error.message === CHANGED ? CHANGED : `Lens: ${error.message}`);
+  const lensSaid = (error: Error): string =>
+    error.message === CHANGED ? t('toast.changed') : t('toast.lensError', { message: error.message });
 
   async function selectArea(target: Target): Promise<void> {
     const rect = await frameOf(target);
@@ -1423,16 +1621,16 @@ export function start({ framed, hovered }: StartOptions): void {
       rect,
       paragraphs: readText(target).then((paragraphs) => paragraphs, failed),
       onSearch: (text) => openNow(textSearchUrl(text, pageOptions())),
-      onCopy: (text) => void copied(text, 'the selected text'),
+      onCopy: (text) => void copied(text, 'toast.copiedText'),
     });
   }
 
-  async function copied(text: string, what: string): Promise<void> {
-    toast(
-      (await copyText(text))
-        ? `Copied ${what} (${plural(text.length, 'character')})`
-        : 'The browser would not let the script use the clipboard'
-    );
+  /** Copy, and say so in the words for what was copied. */
+  async function copied(
+    text: string,
+    done: 'toast.copiedTranslation' | 'toast.copiedOriginal' | 'toast.copiedText'
+  ): Promise<void> {
+    toast((await copyText(text)) ? t(done, { count: text.length }) : t('toast.clipboardDenied'));
   }
 
   /**
@@ -1443,10 +1641,10 @@ export function start({ framed, hovered }: StartOptions): void {
   async function copyAny(target: Target): Promise<void> {
     const result = results.get(target.element);
     const translated = result ? translationText(result) : '';
-    if (translated) return copied(translated, 'the translation');
+    if (translated) return copied(translated, 'toast.copiedTranslation');
     let text = result ? ocrText(result) : '';
     if (!text) {
-      toast('Reading the text...', 120_000);
+      toast(t('toast.reading'), 120_000);
       try {
         text = (await readText(target))
           .map((paragraph) => paragraph.lines.map((line) => line.text.trim()).filter(Boolean).join('\n'))
@@ -1458,10 +1656,10 @@ export function start({ framed, hovered }: StartOptions): void {
       }
     }
     if (!text) {
-      toast('Lens found no text in this image');
+      toast(t('toast.noText'));
       return undefined;
     }
-    return copied(text, 'the text');
+    return copied(text, 'toast.copiedText');
   }
 
   /**
@@ -1471,9 +1669,13 @@ export function start({ framed, hovered }: StartOptions): void {
    * without being told what Lens is; the long one adds the ways of pointing at
    * part of a picture, and splits "copy" into its two halves. Nothing in the
    * short list behaves differently for being in it.
+   *
+   * The order is the one the buttons were arranged in, and a rule is drawn
+   * wherever one kind of action gives way to another. Everything is listed
+   * whether or not it also has a button in the row: the menu is the complete
+   * list, and the row is the part of it worth a press of its own.
    */
-  function openActions(): void {
-    const target = currentTarget;
+  function openActions(target: Target | null = currentTarget): void {
     if (!target) return;
     closeTool();
     hideToast();
@@ -1481,87 +1683,119 @@ export function start({ framed, hovered }: StartOptions): void {
     const words = results.has(target.element);
     const pro = settings.uiMode === 'pro';
 
-    const items: MenuItem[] = [
-      {
-        label: translated ? 'Show the original' : 'Translate this image',
-        icon: translated ? 'undo' : 'translate',
-        run: () => void translate(target),
-      },
-      {
-        label: 'Search this image',
-        icon: 'search',
-        run: () => searchPicture(target, { kind: 'image' }, 'visual', ''),
-      },
-      {
-        label: 'Ask AI about it',
-        icon: 'sparkles',
-        run: () => {},
-        field: {
-          value: settings.aiPrompt,
-          placeholder: 'Ask about this picture (optional)',
-          sendLabel: 'Ask',
-          submit: (text) => searchPicture(target, { kind: 'image' }, 'ai', text.trim()),
-        },
-      },
-    ];
+    const items: MenuItem[] = [];
+    let lastKind = '';
+    const add = (kind: string, item: MenuItem): void => {
+      items.push(lastKind && kind !== lastKind ? { ...item, divider: true } : item);
+      lastKind = kind;
+    };
+    const act = (id: ButtonId) => (): void => runAction(id, target, 'menu');
 
-    if (pro) {
-      items.push(
-        { label: 'Select an area', icon: 'area', divider: true, run: () => void selectArea(target) },
-        { label: 'Detected objects', icon: 'objects', run: () => void showObjects(target) },
-        { label: 'Search selected text', icon: 'text', run: () => void pickText(target) },
-        {
-          label: 'Copy translation',
+    for (const { id } of parseButtons(settings.buttons)) {
+      if (id === 'translate') {
+        add('core', {
+          id,
+          label: translated ? t('menu.original') : t('menu.translate'),
+          icon: translated ? 'undo' : 'translate',
+          run: act(id),
+        });
+      } else if (id === 'search') {
+        add('core', { id, label: t('menu.search'), icon: 'search', run: act(id) });
+      } else if (id === 'ask') {
+        add('core', {
+          id,
+          label: t('menu.ask'),
+          icon: 'sparkles',
+          run: () => {},
+          field: {
+            value: question(),
+            placeholder: t('menu.askPlaceholder'),
+            sendLabel: t('menu.askSend'),
+            submit: (text) => runAction('ask', target, 'menu', text),
+          },
+        });
+      } else if (id === 'area' && pro) {
+        add('tools', { id, label: t('menu.area'), icon: 'area', run: act(id) });
+      } else if (id === 'objects' && pro) {
+        add('tools', { id, label: t('menu.objects'), icon: 'objects', run: act(id) });
+      } else if (id === 'text' && pro) {
+        add('tools', { id, label: t('menu.text'), icon: 'text', run: act(id) });
+      } else if (id === 'copy' && pro) {
+        add('copy', {
+          id: 'copyTranslation',
+          label: t('menu.copyTranslation'),
           icon: 'copy',
-          divider: true,
           run: () => void copyFrom('translation', target.element),
           disabled: !words,
-        },
-        {
-          label: 'Copy original text',
+        });
+        add('copy', {
+          id: 'copyOriginal',
+          label: t('menu.copyOriginal'),
           icon: 'copy',
           run: () => void copyFrom('original', target.element),
           disabled: !words,
-        },
-        { label: 'Translate everything in view', icon: 'images', run: () => void translateVisible() }
-      );
-    } else {
-      items.push({
-        label: translated ? 'Copy translation' : 'Copy text',
-        icon: 'copy',
-        run: () => void copyAny(target),
+        });
+      } else if (id === 'copy') {
+        add('copy', {
+          id,
+          label: translated ? t('menu.copyTranslation') : t('menu.copyText'),
+          icon: 'copy',
+          run: act(id),
+        });
+      }
+    }
+    if (pro) {
+      // With the copies when they end the list, as it always was; on its own
+      // once something has been moved in between.
+      add(lastKind === 'copy' ? 'copy' : 'all', {
+        id: 'all',
+        label: t('menu.all'),
+        icon: 'images',
+        run: () => void translateVisible(),
       });
     }
-    items.push({ label: 'Settings', icon: 'settings', divider: true, run: () => showSettings() });
+    add('settings', { id: 'settings', label: t('menu.settings'), icon: 'settings', run: () => showSettings() });
 
-    const rect = more.getBoundingClientRect();
-    openMenu({ top: rect.bottom + 6, left: rect.right - 260 }, items, more);
+    const rect = menuControl.getBoundingClientRect();
+    const onLeft = settings.buttonCorner === 'tl' || settings.buttonCorner === 'bl';
+    openMenu({ top: rect.bottom + 6, left: onLeft ? rect.left : rect.right - 260 }, items, menuControl);
   }
 
   /** Let the original show through one picture, or put the translation back. */
   const peek = (element: HTMLElement, peeking: boolean): boolean =>
     peekCover(element, peeking) || peekOverlay(element, peeking);
 
-  /**
-   * How long the button has to be held before it counts as looking, not clicking.
-   * Short enough to feel immediate, long enough that no ordinary click reaches it.
-   */
-  const HOLD_MS = 350;
   let holdTimer = 0;
   let holding: HTMLElement | null = null;
   /** The click that ends a hold is not a click, and must not undo the translation. */
   let swallowClick = false;
 
+  /**
+   * A press that lasts. How long is a setting (350 ms unless changed): short
+   * enough to feel immediate, long enough that no ordinary click reaches it.
+   *
+   * What it does is a setting too. Looking at the original only means anything
+   * on a translated picture, so there it waits for one; every other action is
+   * simply started, and the click that follows the release is swallowed.
+   */
   function startHold(event: PointerEvent): void {
-    if (event.button !== 0 || !currentTarget || !isTranslated(currentTarget.element)) return;
-    const element = currentTarget.element;
+    const action = settings.longPressAction;
+    if (event.button !== 0 || !currentTarget || action === 'none') return;
+    const target = currentTarget;
+    const element = target.element;
+    if (action === 'peek' && !isTranslated(element)) return;
     window.clearTimeout(holdTimer);
-    holdTimer = window.setTimeout(() => {
-      holding = element;
-      swallowClick = true;
-      peek(element, true);
-      button.classList.add('lt-peeking');
-    }, HOLD_MS);
+    holdTimer = window.setTimeout(
+      () => {
+        swallowClick = true;
+        if (action === 'peek') {
+          holding = element;
+          peek(element, true);
+          button.classList.add('lt-peeking');
+        } else runAction(action, target, 'hold');
+      },
+      Math.min(2000, Math.max(150, Number(settings.holdMs) || 350))
+    );
     // The release may land anywhere once the finger or cursor has drifted.
     try {
       button.setPointerCapture(event.pointerId);
@@ -1583,9 +1817,6 @@ export function start({ framed, hovered }: StartOptions): void {
       swallowClick = false;
     }, 0);
   }
-
-  button.addEventListener('pointerdown', startHold);
-  for (const type of ['pointerup', 'pointercancel']) button.addEventListener(type, endHold);
 
   /** A key held to look at the original everywhere. */
   const PEEK_CODES: Record<Exclude<PeekKey, 'off'>, readonly string[]> = {
@@ -1609,22 +1840,56 @@ export function start({ framed, hovered }: StartOptions): void {
     peekAllOverlays(false);
   }
 
+  /** The chords in force, parsed once per change of settings rather than per key. */
+  let chords: Array<readonly [Chord, () => void]> = [];
+
+  /**
+   * The picture a key press is about: the one under the cursor, or failing
+   * that the one filling most of the view. Looked for now rather than taken
+   * from the list a pinned button keeps, which is only kept while pinned.
+   */
+  function pictureForKey(): Target | null {
+    if (currentTarget?.element.isConnected) return currentTarget;
+    if (!watching) known = collect(settings.minImageSize);
+    return mostVisible()?.target ?? null;
+  }
+
+  function bindKeys(): void {
+    chords = [];
+    const bind = (raw: string, run: () => void): void => {
+      const chord = parseChord(raw);
+      if (chord) chords.push([chord, run]);
+    };
+    const onPicture = (id: ButtonId) => (): void => {
+      const target = pictureForKey();
+      if (target) runAction(id, target, 'key');
+      else toast(t('toast.noPicture'));
+    };
+    bind(settings.keyTranslateAll, () => void translateVisible());
+    bind(settings.keyTranslate, onPicture('translate'));
+    bind(settings.keySearch, onPicture('search'));
+    bind(settings.keyAsk, onPicture('ask'));
+    bind(settings.keyArea, onPicture('area'));
+    bind(settings.keyCopy, onPicture('copy'));
+    bind(settings.keyUndoAll, undoAll);
+  }
+
   document.addEventListener(
     'keydown',
     (event) => {
-      if (isTyping(event)) return;
+      // Nor is a key pressed inside our own window: a shortcut being recorded
+      // in the settings must not also run.
+      if (isTyping(event) || isOurs(event.composedPath()[0] ?? null)) return;
 
-      if (
-        settings.batchHotkey &&
-        event.altKey &&
-        event.shiftKey &&
-        !event.ctrlKey &&
-        !event.metaKey &&
-        event.code === 'KeyT'
-      ) {
-        event.preventDefault();
-        void translateVisible();
-        return;
+      // Off here means the page's own shortcuts are the page's again.
+      if (site !== 'off' && !event.repeat) {
+        const hit = chords.find(([chord]) => matchesChord(chord, event));
+        if (hit) {
+          event.preventDefault();
+          event.stopPropagation();
+          hit[1]();
+          return;
+        }
       }
 
       if (settings.peekKey === 'off' || event.repeat || keyPeeking) return;
@@ -1657,63 +1922,51 @@ export function start({ framed, hovered }: StartOptions): void {
    */
   const addCommand = (command: Command): void => registerCommand(command, !framed);
 
-  addCommand({
-    menuLabel: 'Lens Translate: settings',
-    // The panel is where these are drawn, so it does not offer to open itself.
-    label: null,
-    run: () => showSettings(),
-  });
+  /** The same words in the host's menu and in ours, prefixed there to stand apart. */
+  const command = (
+    id: string,
+    key: Key,
+    run: () => void,
+    options: { panel?: boolean; essential?: boolean } = {}
+  ): void =>
+    addCommand({
+      id,
+      menuLabel: `Lens Translate: ${t(key)}`,
+      // The panel is where these are drawn, so it does not offer what it makes redundant.
+      label: options.panel === false ? null : () => t(key),
+      ...(options.essential ? { essential: true } : {}),
+      run,
+    });
 
-  addCommand({
-    menuLabel: 'Lens Translate: clear cache',
-    label: 'Clear cache',
-    run: () => {
-      // The memory cache and the stored one are separate allowances, but to the
-      // person pressing the button they are one cache, so they are reported as one.
-      const memory = cacheStats();
-      clearCache();
-      void storedStats().then(({ entries, bytes }) => {
-        void clearStored();
-        const total = memory.entries + entries;
-        toast(
-          total
-            ? `Cleared ${total} cached result${total === 1 ? '' : 's'} ` +
-              `(${((memory.bytes + bytes) / 1048576).toFixed(1)} MB)`
-            : 'The cache was already empty'
-        );
-      });
-    },
-  });
+  function clearEverything(): void {
+    // The memory cache and the stored one are separate allowances, but to the
+    // person pressing the button they are one cache, so they are reported as one.
+    const memory = cacheStats();
+    clearCache();
+    void storedStats().then(({ entries, bytes }) => {
+      void clearStored();
+      const total = memory.entries + entries;
+      toast(
+        total
+          ? t('toast.cleared', { count: total, size: ((memory.bytes + bytes) / 1048576).toFixed(1) })
+          : t('toast.cacheEmpty')
+      );
+    });
+  }
 
-  addCommand({
-    menuLabel: 'Lens Translate: undo all on this page',
-    label: 'Undo all on this page',
-    essential: true,
-    run: () => {
-      showing.clear();
-      const restored = uncoverAll() + clearAllOverlays();
-      toast(restored ? `Restored ${restored} image${restored === 1 ? '' : 's'}` : 'Nothing to restore');
-    },
-  });
+  function undoAll(): void {
+    showing.clear();
+    const restored = uncoverAll() + clearAllOverlays();
+    markTranslated(false);
+    toast(restored ? t('toast.restored', { count: restored }) : t('toast.nothingToRestore'));
+  }
 
-
-  addCommand({
-    menuLabel: 'Lens Translate: translate all visible images',
-    label: 'Translate all in view',
-    run: () => void translateVisible(),
-  });
-
-  addCommand({
-    menuLabel: 'Lens Translate: copy translation',
-    label: null,
-    run: () => void copyFrom('translation'),
-  });
-
-  addCommand({
-    menuLabel: 'Lens Translate: copy original text',
-    label: null,
-    run: () => void copyFrom('original'),
-  });
+  command('settings', 'cmd.settings', () => showSettings(), { panel: false });
+  command('clearCache', 'cmd.clearCache', clearEverything);
+  command('undoAll', 'cmd.undoAll', undoAll, { essential: true });
+  command('translateAll', 'cmd.translateAll', () => void translateVisible());
+  command('copyTranslation', 'cmd.copyTranslation', () => void copyFrom('translation'), { panel: false });
+  command('copyOriginal', 'cmd.copyOriginal', () => void copyFrom('original'), { panel: false });
 
   /**
    * Change what this site does, and make it so at once.
@@ -1735,50 +1988,31 @@ export function start({ framed, hovered }: StartOptions): void {
     const host = hostOf();
     toast(
       next === 'off'
-        ? `Lens Translate is off on ${host}`
+        ? t('toast.siteNowOff', { host })
         : next === 'auto'
-          ? `Images on ${host} will be translated as they come into view`
-          : `${host} is back to the default`
+          ? t('toast.siteNowAuto', { host })
+          : t('toast.siteNowDefault', { host })
     );
   }
 
-  addCommand({
-    menuLabel: 'Lens Translate: toggle on/off for this site',
-    label: 'Toggle for this site',
+  command('toggleSite', 'cmd.toggleSite', () => chooseSite(site === 'off' ? 'default' : 'off'), {
     essential: true,
-    run: () => chooseSite(site === 'off' ? 'default' : 'off'),
   });
-
-  addCommand({
-    menuLabel: 'Lens Translate: toggle auto-translate for this site',
-    label: 'Toggle auto-translate here',
-    run: () => chooseSite(site === 'auto' ? 'default' : 'auto'),
-  });
+  command('toggleAuto', 'cmd.toggleAuto', () => chooseSite(site === 'auto' ? 'default' : 'auto'));
 
   // The probes ask from wherever they run, and a frame is the wrong place to
   // diagnose the tab from; the report also needs room a frame may not have.
-  if (!framed) {
-    addCommand({
-      menuLabel: 'Lens Translate: diagnostics',
-      label: 'Run diagnostics',
-      essential: true,
-      run: openDiagnostics,
-    });
-  }
+  if (!framed) command('diagnostics', 'cmd.diagnostics', openDiagnostics, { essential: true });
 
-  addCommand({
-    menuLabel: 'Lens Translate: toggle on/off',
-    label: 'Toggle on/off',
-    run: () => {
-      settings = saveSettings({ enabled: !settings.enabled });
-      if (!settings.enabled) {
-        showing.clear();
-        uncoverAll();
-        clearAllOverlays();
-        hideButton();
-      }
-      toast(settings.enabled ? 'Translation enabled' : 'Translation disabled');
-    },
+  command('toggle', 'cmd.toggle', () => {
+    settings = saveSettings({ enabled: !settings.enabled });
+    if (!settings.enabled) {
+      showing.clear();
+      uncoverAll();
+      clearAllOverlays();
+      hideButton();
+    }
+    toast(settings.enabled ? t('toast.enabled') : t('toast.disabled'));
   });
 
   /**
@@ -1793,9 +2027,9 @@ export function start({ framed, hovered }: StartOptions): void {
   const DEBUG_HASH = '#lens-debug';
 
   function openDiagnostics(): void {
-    openReport('Probing...');
+    openReport(t('report.probing'));
     void diagnose({ pinned }).then(openReport, (error: Error) =>
-      openReport(`Diagnostics failed: ${error.message}`)
+      openReport(t('report.failed', { message: error.message }))
     );
   }
 
@@ -1811,6 +2045,11 @@ export function start({ framed, hovered }: StartOptions): void {
     checkDebugHash();
   }
 
+  applySettings();
+  // The row carries words - titles, and labels when they are switched on - so
+  // a language that arrives late redraws it. The menu and the tools are built
+  // when they open and need no telling.
+  onLocaleChange(buildControls);
   applyButtonMode();
   // A frame woken by a hover has already had the mouseover that would have
   // brought the button out; it would otherwise wait for the next one.
@@ -1821,12 +2060,16 @@ export function start({ framed, hovered }: StartOptions): void {
   // defaults. Once the saved values arrive they are adopted - without this the
   // settings silently fell back to the site's localStorage, which made them
   // per-site.
-  void preloadStored([...SETTINGS_KEYS, SITES_KEY]).then((arrived) => {
+  void preloadStored([...SETTINGS_KEYS, SITES_KEY, ...LOCALE_KEYS, STATE_KEY]).then((arrived) => {
     if (!arrived) return;
     settings = reloadSettings();
     reloadSites();
+    reloadState();
     site = siteMode();
+    // The language setting and the locale kept for it both arrived just now.
+    useLanguage(settings.language);
     applyPopupOpacity(settings.popupOpacity);
+    applySettings();
     applyButtonMode();
   });
   // Asked once at document-idle is a snapshot, and the answer can arrive late or

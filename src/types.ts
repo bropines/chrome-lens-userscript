@@ -118,6 +118,13 @@ export type HotkeyModifier = 'alt' | 'ctrl' | 'shift' | 'none';
 export type ButtonMode = 'auto' | 'hover' | 'pinned';
 export type PeekKey = 'off' | 'backquote' | 'shift' | 'control';
 export type UiMode = 'simple' | 'pro';
+/** What the main button does when pressed. */
+export type MainAction = 'translate' | 'search' | 'ask' | 'area' | 'menu';
+/** What holding it down does; 'peek' shows the original while held. */
+export type LongPressAction = 'peek' | MainAction | 'none';
+export type ButtonSize = 's' | 'm' | 'l';
+/** Which corner of the picture the controls hang from. */
+export type ButtonCorner = 'tr' | 'tl' | 'br' | 'bl';
 
 /**
  * What is asked of Lens, and what is sent to ask it.
@@ -148,7 +155,26 @@ export interface LensOptions {
  */
 export interface RenderOptions {
   fontFamily: string;
+  /** CSS font weight, 100..900. 400 is what every build before this drew. */
+  fontWeight: number;
+  /**
+   * Colours to draw with instead of the ones Lens reports, as `#rrggbb`.
+   * Empty follows the server, which is what Chromium does: it samples the
+   * source text and its background, and is usually right.
+   */
+  textColor: string;
+  outlineColor: string;
+  /** The flat colour behind text where no inpainted patch is used. */
+  fillColor: string;
   drawBackground: boolean;
+  /**
+   * Multiplier on the padding of the server's inpainted patch.
+   *
+   * 1 is Chromium's formula exactly, and the formula itself is not up for
+   * change (see AGENTS.md); this only scales its result, for a source whose
+   * glyph edges show outside the patch.
+   */
+  patchPadding: number;
   verticalText: VerticalTextMode;
   /**
    * Smallest size, in CSS pixels as displayed, that translated text is allowed
@@ -158,6 +184,13 @@ export interface RenderOptions {
   minReadablePx: number;
   /** Canvas is rendered at this multiple of the image's natural size. */
   supersample: number;
+  /**
+   * Longest side of the rendered canvas, in pixels, whatever the multiple
+   * above asks for: a large photo at 3x is a bitmap of hundreds of megabytes.
+   */
+  maxCanvasSide: number;
+  /** The readable-size floor manga mode raises `minReadablePx` to, in CSS px. */
+  mangaMinPx: number;
   /**
    * Manga preset. Speech bubbles are round and the detected paragraph box hugs
    * the glyphs, so reflowed text is forced into a column far narrower than the
@@ -238,6 +271,11 @@ export interface CacheOptions {
    * inpainted patches, which dominate. 0 disables caching.
    */
   cacheBytes: number;
+  /**
+   * How much to keep across reloads, in bytes. A separate allowance from the
+   * one in memory; left out, it is the same size.
+   */
+  storeBytes?: number;
 }
 
 /**
@@ -264,13 +302,21 @@ export interface AppSettings {
   buttonMode: ButtonMode;
   hotkey: HotkeyModifier;
   /**
-   * Alt+Shift+T translates every picture in view.
+   * Key chords, one per action, written as `Alt+Shift+KeyT` (see
+   * ui/shortcuts.ts); empty is unbound.
    *
-   * A setting rather than a fixed binding because a key chord nobody asked for
-   * is exactly what a page's own shortcuts collide with, and Option+Shift+T
-   * types a character on a Mac.
+   * Settings rather than fixed bindings because a chord nobody asked for is
+   * exactly what a page's own shortcuts collide with, and Option+Shift+T types
+   * a character on a Mac. Only translate-all is bound out of the box, as it
+   * always was.
    */
-  batchHotkey: boolean;
+  keyTranslateAll: string;
+  keyTranslate: string;
+  keySearch: string;
+  keyAsk: string;
+  keyArea: string;
+  keyCopy: string;
+  keyUndoAll: string;
   /**
    * A key that, while held, shows the original under every translation.
    * Holding the button down does the same for one picture and needs no key.
@@ -299,6 +345,39 @@ export interface AppSettings {
    * percent (40..100). The text on them is never faded.
    */
   popupOpacity: number;
+  /** Interface language: 'auto' follows the browser, otherwise a locale code. */
+  language: string;
+  /** Opacity of a finished translation over its picture, in percent. */
+  coverOpacity: number;
+  /**
+   * The controls over a picture: every button in order, the ones shown in the
+   * row marked with a trailing `*` (see ui/buttons.ts).
+   */
+  buttons: string;
+  mainAction: MainAction;
+  longPressAction: LongPressAction;
+  /** The main button does whatever was last chosen from the menu. */
+  repeatLast: boolean;
+  buttonSize: ButtonSize;
+  buttonCorner: ButtonCorner;
+  /** Opacity of the controls while the cursor is not on them, in percent. */
+  idleOpacity: number;
+  /** How long the controls stay after the cursor leaves the picture, in ms. */
+  hideDelayMs: number;
+  /** How long the cursor lingers before the secondary buttons join the main one. */
+  extrasDelayMs: number;
+  buttonLabels: boolean;
+  /** How long a press has to last to count as a hold, in ms. */
+  holdMs: number;
+  /** Pictures translated at once by a batch or by auto-translate. */
+  concurrency: number;
+  /** Start the "ask AI" field from the last question asked, not the default. */
+  rememberQuestion: boolean;
+  /** Language of the results page; empty follows the translation target. */
+  searchLang: string;
+  searchTheme: 'auto' | 'light' | 'dark';
+  /** Open results behind the current tab, where the host can. */
+  backgroundTabs: boolean;
 }
 
 export interface Settings extends EngineOptions, AppSettings {}
