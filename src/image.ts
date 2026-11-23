@@ -26,7 +26,7 @@ export function targetSize(
 
 export type Source = HTMLImageElement | HTMLCanvasElement | HTMLVideoElement | ImageBitmap;
 
-function sourceSize(source: Source): { width: number; height: number } {
+export function sourceSize(source: Source): { width: number; height: number } {
   if (source instanceof HTMLImageElement) {
     return { width: source.naturalWidth, height: source.naturalHeight };
   }
@@ -164,7 +164,21 @@ export async function encodeRegion(
   const sy = Math.max(0, Math.floor((box.cy - box.h / 2) * H));
   const sw = Math.max(1, Math.min(W - sx, Math.ceil(box.w * W)));
   const sh = Math.max(1, Math.min(H - sy, Math.ceil(box.h * H)));
-  const { width, height } = targetSize(sw, sh, settings);
+  return encodeRect(image.source, { x: sx, y: sy, width: sw, height: sh }, settings);
+}
+
+/**
+ * One rectangle of the source, in its own pixels, under the same budget as a
+ * whole picture. A region search and a tile of a long strip are both this: a
+ * part sent as if it were the picture, so it gets the resolution the whole
+ * could not have.
+ */
+export async function encodeRect(
+  source: CanvasImageSource,
+  rect: { x: number; y: number; width: number; height: number },
+  settings: Pick<LensOptions, 'maxArea' | 'maxSide' | 'jpegQuality'>
+): Promise<{ bytes: Bytes; width: number; height: number }> {
+  const { width, height } = targetSize(rect.width, rect.height, settings);
 
   const canvas = document.createElement('canvas');
   canvas.width = width;
@@ -173,7 +187,7 @@ export async function encodeRegion(
   if (!ctx) throw new Error('Could not get a 2d canvas context');
   ctx.fillStyle = '#ffffff';
   ctx.fillRect(0, 0, width, height);
-  ctx.drawImage(image.source, sx, sy, sw, sh, 0, 0, width, height);
+  ctx.drawImage(source, rect.x, rect.y, rect.width, rect.height, 0, 0, width, height);
 
   const jpeg = await new Promise<Blob | null>((resolve, reject) => {
     try {

@@ -146,6 +146,16 @@ export interface LensOptions {
   maxArea: number;
   maxSide: number;
   jpegQuality: number;
+  /**
+   * Cut a long strip into overlapping tiles and ask about each.
+   *
+   * A webtoon page of 800x12000 is bound by `maxSide`, not by the area: it
+   * goes up 107 pixels wide and its text is dots. 'auto' tiles only such a
+   * picture (see lens/tiles.ts); 'off' always sends one upload, as Chromium
+   * does. Left out, it is 'auto'. It is asked of Lens rather than drawn, so it
+   * lives here - and it is part of what an answer is cached under.
+   */
+  tileLongImages?: 'auto' | 'off';
 }
 
 /**

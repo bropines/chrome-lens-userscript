@@ -395,6 +395,11 @@ export const EN = {
   'set.maxArea.hint': "larger pictures are scaled down to this area before upload; 1500000 is Chromium's",
   'set.maxSide.label': 'Upload longest side (px)',
   'set.maxSide.hint': "raising it helps tall pages with small text and makes every upload slower; 1600 is Chromium's",
+  'set.tileLongImages.label': 'Long pictures',
+  'set.tileLongImages.hint':
+    'a webtoon strip or a panorama is sent to Lens in overlapping parts, so its text stays readable; one translation is then several requests',
+  'set.tileLongImages.opt.auto': 'auto - in parts when one upload would be too small',
+  'set.tileLongImages.opt.off': 'off - always one upload, like Chromium',
   'set.timeoutMs.label': 'Request timeout (ms)',
   'set.timeoutMs.hint': 'how long to wait for Lens before giving up',
   'set.cacheBytes.label': 'Cache in memory (MB)',

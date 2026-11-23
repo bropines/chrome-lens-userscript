@@ -74,7 +74,9 @@ src/
                         and language, with recency in a store of its own
   image.ts              fetch, downscale, JPEG encode
   gen/fields.ts         GENERATED - do not edit
-  lens/                 request builder, response parser, transport, plain text
+  lens/                 request builder, response parser, transport, plain text;
+                        tiles.ts cuts a long strip and merges the answers (pure),
+                        ask.ts sends them
   render/
     layout.ts           the pure layout maths, shared by both renderers
     bubble.ts           a speech bubble as a text area: is it one, its shape
@@ -626,6 +628,59 @@ to the drawing comes out of the response cache and costs nothing, while changing
 the target language asks Lens again - the right answer in both cases, and not
 one that has to be decided here.
 
+### A long strip is several pictures to Lens and one to everything else
+
+The upload budget is an area *and* a longest side. A page is bound by the area
+and its text survives; a webtoon strip of 800x12000 is bound by the side, goes
+up 107 pixels wide, and Lens finds nothing in it - measured live on an 800x11352
+strip: 0 lines from one upload, 456 from ten tiles, in three seconds.
+
+`lens/tiles.ts` is the arithmetic and `lens/ask.ts` the sending; `askLens` is
+what a front end calls, and for a picture that is not tiled it is the old
+`encodeForUpload` + `callLens`, unchanged. It lives in the engine, so the other
+consumer gets it too.
+
+- **Tiled only when the long side is what binds.** One upload's scale
+  (`maxSide / long`) against what the area alone would allow, and tiled under
+  0.7 of it. 1500x2000 is 0.80 against 0.71 and goes up once; so does anything
+  Chromium's rule does not scale at all.
+- **A tile spans the short side and is as long as still uploads unscaled**, at
+  least 1.5 of the short side (a page), at most 4. For 800 wide that is 1600.
+  Neighbours share a quarter - the size of a bubble, since a paragraph cut by an
+  edge is whole in the neighbour only if it is shorter than the overlap. Twelve
+  at most; past that tiles grow longer, not more numerous, and are scaled like
+  any oversized upload.
+- **A tile is a crop, so its boxes move by a translation in pixels.** The angle
+  is untouched; only the normalisation changes, per axis. The patch padding is a
+  fraction of the line's height in pixels and needs nothing.
+- **Bands rank, they do not decide.** Each tile owns the stretch between the
+  middles of its overlaps, and a paragraph belongs to the band its centre is in.
+  Applied as a filter that loses text: two readings of one paragraph disagree on
+  the centre by a pixel, a seam falls between them and each tile defers to the
+  other. So: whole and in band first, whole out of band, then cut, larger first;
+  a paragraph is kept unless one already kept *from another tile* is the same
+  paragraph (half of the smaller inside the other). Nothing goes for where it
+  is, only for being a duplicate of something that stays.
+- **"Cut" is ending within a glyph and a half of a tile's inner edge.** A line
+  the edge runs through is usually not reported, so the paragraph stops a line
+  short. A paragraph taller than the overlap is whole nowhere: the larger piece
+  stays and the smaller keeps the lines past it, with its translation cut to
+  those lines' word ranges - a second paragraph, not a hole.
+- **A failed tile fails the translation.** One retry first unless the failure is
+  an answer (a 4xx other than 408/429) or a timeout. The first tile goes alone,
+  so a bad key still costs one request; the rest go two at a time.
+- **The keys.** `cacheKey` gains a field only for `tileLongImages: 'off'`, so
+  switching it asks again. The store's key is the fingerprint - of the whole
+  picture, as before - plus `tilingTag`, which is empty unless the picture is
+  really tiled: every answer stored before this is still found, except a
+  strip's, which was the unreadable one. A hit in either costs no request.
+
+The setting is in `LensOptions`, not `RenderOptions`: it changes what is asked.
+It is optional there, and left out it is `auto`.
+
+Searching is not tiled. A region search already sends its crop at full
+resolution, which is the same idea.
+
 ### The address is the unreliable half of a picture's identity
 
 `cache.ts` keys on the URL, which is free but wrong often enough to matter: a
@@ -998,7 +1053,8 @@ width `2 * pad`, then fill.
 ## Verifying changes
 
 `bun test` covers what can be checked without a page: the protobuf codec, URL
-normalisation and the cache budget, bubbles on synthetic pictures
+normalisation and the cache budget, tiling a long strip and its seams
+(`test/tiles.test.ts`), bubbles on synthetic pictures
 (`test/bubble.test.ts`), the layout maths (`test/layout.test.ts`,
 partly ported from `chrome-lens-py/tests/test_units.py` - and the rotated
 punctuation set is compared with the Python one when the sibling checkout is

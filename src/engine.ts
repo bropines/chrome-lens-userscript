@@ -18,7 +18,9 @@
  *      the engine cannot do for itself.
  *   2. `ignoreElements(...)` - if it draws anything over a picture, say so, or
  *      the detector will offer to translate it.
- *   3. `prepareImage` / `callLens` / `renderToBlob`, with options of its own.
+ *   3. `acquireSource` / `askLens` / `renderToBlob`, with options of its own.
+ *      (`askLens` is `callLens` for a picture of any shape: a long strip is
+ *      sent as tiles and comes back as one answer. `callLens` is one upload.)
  *
  * The options are split three ways on purpose. A caller that wants to draw a
  * picture should not have to invent a value for `hotkey`.
@@ -50,6 +52,9 @@ export type { BinaryRequest, BinaryResponse, GetOptions, Transport } from './tra
 export { getTransport, setTransport } from './transport.js';
 
 export { LENS_ENDPOINT, callLens, fetchImageBlob } from './lens/client.js';
+export { askLens } from './lens/ask.js';
+export type { Tile, TilePlan } from './lens/tiles.js';
+export { MAX_TILES, mergeTiles, planTiles, tilingTag, toPicture } from './lens/tiles.js';
 export { buildRequest } from './lens/request.js';
 export type { SearchMode, SearchOptions, Selection } from './lens/search.js';
 export {
@@ -66,7 +71,14 @@ export { parseResponse } from './lens/response.js';
 export { ocrText, translationText } from './lens/text.js';
 
 export type { Source } from './image.js';
-export { acquireSource, encodeForUpload, encodeRegion, fingerprint, prepareImage } from './image.js';
+export {
+  acquireSource,
+  encodeForUpload,
+  encodeRect,
+  encodeRegion,
+  fingerprint,
+  prepareImage,
+} from './image.js';
 
 export type { Target, TargetKind } from './detect.js';
 export { classify, collect, ignoreElements, isBigEnough, targetFromEvent } from './detect.js';

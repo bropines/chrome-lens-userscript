@@ -72,6 +72,14 @@ describe('isBubbleColumn', () => {
     expect(isBubbleColumn(banner, around(banner))).toBe(false);
   });
 
+  test('four or five lines may be wider, as a wide Western bubble is', () => {
+    // Shaped like a real page shown 800 px wide: 5 lines in a 120x44 paragraph.
+    const wide = [0, 1, 2, 3, 4].map((i) => rect(315, 382 + i * 8.6, [104, 110, 112, 120, 92][i]!, 10));
+    expect(isBubbleColumn(wide, around(wide))).toBe(true);
+    // The same shape in three lines is the banner above.
+    expect(isBubbleColumn(wide.slice(0, 3), { ...around(wide), top: 378, bottom: 378 + 40 })).toBe(false);
+  });
+
   test('body text has long lines', () => {
     const body = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].map((i) => rect(300, 100 + i * 18, 400, 14));
     expect(isBubbleColumn(body, around(body))).toBe(false);

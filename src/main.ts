@@ -3,7 +3,8 @@ import type { Command } from './gm.js';
 import { setTransport } from './transport.js';
 import { diagnose } from './diagnose.js';
 
-import { callLens } from './lens/client.js';
+import { askLens } from './lens/ask.js';
+import { tilingTag } from './lens/tiles.js';
 import { ImageSearch, textSearchUrl } from './lens/search.js';
 import type { Selection } from './lens/search.js';
 import { ocrText, translationText } from './lens/text.js';
@@ -403,7 +404,12 @@ export function start({ framed, hovered }: StartOptions): void {
         // whether this picture has been answered before - under any address, and
         // in any earlier life of this page. The encode is the expensive half and
         // sits after this deliberately.
-        const hash = result ? '' : fingerprint(prepared.source, prepared.width, prepared.height);
+        //
+        // The fingerprint is of the whole picture; a strip that is asked about
+        // in tiles is filed under it with a mark, so the answer a single upload
+        // once got for the same pixels is not the one that comes back.
+        const print = result ? '' : fingerprint(prepared.source, prepared.width, prepared.height);
+        const hash = print && print + tilingTag(prepared.width, prepared.height, settings);
         if (!result && hash) {
           const remembered = await getStored(hash, settings);
           if (remembered) {
@@ -413,8 +419,8 @@ export function start({ framed, hovered }: StartOptions): void {
         }
 
         if (!result) {
-          const upload = await encodeForUpload(prepared.source, settings);
-          result = await callLens(upload, settings);
+          // One request for a page; several, merged, for a strip too long for one.
+          result = await askLens(prepared.source, settings);
           if (target.url) putCached(key, result, settings, size);
           void putStored(hash, result, settings);
         }

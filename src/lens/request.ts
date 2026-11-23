@@ -61,7 +61,10 @@ export function writeImageData(data: Writer, image: Pick<PreparedImage, 'imageBy
 }
 
 /** Build the objects request: one image, no session. */
-export function buildRequest(image: PreparedImage, settings: LensOptions): Bytes {
+export function buildRequest(
+  image: Pick<PreparedImage, 'imageBytes' | 'width' | 'height'>,
+  settings: LensOptions
+): Bytes {
   return writer()
     .sub(F.LensOverlayServerRequest.objectsRequest, (objects) => {
       objects.sub(F.LensOverlayObjectsRequest.requestContext, (ctx) => {

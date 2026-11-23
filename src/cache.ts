@@ -119,9 +119,18 @@ export function sameShape(a: PictureSize | undefined, b: PictureSize | undefined
 /**
  * What the answer depends on. Render-time settings are deliberately absent:
  * they change how it is drawn, not what came back.
+ *
+ * Whether a long picture is tiled is here because it is the difference between
+ * an answer with the text in it and one without: switching it and translating
+ * again has to ask again, not be handed the answer it was switched to replace.
+ * The address is all this has, so it cannot know whether *this* picture is a
+ * long one and the switch moves every key; an ordinary page then comes back
+ * from the store, whose key only moves for a picture that is really tiled.
  */
 export function cacheKey(url: string, settings: LensOptions): string {
-  return [normalizeUrl(url), settings.targetLang, settings.sourceLang, settings.ocrLang].join('\u0000');
+  const key = [normalizeUrl(url), settings.targetLang, settings.sourceLang, settings.ocrLang];
+  if (settings.tileLongImages === 'off') key.push('untiled');
+  return key.join('\u0000');
 }
 
 /**

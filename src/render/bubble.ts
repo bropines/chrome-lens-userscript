@@ -42,8 +42,16 @@ export const COLUMN_MAX_LINE_ASPECT = 12;
  * The paragraph's width over its height. Three lines of a dozen heights each
  * come to about 3.6, and that is a strip, not a column; the six bubbles this
  * was tuned against lie between 0.55 and 1.75.
+ *
+ * Four lines or more may be wider. A page of wide Western bubbles - four and
+ * five lines of hand-lettered English - came in at 2.69 and 2.73 and was drawn
+ * line by line, each line raised to the floor and written through the next. A
+ * centred three-line banner sits at about 3, so the wider limit is earned by
+ * the line count rather than given to every stack.
  */
 export const COLUMN_MAX_ASPECT = 2.5;
+export const COLUMN_MAX_ASPECT_TALL = 3.2;
+export const COLUMN_TALL_LINES = 4;
 /**
  * How far a line's centre may sit from the column's, as a share of the
  * paragraph's width. Bubble lines measured within 0.04 of each other;
@@ -69,7 +77,8 @@ export function isBubbleColumn(lines: Rect[], paragraph: Rect, minLines = COLUMN
   if (lines.length < Math.max(2, minLines)) return false;
   const paraW = paragraph.right - paragraph.left;
   const paraH = paragraph.bottom - paragraph.top;
-  if (!(paraW > 0) || !(paraH > 0) || paraW > COLUMN_MAX_ASPECT * paraH) return false;
+  const maxAspect = lines.length >= COLUMN_TALL_LINES ? COLUMN_MAX_ASPECT_TALL : COLUMN_MAX_ASPECT;
+  if (!(paraW > 0) || !(paraH > 0) || paraW > maxAspect * paraH) return false;
 
   const sorted = [...lines].sort((a, b) => a.top + a.bottom - (b.top + b.bottom));
   for (let i = 1; i < sorted.length; i += 1) {

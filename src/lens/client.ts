@@ -16,8 +16,14 @@ const IMAGE_TIMEOUT_MS = 30_000;
  * origin and is not subject to CORS - the whole reason this needs no server of
  * its own. What a host does with a binary body and a binary response varies
  * enough that none of it belongs here.
+ *
+ * Only the bytes and their size are read, so a tile of a long picture - which
+ * has no decoded source of its own to carry - is sent by the same call.
  */
-export async function callLens(image: PreparedImage, settings: LensOptions): Promise<LensResult> {
+export async function callLens(
+  image: Pick<PreparedImage, 'imageBytes' | 'width' | 'height'>,
+  settings: LensOptions
+): Promise<LensResult> {
   const response = await getTransport().post({
     url: LENS_ENDPOINT,
     headers: {

@@ -261,7 +261,7 @@ Reading the pixels has three ways in, cheapest first:
 
 If step 3 does get reached and fails, the message names the host: Tampermonkey blocks a domain permanently once refused, and it is cleared under Tampermonkey → Settings → Security → Blocked domains.
 
-Uploads use Chromium's own budget: JPEG quality 40, and a resize only when the image is both over 1.5 MP and over 1600px on a side.
+Uploads use Chromium's own budget: JPEG quality 40, and a resize only when the image is both over 1.5 MP and over 1600px on a side. A picture far longer than it is wide - a webtoon strip, a panorama - would be unreadable at that size, so it is sent in up to twelve overlapping parts and the answers are joined; one translation is then several requests. *Long pictures* in the Advanced settings turns that off.
 
 ## Erasing the original
 

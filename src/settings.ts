@@ -28,6 +28,7 @@ export const DEFAULTS: Settings = {
   // Chromium's image budget: components/lens/lens_features.cc
   maxArea: 1500000,
   maxSide: 1600,
+  tileLongImages: 'auto',
   jpegQuality: 0.4,
   showButton: true,
   videoButton: false,
@@ -247,6 +248,7 @@ export const FIELDS: ReadonlyArray<Field> = [
   { key: 'jpegQuality', tab: 'advanced', type: 'range', min: 0.1, max: 1, step: 0.05, unit: '%' },
   { key: 'maxArea', tab: 'advanced', type: 'number', min: 100000, max: 16000000, step: 100000 },
   { key: 'maxSide', tab: 'advanced', type: 'number', min: 400, max: 8000, step: 100 },
+  { key: 'tileLongImages', tab: 'advanced', type: 'select', options: ['auto', 'off'] },
   { key: 'timeoutMs', tab: 'advanced', type: 'number', min: 5000, max: 300000, step: 1000 },
   { key: 'cacheBytes', tab: 'advanced', type: 'number', min: 0, max: 1024, step: 4, scale: MB },
   { key: 'persistCache', tab: 'advanced', type: 'checkbox' },

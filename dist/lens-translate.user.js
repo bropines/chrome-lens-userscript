@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Lens Translate
 // @namespace    https://github.com/bropines/chrome-lens-userscript
-// @version      2.13.0-beta.5
+// @version      2.13.0-beta.6
 // @author       bropines
 // @description  Hover any image, click the button, and its text is translated in place - rendered the way Chromium's own Lens overlay does it.
 // @license      MIT
@@ -605,8 +605,8 @@
     if (spec.size.kind === "contain") return false;
     const { width, height } = spec.size;
     const fills = (dimension, of) => {
-      const length = resolve(dimension, of);
-      return length !== null && length >= of - EPSILON;
+      const length2 = resolve(dimension, of);
+      return length2 !== null && length2 >= of - EPSILON;
     };
     return (!spec.repeatX || fills(width, area.width)) && (!spec.repeatY || fills(height, area.height));
   }
@@ -697,7 +697,7 @@
     }
     return null;
   }
-  const VERSION = "2.13.0-beta.5";
+  const VERSION = "2.13.0-beta.6";
   const EN = {
     // --- the controls over a picture
     "act.translate": "Translate",
@@ -1058,6 +1058,10 @@
     "set.maxArea.hint": "larger pictures are scaled down to this area before upload; 1500000 is Chromium's",
     "set.maxSide.label": "Upload longest side (px)",
     "set.maxSide.hint": "raising it helps tall pages with small text and makes every upload slower; 1600 is Chromium's",
+    "set.tileLongImages.label": "Long pictures",
+    "set.tileLongImages.hint": "a webtoon strip or a panorama is sent to Lens in overlapping parts, so its text stays readable; one translation is then several requests",
+    "set.tileLongImages.opt.auto": "auto - in parts when one upload would be too small",
+    "set.tileLongImages.opt.off": "off - always one upload, like Chromium",
     "set.timeoutMs.label": "Request timeout (ms)",
     "set.timeoutMs.hint": "how long to wait for Lens before giving up",
     "set.cacheBytes.label": "Cache in memory (MB)",
@@ -1496,6 +1500,7 @@
     // Chromium's image budget: components/lens/lens_features.cc
     maxArea: 15e5,
     maxSide: 1600,
+    tileLongImages: "auto",
     jpegQuality: 0.4,
     showButton: true,
     videoButton: false,
@@ -1672,6 +1677,7 @@
     { key: "jpegQuality", tab: "advanced", type: "range", min: 0.1, max: 1, step: 0.05, unit: "%" },
     { key: "maxArea", tab: "advanced", type: "number", min: 1e5, max: 16e6, step: 1e5 },
     { key: "maxSide", tab: "advanced", type: "number", min: 400, max: 8e3, step: 100 },
+    { key: "tileLongImages", tab: "advanced", type: "select", options: ["auto", "off"] },
     { key: "timeoutMs", tab: "advanced", type: "number", min: 5e3, max: 3e5, step: 1e3 },
     { key: "cacheBytes", tab: "advanced", type: "number", min: 0, max: 1024, step: 4, scale: MB },
     { key: "persistCache", tab: "advanced", type: "checkbox" },
@@ -2084,9 +2090,9 @@
         return self.tag(field, Wire.Length).raw(encodeVarint(bytes2.length)).raw(bytes2);
       },
       finish() {
-        let length = 0;
-        for (const part of parts) length += part.length;
-        const out = new Uint8Array(length);
+        let length2 = 0;
+        for (const part of parts) length2 += part.length;
+        const out = new Uint8Array(length2);
         let offset = 0;
         for (const part of parts) {
           out.set(part, offset);
@@ -2136,10 +2142,10 @@
           p += 8;
           break;
         case Wire.Length: {
-          const length = Number(readVarint());
-          need(length, "length-delimited field");
-          value = buf.subarray(p, p + length);
-          p += length;
+          const length2 = Number(readVarint());
+          need(length2, "length-delimited field");
+          value = buf.subarray(p, p + length2);
+          p += length2;
           break;
         }
         case Wire.Fixed32:
@@ -2451,6 +2457,464 @@
     lines.push("", verdict(results));
     return lines.join("\n");
   }
+  function targetSize(width, height, { maxArea, maxSide }) {
+    if (width * height <= maxArea || width <= maxSide && height <= maxSide) {
+      return { width, height };
+    }
+    const scale = Math.min(maxSide / width, maxSide / height);
+    return {
+      width: Math.max(1, Math.round(width * scale)),
+      height: Math.max(1, Math.round(height * scale))
+    };
+  }
+  function sourceSize(source) {
+    if (source instanceof HTMLImageElement) {
+      return { width: source.naturalWidth, height: source.naturalHeight };
+    }
+    if (source instanceof HTMLVideoElement) {
+      return { width: source.videoWidth, height: source.videoHeight };
+    }
+    return { width: source.width, height: source.height };
+  }
+  function ownPixels(target) {
+    if (target.kind === "canvas") return target.element;
+    if (target.kind === "video") {
+      const video = target.element;
+      return video.videoWidth && video.videoHeight ? video : null;
+    }
+    if (target.kind === "img") {
+      const img = target.element;
+      return img.naturalWidth && img.naturalHeight ? img : null;
+    }
+    return null;
+  }
+  const FINGERPRINT_SIZE = 128;
+  function fingerprint(source, width, height) {
+    const canvas = document.createElement("canvas");
+    canvas.width = FINGERPRINT_SIZE;
+    canvas.height = FINGERPRINT_SIZE;
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    if (!ctx) return "";
+    try {
+      ctx.drawImage(source, 0, 0, FINGERPRINT_SIZE, FINGERPRINT_SIZE);
+      const { data } = ctx.getImageData(0, 0, FINGERPRINT_SIZE, FINGERPRINT_SIZE);
+      let a = 2166136261;
+      let b = 16777619;
+      for (let i = 0; i < data.length; i += 1) {
+        a = Math.imul(a ^ data[i], 16777619);
+        b = Math.imul(b + data[i] + i, 2246822507);
+      }
+      const lane = (n) => (n >>> 0).toString(36);
+      return `${lane(a)}.${lane(b)}.${width}x${height}`;
+    } catch {
+      return "";
+    }
+  }
+  async function encodeForUpload(source, settings, release2 = () => {
+  }) {
+    const natural = sourceSize(source);
+    const { width, height } = targetSize(natural.width, natural.height, settings);
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) throw new Error("Could not get a 2d canvas context");
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, width, height);
+    ctx.drawImage(source, 0, 0, width, height);
+    const jpeg = await new Promise((resolve2, reject) => {
+      try {
+        canvas.toBlob(resolve2, "image/jpeg", settings.jpegQuality);
+      } catch (e) {
+        reject(e);
+      }
+    });
+    if (!jpeg) throw new Error("Canvas is tainted");
+    return {
+      imageBytes: new Uint8Array(await jpeg.arrayBuffer()),
+      width,
+      height,
+      source,
+      sourceWidth: natural.width,
+      sourceHeight: natural.height,
+      release: release2
+    };
+  }
+  async function encodeRegion(image, box, settings) {
+    const W = image.sourceWidth;
+    const H = image.sourceHeight;
+    const sx = Math.max(0, Math.floor((box.cx - box.w / 2) * W));
+    const sy = Math.max(0, Math.floor((box.cy - box.h / 2) * H));
+    const sw = Math.max(1, Math.min(W - sx, Math.ceil(box.w * W)));
+    const sh = Math.max(1, Math.min(H - sy, Math.ceil(box.h * H)));
+    return encodeRect(image.source, { x: sx, y: sy, width: sw, height: sh }, settings);
+  }
+  async function encodeRect(source, rect2, settings) {
+    const { width, height } = targetSize(rect2.width, rect2.height, settings);
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) throw new Error("Could not get a 2d canvas context");
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, width, height);
+    ctx.drawImage(source, rect2.x, rect2.y, rect2.width, rect2.height, 0, 0, width, height);
+    const jpeg = await new Promise((resolve2, reject) => {
+      try {
+        canvas.toBlob(resolve2, "image/jpeg", settings.jpegQuality);
+      } catch (e) {
+        reject(e);
+      }
+    });
+    if (!jpeg) throw new Error("Canvas is tainted");
+    return { bytes: new Uint8Array(await jpeg.arrayBuffer()), width, height };
+  }
+  function loadWithCors(url) {
+    return new Promise((resolve2, reject) => {
+      const probe2 = new Image();
+      probe2.crossOrigin = "anonymous";
+      probe2.decoding = "sync";
+      probe2.onload = () => resolve2(probe2);
+      probe2.onerror = () => reject(new Error("CORS load failed"));
+      probe2.src = url;
+    });
+  }
+  async function acquireSource(target) {
+    const probe2 = document.createElement("canvas");
+    probe2.width = 1;
+    probe2.height = 1;
+    const readable = (candidate) => {
+      try {
+        const ctx = probe2.getContext("2d");
+        if (!ctx) return false;
+        ctx.drawImage(candidate, 0, 0, 1, 1);
+        ctx.getImageData(0, 0, 1, 1);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    const own = ownPixels(target);
+    if (own && readable(own)) {
+      const size = sourceSize(own);
+      return { source: own, ...size, release: () => {
+      } };
+    }
+    const url = target.url;
+    if (!url) {
+      throw new Error(
+        own ? "This element is drawn from another origin and cannot be read" : "There is nothing to read from this element"
+      );
+    }
+    try {
+      const cors = await loadWithCors(url);
+      if (readable(cors)) {
+        const size = sourceSize(cors);
+        return { source: cors, ...size, release: () => {
+        } };
+      }
+    } catch {
+    }
+    const blob = await fetchImageBlob(url);
+    const bitmap = await createImageBitmap(blob);
+    return {
+      source: bitmap,
+      width: bitmap.width,
+      height: bitmap.height,
+      release: () => bitmap.close()
+    };
+  }
+  const TILE_BELOW = 0.7;
+  const TILE_ASPECT = 1.5;
+  const TILE_MAX_ASPECT = 4;
+  const TILE_OVERLAP = 0.25;
+  const MAX_TILES = 12;
+  function planTiles(width, height, budget) {
+    if (budget.tileLongImages === "off") return null;
+    if (!(width > 0 && height > 0)) return null;
+    const { maxArea, maxSide } = budget;
+    const long = Math.max(width, height);
+    const short = Math.min(width, height);
+    if (width * height <= maxArea || long <= maxSide) return null;
+    const single = maxSide / long;
+    const byArea = Math.min(1, Math.sqrt(maxArea / (width * height)));
+    if (single >= TILE_BELOW * byArea) return null;
+    const unscaled = Math.min(maxSide, Math.floor(maxArea / short));
+    let length2 = Math.round(
+      Math.min(short * TILE_MAX_ASPECT, Math.max(short * TILE_ASPECT, unscaled))
+    );
+    if (length2 >= long) return null;
+    let count = Math.ceil((long - length2 * TILE_OVERLAP) / (length2 * (1 - TILE_OVERLAP)));
+    if (count > MAX_TILES) {
+      count = MAX_TILES;
+      length2 = Math.ceil(long / (count - (count - 1) * TILE_OVERLAP));
+    }
+    if (count < 2) return null;
+    const starts = Array.from(
+      { length: count },
+      (_, i) => Math.round(i * (long - length2) / (count - 1))
+    );
+    const vertical = height >= width;
+    const tiles = starts.map((start2, i) => {
+      const previous = starts[i - 1];
+      const next = starts[i + 1];
+      const bandStart = previous === void 0 ? 0 : (start2 + previous + length2) / 2;
+      const bandEnd = next === void 0 ? long : (next + start2 + length2) / 2;
+      return vertical ? { x: 0, y: start2, width, height: length2, bandStart, bandEnd } : { x: start2, y: 0, width: length2, height, bandStart, bandEnd };
+    });
+    return { width, height, vertical, tiles };
+  }
+  function tilingTag(width, height, budget) {
+    return planTiles(width, height, budget) ? ".tiled" : "";
+  }
+  function toPicture(box, tile, plan) {
+    return {
+      cx: (tile.x + box.cx * tile.width) / plan.width,
+      cy: (tile.y + box.cy * tile.height) / plan.height,
+      w: box.w * tile.width / plan.width,
+      h: box.h * tile.height / plan.height,
+      angle: box.angle
+    };
+  }
+  const move = (box, tile, plan) => box ? toPicture(box, tile, plan) : null;
+  function resultToPicture(result, tile, plan) {
+    return {
+      contentLanguage: result.contentLanguage,
+      ocr: result.ocr.map((paragraph) => ({
+        ...paragraph,
+        geometry: move(paragraph.geometry, tile, plan),
+        lines: paragraph.lines.map((line2) => ({
+          ...line2,
+          geometry: move(line2.geometry, tile, plan),
+          words: line2.words.map((word) => ({ ...word, geometry: move(word.geometry, tile, plan) }))
+        }))
+      })),
+      blocks: result.blocks.map((block) => ({
+        ...block,
+        geometry: move(block.geometry, tile, plan),
+        lines: block.lines.map((line2) => ({ ...line2, geometry: move(line2.geometry, tile, plan) }))
+      }))
+    };
+  }
+  const DEG$2 = Math.PI / 180;
+  function extentOf(box, plan) {
+    const w = box.w * plan.width;
+    const h = box.h * plan.height;
+    const cos = Math.abs(Math.cos(box.angle * DEG$2));
+    const sin = Math.abs(Math.sin(box.angle * DEG$2));
+    const halfX = (w * cos + h * sin) / 2;
+    const halfY = (w * sin + h * cos) / 2;
+    const x = box.cx * plan.width;
+    const y = box.cy * plan.height;
+    return plan.vertical ? { a0: y - halfY, a1: y + halfY, c0: x - halfX, c1: x + halfX } : { a0: x - halfX, a1: x + halfX, c0: y - halfY, c1: y + halfY };
+  }
+  function union(extents) {
+    const first = extents[0];
+    if (!first) return null;
+    const all2 = { ...first };
+    for (const e of extents) {
+      all2.a0 = Math.min(all2.a0, e.a0);
+      all2.a1 = Math.max(all2.a1, e.a1);
+      all2.c0 = Math.min(all2.c0, e.c0);
+      all2.c1 = Math.max(all2.c1, e.c1);
+    }
+    return all2;
+  }
+  function paragraphExtent(para, plan) {
+    const boxes = [para.geometry, ...para.lines.map((line2) => line2.geometry)];
+    return union(boxes.flatMap((box) => box ? [extentOf(box, plan)] : []));
+  }
+  function edgeMargin(para, plan) {
+    const thick = para.lines.flatMap(
+      (line2) => line2.geometry ? [Math.min(line2.geometry.w * plan.width, line2.geometry.h * plan.height)] : []
+    ).sort((a, b) => a - b);
+    const median2 = thick[Math.floor(thick.length / 2)] ?? 0;
+    return Math.max(4, median2 * 1.5);
+  }
+  const length = (from, to) => Math.max(0, to - from);
+  function relation(a, b) {
+    if (!a.extent || !b.extent) return null;
+    const along = length(Math.max(a.extent.a0, b.extent.a0), Math.min(a.extent.a1, b.extent.a1));
+    const across = length(Math.max(a.extent.c0, b.extent.c0), Math.min(a.extent.c1, b.extent.c1));
+    if (along <= 0 || across <= 0) return null;
+    if (along * across >= 0.5 * Math.min(a.area, b.area)) return "same";
+    const [first, second] = a.tile < b.tile ? [a, b] : [b, a];
+    const facing = first.cutEnd && second.cutStart;
+    const narrower = Math.min(a.extent.c1 - a.extent.c0, b.extent.c1 - b.extent.c0);
+    return facing && across >= 0.5 * narrower ? "pieces" : null;
+  }
+  function dedupe(perTile, plan, trim) {
+    const candidates = [];
+    perTile.forEach((items, t2) => {
+      const tile = plan.tiles[t2];
+      if (!tile) return;
+      const start2 = plan.vertical ? tile.y : tile.x;
+      const end = start2 + (plan.vertical ? tile.height : tile.width);
+      items.forEach((item, index) => {
+        const extent = paragraphExtent(item, plan);
+        const margin = edgeMargin(item, plan);
+        const cutStart = Boolean(extent) && t2 > 0 && extent.a0 - start2 <= margin;
+        const cutEnd = Boolean(extent) && t2 < plan.tiles.length - 1 && end - extent.a1 <= margin;
+        const centre = extent ? (extent.a0 + extent.a1) / 2 : 0;
+        const owned = !extent || centre >= tile.bandStart && centre < tile.bandEnd;
+        candidates.push({
+          item,
+          tile: t2,
+          index,
+          extent,
+          cutStart,
+          cutEnd,
+          rank: cutStart || cutEnd ? 1 : owned ? 3 : 2,
+          area: extent ? (extent.a1 - extent.a0) * (extent.c1 - extent.c0) : 0
+        });
+      });
+    });
+    const order = [...candidates].sort(
+      (a, b) => b.rank - a.rank || b.area - a.area || a.tile - b.tile || a.index - b.index
+    );
+    const kept = [];
+    for (const candidate of order) {
+      let current = candidate;
+      for (const other of kept) {
+        if (!current) break;
+        if (other.tile === current.tile) continue;
+        const how = relation(current, other);
+        if (!how) continue;
+        const bothCut = current.rank === 1 && other.rank === 1;
+        if (how === "same" && !bothCut) {
+          current = null;
+          break;
+        }
+        const covered = other.extent;
+        const keep = [];
+        current.item.lines.forEach((line2, i) => {
+          if (!line2.geometry) return;
+          const e = extentOf(line2.geometry, plan);
+          const centre = (e.a0 + e.a1) / 2;
+          if (centre < covered.a0 || centre > covered.a1) keep.push(i);
+        });
+        const trimmed = keep.length ? trim(current.item, keep) : null;
+        if (!trimmed) {
+          current = null;
+          break;
+        }
+        const extent = paragraphExtent(trimmed, plan);
+        current = {
+          ...current,
+          item: trimmed,
+          extent,
+          area: extent ? (extent.a1 - extent.a0) * (extent.c1 - extent.c0) : 0
+        };
+      }
+      if (current) kept.push(current);
+    }
+    return kept.sort((a, b) => a.tile - b.tile || a.index - b.index).map((c) => c.item);
+  }
+  function boxAround(item, lines, plan) {
+    const old = item.geometry;
+    if (!old || Math.abs(old.angle) > 1) return old;
+    const all2 = union(lines.flatMap((line2) => line2.geometry ? [extentOf(line2.geometry, plan)] : []));
+    if (!all2) return old;
+    const [x0, x1, y0, y1] = plan.vertical ? [all2.c0, all2.c1, all2.a0, all2.a1] : [all2.a0, all2.a1, all2.c0, all2.c1];
+    return {
+      cx: (x0 + x1) / 2 / plan.width,
+      cy: (y0 + y1) / 2 / plan.height,
+      w: (x1 - x0) / plan.width,
+      h: (y1 - y0) / plan.height,
+      angle: 0
+    };
+  }
+  function trimOcr(paragraph, keep, plan) {
+    const lines = keep.flatMap((i) => paragraph.lines[i] ?? []);
+    return { ...paragraph, lines, geometry: boxAround(paragraph, lines, plan) };
+  }
+  function trimBlock(block, keep, plan) {
+    const lines = keep.flatMap((i) => block.lines[i] ?? []);
+    const ranges = lines.flatMap((line2) => line2.words);
+    if (!ranges.length) return null;
+    const from = Math.min(...ranges.map(([start2]) => start2));
+    const to = Math.max(...ranges.map(([, end]) => end));
+    return {
+      ...block,
+      translation: block.translation.slice(from, to),
+      geometry: boxAround(block, lines, plan),
+      lines: lines.map((line2) => ({
+        ...line2,
+        words: line2.words.map(([start2, end]) => [start2 - from, end - from])
+      }))
+    };
+  }
+  function mergeTiles(plan, results) {
+    const moved = results.map((result, i) => {
+      const tile = plan.tiles[i];
+      return tile ? resultToPicture(result, tile, plan) : { contentLanguage: "", ocr: [], blocks: [] };
+    });
+    return {
+      contentLanguage: moved.find((result) => result.contentLanguage)?.contentLanguage ?? "",
+      ocr: dedupe(
+        moved.map((result) => result.ocr),
+        plan,
+        (paragraph, keep) => trimOcr(paragraph, keep, plan)
+      ),
+      blocks: dedupe(
+        moved.map((result) => result.blocks),
+        plan,
+        (block, keep) => trimBlock(block, keep, plan)
+      )
+    };
+  }
+  const TILE_PARALLEL = 2;
+  function looksTransient(error) {
+    if (error?.name === "TimeoutError") return false;
+    const status = /\bHTTP (\d{3})\b/.exec(String(error?.message ?? ""))?.[1];
+    if (!status) return true;
+    return status === "408" || status === "429" || !status.startsWith("4");
+  }
+  async function askLens(source, options) {
+    const { width, height } = sourceSize(source);
+    const plan = planTiles(width, height, options);
+    if (!plan) return callLens(await encodeForUpload(source, options), options);
+    const total2 = plan.tiles.length;
+    const results = new Array(total2);
+    const ask = async (index) => {
+      const tile = plan.tiles[index];
+      if (!tile) return;
+      const once = async () => {
+        const encoded = await encodeRect(source, tile, options);
+        return callLens(
+          { imageBytes: encoded.bytes, width: encoded.width, height: encoded.height },
+          options
+        );
+      };
+      try {
+        try {
+          results[index] = await once();
+        } catch (error) {
+          if (!looksTransient(error)) throw error;
+          results[index] = await once();
+        }
+      } catch (error) {
+        throw new Error(`part ${index + 1} of ${total2} of a long picture: ${error.message}`);
+      }
+    };
+    await ask(0);
+    let next = 1;
+    let failure = null;
+    const worker = async () => {
+      while (!failure && next < total2) {
+        const index = next;
+        next += 1;
+        try {
+          await ask(index);
+        } catch (error) {
+          failure ??= error;
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: TILE_PARALLEL }, worker));
+    if (failure) throw failure;
+    return mergeTiles(plan, results);
+  }
   const CLUSTER_INFO_ENDPOINT = "https://lensfrontend-pa.googleapis.com/v1/gsessionid";
   const RESULTS_URL = "https://www.google.com/search";
   const SESSION_LIFETIME_MS = 1800 * 1e3;
@@ -2720,170 +3184,6 @@
     return result.ocr.map(
       (paragraph) => paragraph.lines.map((line2) => line2.text.trim()).filter(Boolean).join("\n")
     ).filter(Boolean).join("\n\n");
-  }
-  function targetSize(width, height, { maxArea, maxSide }) {
-    if (width * height <= maxArea || width <= maxSide && height <= maxSide) {
-      return { width, height };
-    }
-    const scale = Math.min(maxSide / width, maxSide / height);
-    return {
-      width: Math.max(1, Math.round(width * scale)),
-      height: Math.max(1, Math.round(height * scale))
-    };
-  }
-  function sourceSize(source) {
-    if (source instanceof HTMLImageElement) {
-      return { width: source.naturalWidth, height: source.naturalHeight };
-    }
-    if (source instanceof HTMLVideoElement) {
-      return { width: source.videoWidth, height: source.videoHeight };
-    }
-    return { width: source.width, height: source.height };
-  }
-  function ownPixels(target) {
-    if (target.kind === "canvas") return target.element;
-    if (target.kind === "video") {
-      const video = target.element;
-      return video.videoWidth && video.videoHeight ? video : null;
-    }
-    if (target.kind === "img") {
-      const img = target.element;
-      return img.naturalWidth && img.naturalHeight ? img : null;
-    }
-    return null;
-  }
-  const FINGERPRINT_SIZE = 128;
-  function fingerprint(source, width, height) {
-    const canvas = document.createElement("canvas");
-    canvas.width = FINGERPRINT_SIZE;
-    canvas.height = FINGERPRINT_SIZE;
-    const ctx = canvas.getContext("2d", { willReadFrequently: true });
-    if (!ctx) return "";
-    try {
-      ctx.drawImage(source, 0, 0, FINGERPRINT_SIZE, FINGERPRINT_SIZE);
-      const { data } = ctx.getImageData(0, 0, FINGERPRINT_SIZE, FINGERPRINT_SIZE);
-      let a = 2166136261;
-      let b = 16777619;
-      for (let i = 0; i < data.length; i += 1) {
-        a = Math.imul(a ^ data[i], 16777619);
-        b = Math.imul(b + data[i] + i, 2246822507);
-      }
-      const lane = (n) => (n >>> 0).toString(36);
-      return `${lane(a)}.${lane(b)}.${width}x${height}`;
-    } catch {
-      return "";
-    }
-  }
-  async function encodeForUpload(source, settings, release2 = () => {
-  }) {
-    const natural = sourceSize(source);
-    const { width, height } = targetSize(natural.width, natural.height, settings);
-    const canvas = document.createElement("canvas");
-    canvas.width = width;
-    canvas.height = height;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) throw new Error("Could not get a 2d canvas context");
-    ctx.fillStyle = "#ffffff";
-    ctx.fillRect(0, 0, width, height);
-    ctx.drawImage(source, 0, 0, width, height);
-    const jpeg = await new Promise((resolve2, reject) => {
-      try {
-        canvas.toBlob(resolve2, "image/jpeg", settings.jpegQuality);
-      } catch (e) {
-        reject(e);
-      }
-    });
-    if (!jpeg) throw new Error("Canvas is tainted");
-    return {
-      imageBytes: new Uint8Array(await jpeg.arrayBuffer()),
-      width,
-      height,
-      source,
-      sourceWidth: natural.width,
-      sourceHeight: natural.height,
-      release: release2
-    };
-  }
-  async function encodeRegion(image, box, settings) {
-    const W = image.sourceWidth;
-    const H = image.sourceHeight;
-    const sx = Math.max(0, Math.floor((box.cx - box.w / 2) * W));
-    const sy = Math.max(0, Math.floor((box.cy - box.h / 2) * H));
-    const sw = Math.max(1, Math.min(W - sx, Math.ceil(box.w * W)));
-    const sh = Math.max(1, Math.min(H - sy, Math.ceil(box.h * H)));
-    const { width, height } = targetSize(sw, sh, settings);
-    const canvas = document.createElement("canvas");
-    canvas.width = width;
-    canvas.height = height;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) throw new Error("Could not get a 2d canvas context");
-    ctx.fillStyle = "#ffffff";
-    ctx.fillRect(0, 0, width, height);
-    ctx.drawImage(image.source, sx, sy, sw, sh, 0, 0, width, height);
-    const jpeg = await new Promise((resolve2, reject) => {
-      try {
-        canvas.toBlob(resolve2, "image/jpeg", settings.jpegQuality);
-      } catch (e) {
-        reject(e);
-      }
-    });
-    if (!jpeg) throw new Error("Canvas is tainted");
-    return { bytes: new Uint8Array(await jpeg.arrayBuffer()), width, height };
-  }
-  function loadWithCors(url) {
-    return new Promise((resolve2, reject) => {
-      const probe2 = new Image();
-      probe2.crossOrigin = "anonymous";
-      probe2.decoding = "sync";
-      probe2.onload = () => resolve2(probe2);
-      probe2.onerror = () => reject(new Error("CORS load failed"));
-      probe2.src = url;
-    });
-  }
-  async function acquireSource(target) {
-    const probe2 = document.createElement("canvas");
-    probe2.width = 1;
-    probe2.height = 1;
-    const readable = (candidate) => {
-      try {
-        const ctx = probe2.getContext("2d");
-        if (!ctx) return false;
-        ctx.drawImage(candidate, 0, 0, 1, 1);
-        ctx.getImageData(0, 0, 1, 1);
-        return true;
-      } catch {
-        return false;
-      }
-    };
-    const own = ownPixels(target);
-    if (own && readable(own)) {
-      const size = sourceSize(own);
-      return { source: own, ...size, release: () => {
-      } };
-    }
-    const url = target.url;
-    if (!url) {
-      throw new Error(
-        own ? "This element is drawn from another origin and cannot be read" : "There is nothing to read from this element"
-      );
-    }
-    try {
-      const cors = await loadWithCors(url);
-      if (readable(cors)) {
-        const size = sourceSize(cors);
-        return { source: cors, ...size, release: () => {
-        } };
-      }
-    } catch {
-    }
-    const blob = await fetchImageBlob(url);
-    const bitmap = await createImageBitmap(blob);
-    return {
-      source: bitmap,
-      width: bitmap.width,
-      height: bitmap.height,
-      release: () => bitmap.close()
-    };
   }
   const DB_NAME = "lens-translate";
   const DB_VERSION = 2;
@@ -3306,7 +3606,9 @@
     return Math.abs(ratio - 1) <= 0.02;
   }
   function cacheKey(url, settings) {
-    return [normalizeUrl(url), settings.targetLang, settings.sourceLang, settings.ocrLang].join("\0");
+    const key = [normalizeUrl(url), settings.targetLang, settings.sourceLang, settings.ocrLang];
+    if (settings.tileLongImages === "off") key.push("untiled");
+    return key.join("\0");
   }
   function evict(limit) {
     while (totalBytes > limit && entries.size + renders.size > 1) {
@@ -3683,6 +3985,8 @@
   const COLUMN_MIN_LINES = 3;
   const COLUMN_MAX_LINE_ASPECT = 12;
   const COLUMN_MAX_ASPECT = 2.5;
+  const COLUMN_MAX_ASPECT_TALL = 3.2;
+  const COLUMN_TALL_LINES = 4;
   const COLUMN_MAX_OFF_CENTRE = 0.15;
   const median = (values) => {
     const sorted = [...values].sort((a, b) => a - b);
@@ -3692,7 +3996,8 @@
     if (lines.length < Math.max(2, minLines)) return false;
     const paraW = paragraph.right - paragraph.left;
     const paraH = paragraph.bottom - paragraph.top;
-    if (!(paraW > 0) || !(paraH > 0) || paraW > COLUMN_MAX_ASPECT * paraH) return false;
+    const maxAspect = lines.length >= COLUMN_TALL_LINES ? COLUMN_MAX_ASPECT_TALL : COLUMN_MAX_ASPECT;
+    if (!(paraW > 0) || !(paraH > 0) || paraW > maxAspect * paraH) return false;
     const sorted = [...lines].sort((a, b) => a.top + a.bottom - (b.top + b.bottom));
     for (let i = 1; i < sorted.length; i += 1) {
       const above = sorted[i - 1];
@@ -7068,7 +7373,8 @@ ${OVERLAY_CSS}`;
         try {
           const size = { width: prepared.width, height: prepared.height };
           let result = target.url ? getCached(key, settings, size) : void 0;
-          const hash = result ? "" : fingerprint(prepared.source, prepared.width, prepared.height);
+          const print = result ? "" : fingerprint(prepared.source, prepared.width, prepared.height);
+          const hash = print && print + tilingTag(prepared.width, prepared.height, settings);
           if (!result && hash) {
             const remembered = await getStored(hash, settings);
             if (remembered) {
@@ -7077,8 +7383,7 @@ ${OVERLAY_CSS}`;
             }
           }
           if (!result) {
-            const upload2 = await encodeForUpload(prepared.source, settings);
-            result = await callLens(upload2, settings);
+            result = await askLens(prepared.source, settings);
             if (target.url) putCached(key, result, settings, size);
             void putStored(hash, result, settings);
           }
