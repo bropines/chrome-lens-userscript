@@ -4,7 +4,8 @@ import monkey from 'vite-plugin-monkey';
 export default defineConfig({
   plugins: [
     monkey({
-      entry: 'src/main.ts',
+      // boot.ts decides between starting now and sleeping in a frame.
+      entry: 'src/boot.ts',
       userscript: {
         name: 'Lens Translate',
         namespace: 'https://github.com/bropines/chrome-lens-userscript',
@@ -23,13 +24,11 @@ export default defineConfig({
         author: 'bropines',
         license: 'MIT',
         match: ['*://*/*'],
-        // Top frame only. Without this the script runs in every iframe on the
-        // page, ads and embeds included, each paying for its own copy of a
-        // 110 kB bundle, an observer and a shadow root - and offering a
-        // translate button over an advertisement. The cost is a reader that
-        // lives inside an iframe of its own: open the frame's address
-        // directly, or use a manager that lets a script opt in per site.
-        noframes: true,
+        // No `noframes`: a reader or gallery that shows its pages in an iframe
+        // got no button at all. Every ad and embed now runs the script too,
+        // which is why a frame boots asleep (src/frame.ts) - no shadow root,
+        // no observer, no timers - and only wakes when it is page-sized and
+        // holds a picture. An ad slot never is.
         // Lens is the only host the script itself calls. The wildcard is for
         // image bytes: most images are read straight off the already-decoded
         // <img> element, but a cross-origin one served without CORS headers

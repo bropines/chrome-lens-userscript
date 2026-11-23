@@ -1,6 +1,8 @@
 import { scriptVersion } from '../gm.js';
 import { OVERLAY_CSS } from '../render/overlay.js';
+import { getSettings } from '../settings.js';
 import { canHoldUi, keyboardInset } from './geometry.js';
+import { MAX_OPACITY, clampOpacity } from './opacity.js';
 import styles from './styles.css?raw';
 
 /**
@@ -159,6 +161,24 @@ function containEvents(target: HTMLElement): void {
   for (const type of CONTAINED) target.addEventListener(type, stop, { passive: true });
 }
 
+/**
+ * How see-through our popups are, as two things the stylesheet reads off the
+ * host: `--lt-opacity`, which goes into the background colours and nowhere
+ * else, and `data-translucent`, which adds the blur that keeps text readable
+ * over a busy picture.
+ *
+ * On the host's inline style because that is the one place no page rule can
+ * override, and custom properties are not reset by its `all: initial`. Also
+ * what the settings panel calls while its slider moves, so the panel itself is
+ * the preview; closing it puts back whatever is saved.
+ */
+export function applyPopupOpacity(raw: unknown): void {
+  if (!host) return;
+  const percent = clampOpacity(raw);
+  host.style.setProperty('--lt-opacity', `${percent}%`);
+  host.toggleAttribute('data-translucent', percent < MAX_OPACITY);
+}
+
 export function uiRoot(): ShadowRoot {
   if (shadow) return shadow;
 
@@ -203,6 +223,7 @@ export function uiRoot(): ShadowRoot {
   shadow.appendChild(sheet);
 
   containEvents(host);
+  applyPopupOpacity(getSettings().popupOpacity);
   placeHost();
   trackKeyboard(host);
   for (const type of ['fullscreenchange', 'webkitfullscreenchange']) {

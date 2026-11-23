@@ -289,6 +289,16 @@ export interface AppSettings {
   uiMode: UiMode;
   /** The question the "ask AI" field starts out with. May be empty. */
   aiPrompt: string;
+  /**
+   * Run inside iframes. A frame sleeps until it is big enough to be a page and
+   * holds a picture (see frame.ts); off, a frame does nothing at all.
+   */
+  frames: boolean;
+  /**
+   * Opacity of the backgrounds of the menu, panels, messages and tool bar, in
+   * percent (40..100). The text on them is never faded.
+   */
+  popupOpacity: number;
 }
 
 export interface Settings extends EngineOptions, AppSettings {}

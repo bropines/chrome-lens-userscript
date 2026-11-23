@@ -1,5 +1,6 @@
 import { readStored, writeStored } from './gm.js';
 import { languageOptions } from './languages.js';
+import { MAX_OPACITY, MIN_OPACITY, OPACITY_STEP, clampOpacity } from './ui/opacity.js';
 import type { Settings } from './types.js';
 
 const STORAGE_KEY = 'lens-translate:settings';
@@ -46,6 +47,8 @@ export const DEFAULTS: Settings = {
   textAlign: 'auto',
   uiMode: 'simple',
   aiPrompt: 'What is in this picture?',
+  frames: true,
+  popupOpacity: MAX_OPACITY,
 };
 
 type FieldKind = 'text' | 'number' | 'checkbox' | 'select' | 'range';
@@ -65,8 +68,11 @@ export interface Field<K extends keyof Settings = keyof Settings> {
   step?: string;
   min?: string;
   max?: string;
-  /** How a range's value reads out: 'x' for a multiplier, '%' for a fraction. */
-  unit?: 'x' | '%';
+  /**
+   * How a range's value reads out: 'x' for a multiplier, '%' for a fraction,
+   * 'pct' for a value that is already a whole number of percent.
+   */
+  unit?: 'x' | '%' | 'pct';
   options?: ReadonlyArray<readonly [string, string]>;
 }
 
@@ -96,7 +102,23 @@ export const FIELDS: ReadonlyArray<Field> = [
     type: 'text',
     hint: 'what the "Ask AI" field starts with; blank sends the picture alone',
   },
+  {
+    key: 'popupOpacity', group: 'Interface', essential: true,
+    label: 'Popup opacity',
+    type: 'range',
+    min: String(MIN_OPACITY),
+    max: String(MAX_OPACITY),
+    step: String(OPACITY_STEP),
+    unit: 'pct',
+    hint: 'the menu, settings and messages; below 100 the picture shows through, blurred',
+  },
   { key: 'enabled', group: 'Behaviour', essential: true, label: 'Translation enabled', type: 'checkbox' },
+  {
+    key: 'frames', group: 'Behaviour',
+    label: 'Work inside frames',
+    type: 'checkbox',
+    hint: 'for readers and galleries that show pages in an iframe; small frames such as ads are always left alone',
+  },
   {
     key: 'renderMode', group: 'Behaviour',
     label: 'Render as',
@@ -334,6 +356,7 @@ export function coerce(field: Field, raw: string | boolean): Settings[keyof Sett
     const value = Number(raw);
     return (value >= 1 && value <= 3 ? value : DEFAULTS.supersample) as Settings[keyof Settings];
   }
+  if (field.key === 'popupOpacity') return clampOpacity(raw) as Settings[keyof Settings];
   if (field.key === 'uiMode') return (raw === 'pro' ? 'pro' : 'simple') as Settings[keyof Settings];
   if (field.type === 'checkbox') return Boolean(raw) as Settings[keyof Settings];
   if (field.type === 'number' || field.type === 'range') {

@@ -37,7 +37,9 @@ const ENTRY = 'src/engine.ts';
 
 /** Modules that are this userscript's own, and may never be reached from the entry. */
 const APPLICATION = [
+  'src/boot.ts',
   'src/main.ts',
+  'src/frame.ts',
   'src/gm.ts',
   'src/settings.ts',
   'src/languages.ts',

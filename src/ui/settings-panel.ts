@@ -4,7 +4,7 @@ import type { Field } from '../settings.js';
 import type { Settings } from '../types.js';
 import { icon } from './icons.js';
 import { isCompact } from './menu.js';
-import { uiRoot } from './root.js';
+import { applyPopupOpacity, uiRoot } from './root.js';
 
 type SavedHandler = (settings: Settings) => void;
 
@@ -107,6 +107,9 @@ function buildField(field: Field, settings: Settings): HTMLLabelElement {
     const readout = document.createElement('span');
     readout.className = 'lt-readout';
     const wantsPreview = field.key === 'outlineScale';
+    // The panel is a popup too, so moving this slider shows the result on the
+    // very surface being looked at. Nothing is kept until Save.
+    const livePopup = field.key === 'popupOpacity';
     const preview = document.createElement('canvas');
     preview.className = 'lt-preview';
     preview.width = 460;
@@ -115,8 +118,13 @@ function buildField(field: Field, settings: Settings): HTMLLabelElement {
     const refresh = (): void => {
       const value = Number(slider.value);
       readout.textContent =
-        field.unit === '%' ? `${Math.round(value * 100)}%` : `${value.toFixed(1)}x`;
+        field.unit === '%'
+          ? `${Math.round(value * 100)}%`
+          : field.unit === 'pct'
+            ? `${Math.round(value)}%`
+            : `${value.toFixed(1)}x`;
       if (wantsPreview) drawOutlinePreview(preview, value);
+      if (livePopup) applyPopupOpacity(value);
     };
     slider.addEventListener('input', refresh);
     refresh();
@@ -236,6 +244,9 @@ function collect(root: HTMLElement): Partial<Settings> {
 export function closeSettings(): void {
   panel?.remove();
   panel = null;
+  // A slider moved and then cancelled leaves its preview behind otherwise;
+  // after a save this is the new value, so it is right either way.
+  applyPopupOpacity(getSettings().popupOpacity);
 }
 
 export function openSettings(onSaved?: SavedHandler): void {

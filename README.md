@@ -216,7 +216,7 @@ Vertical CJK gets a fifth rule of its own: setting a Russian translation vertica
 
 Detection finds `<img>`, `<canvas>` and `<video>` elements and CSS `background-image`s (see above for which of those count), by walking `event.composedPath()` so pictures inside a site's own shadow DOM are caught too, and anything a page inserts long after it has finished loading - which on a lot of sites is every picture on it. A picture qualifies when its **rendered** size — not its natural size — is at least `minImageSize` on both axes, so a 4000px asset scaled down to a 20px icon is correctly ignored. A canvas and a video are the one limited case: they have no address, so they are never cached, and if the page drew them from another origin they cannot be read at all. Not covered: `<svg>` drawn as markup rather than an image.
 
-**The script does not run inside iframes** (`@noframes`). Left to run in every frame it ran inside every advertisement and embed on the page too - a copy of the bundle, an observer and a shadow root each, and a translate button over an advert. The price is a reader that lives in an iframe of its own: open the frame's address directly, or use a manager that lets you opt a script in per site.
+**Inside iframes the script sleeps until there is a picture.** It used to skip frames altogether (`@noframes`), because running in every frame meant running inside every advertisement and embed on the page - a copy of the bundle, an observer and a shadow root each, and a translate button over an advert - and that left a reader or gallery that shows its pages in an iframe with no button at all. Now a frame starts dormant: no UI, no observer, no timers, no hotkeys, just three listeners that each look at one element. It wakes only when the frame itself is at least 400x300 CSS px *and* holds a picture that passes the usual size test, or the pointer goes over one in a frame that size. Every standard ad slot (300x250, 728x90, 970x250, 300x600 and the rest) is narrower or shorter than that, so ads never wake. **Work inside frames** in settings turns it off; a site switched off applies to frames by the frame's own hostname, and to frames on a switched-off page where the browser lets a frame know which page it is on (Chromium and Safari do; Firefox often does not). A woken frame keeps out of the userscript menu and does not answer `#lens-debug` - those belong to the tab. A frame sandboxed without popups cannot open a results tab at all, so there the address is shown with a **Copy** button.
 
 A translation goes when its picture does. A virtualised feed reuses an `<img>` for the next post by assigning a new `src`, and a translation left behind would sit on top of a different photograph; so the covered element is watched, and a changed address (not a different *rendition* of the same one, which Twitter does as the layout moves) takes the translation down, as does the element leaving the page. The memory a long scroll would otherwise accumulate - the element, the bitmap, its object URL - is released the same way, with a periodic sweep as the backstop.
 
@@ -351,6 +351,8 @@ Hovering an image shows the translate button, and holding the cursor there for a
 
 All UI — button, toast, settings panel and the translation overlay itself — lives in a **shadow root**, not in the page. Injecting with `GM_addStyle` loses on sites that ship rules like `div { display: inline !important }`: page CSS wins on equal specificity when it comes later, and `!important` beats an injected sheet outright. A shadow root is not a specificity contest; page rules cannot reach inside it.
 
+**Popup opacity** in settings (40-100%) lets the picture show through the menu, the settings panel, messages and a tool's bar - their backgrounds only; the text on them stays solid, and below 100% the background is blurred so the words stay readable over a busy picture. Moving the slider changes the open panel as you drag.
+
 The shadow host is a fixed, full-viewport, click-through layer, which also means everything inside is positioned in viewport coordinates and follows scrolling by re-reading `getBoundingClientRect`, with no page-offset arithmetic.
 
 One subtlety: a shadow root blocks *selectors*, not *inheritance*. Font, colour, direction and line-height still reach in through the host, so the host carries `all: initial !important` — and then has to restate the font, because `initial` for `font-family` is the browser's serif default and an inline `!important` declaration outranks any `:host` rule.
@@ -365,6 +367,9 @@ scripts/gen-fields.ts   descriptors -> typed field-number table
 scripts/check-layers.ts the engine may not import the application
 src/
   engine.ts          the engine's public entry; see below
+  boot.ts            the userscript's entry: start now, or sleep in a frame
+  main.ts            the front end, started once per document that wants it
+  frame.ts           when a frame is worth waking
   protobuf.ts        minimal wire codec
   types.ts           shared domain types
   transport.ts       the privileged request the engine cannot make itself

@@ -49,6 +49,9 @@ scripts/check-layers.ts the engine may not import the application; the host
 test/                   bun test; setup.ts stubs the page with a predictable ruler
 src/
   engine.ts             the engine's public entry - everything below the line
+  boot.ts               the userscript's entry: start now, or sleep in a frame
+  main.ts               the front end, as one function: start()
+  frame.ts              when a frame wakes; nothing before that but listeners
   protobuf.ts           minimal wire codec: varint, length-delimited, fixed32
   types.ts              shared domain types; every cross-module shape lives here
   transport.ts          the privileged request the engine cannot make itself
@@ -319,10 +322,33 @@ settings and site rules re-read when they land; and `localStorage`, which is the
 *site's* and only a last resort. Falling to it silently is how Safari settings
 became per-site. Both grant names are declared.
 
-**`@noframes`.** The script does not run in iframes: it ran in every ad and
-embed on a page, each with a copy of the bundle, an observer and a shadow root.
-A reader inside an iframe of its own is the cost; there is no per-frame opt-in
-in the metadata. `updateURL` points at `dist/lens-translate.meta.js` (the header
+**Frames sleep until they hold a picture.** The header carried `@noframes`
+for a long time, because the script ran in every ad and embed on a page, each
+with a copy of the bundle, an observer and a shadow root, and offered to
+translate an advert. Its cost was a reader or gallery that renders pages in an
+iframe of its own, which got no button at all - and there is no per-frame
+opt-in in the metadata. So `@noframes` is gone and `src/boot.ts` decides
+instead: the top window calls `start()` in `main.ts` at once; a frame reads
+the settings and site rules, exits if `frames` is off or its own hostname (or
+the top page's, when `ancestorOrigins` or the referrer can name it - Firefox
+often cannot, and unknown is not off) is switched off, and otherwise sleeps
+(`src/frame.ts`). Asleep means no shadow root, no MutationObserver, no sweep
+timer, no hotkeys, no auto-translate: only a capture-phase `load`, a
+`pointerover` and a `resize`, each looking at one element (or the plain
+`img`/`canvas`/`video` list for a resize). It wakes, running `start()`
+once, when its own viewport is at least 400x300 **and** it holds a picture that
+passes `isBigEnough`. Both halves, the hover path included: every IAB ad unit
+(300x250, 728x90, 970x250, 300x600, ...) fails the viewport test, so an ad
+never wakes however big the picture in it is. `main.ts` is therefore a
+function, `start`, not a module body - a frame imports it and may never call
+it. A woken frame keeps its commands out of the host's menu (ten frames would
+list each one ten times) and does not answer `#lens-debug`; and a frame
+sandboxed without `allow-popups` refuses both `window.open` and
+`target=_blank`, so a failed open in a frame prints the address with a Copy
+button. The harness proves the sleep by counting `MutationObserver.observe`
+calls inside a 300x250 cross-origin frame: there must be none.
+
+`updateURL` points at `dist/lens-translate.meta.js` (the header
 alone, emitted by `metaFileName`) so a manager's version poll does not download
 the whole bundle; `downloadURL` stays the full script.
 

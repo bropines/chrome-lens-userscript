@@ -346,10 +346,13 @@ const commands: Command[] = [];
  * On AdGuard there is no menu, and these are the only way to reach clearing
  * the cache or undoing a page, so the settings panel renders whatever the host
  * would not take.
+ *
+ * `toMenu` false keeps it to the panel: a frame registering with the host would
+ * add a second copy of every command to the tab's one menu.
  */
-export function registerCommand(command: Command): void {
+export function registerCommand(command: Command, toMenu = true): void {
   commands.push(command);
-  if (typeof GM_registerMenuCommand === 'function') {
+  if (toMenu && typeof GM_registerMenuCommand === 'function') {
     GM_registerMenuCommand(command.menuLabel, command.run);
   }
 }
