@@ -54,6 +54,8 @@ export interface Writer {
   int(field: number, value: bigint | number | undefined): Writer;
   str(field: number, value: string | undefined): Writer;
   bytes(field: number, value: Bytes | undefined): Writer;
+  /** A `float`, as fixed32. Zero is skipped like every other default. */
+  float(field: number, value: number | undefined): Writer;
   sub(field: number, build: (writer: Writer) => void): Writer;
   finish(): Bytes;
 }
@@ -84,6 +86,12 @@ export function writer(): Writer {
     bytes(field, value) {
       if (!value || !value.length) return self;
       return self.tag(field, Wire.Length).raw(encodeVarint(value.length)).raw(value);
+    },
+    float(field, value) {
+      if (!value) return self;
+      const out = new Uint8Array(4);
+      new DataView(out.buffer).setFloat32(0, value, true);
+      return self.tag(field, Wire.Fixed32).raw(out);
     },
     sub(field, build) {
       const inner = writer();

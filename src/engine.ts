@@ -29,10 +29,12 @@ export type {
   BackgroundImage,
   Bytes,
   CacheOptions,
+  DetectedObject,
   EngineOptions,
   Geometry,
   LensOptions,
   LensResult,
+  NormalizedBox,
   OcrLine,
   OcrParagraph,
   OcrWord,
@@ -49,11 +51,22 @@ export { getTransport, setTransport } from './transport.js';
 
 export { LENS_ENDPOINT, callLens, fetchImageBlob } from './lens/client.js';
 export { buildRequest } from './lens/request.js';
+export type { SearchMode, SearchOptions, Selection } from './lens/search.js';
+export {
+  CLUSTER_INFO_ENDPOINT,
+  ImageSearch,
+  RESULTS_URL,
+  buildSearchUrl,
+  clampBox,
+  openSession,
+  parseObjects,
+  textSearchUrl,
+} from './lens/search.js';
 export { parseResponse } from './lens/response.js';
 export { ocrText, translationText } from './lens/text.js';
 
 export type { Source } from './image.js';
-export { acquireSource, encodeForUpload, fingerprint, prepareImage } from './image.js';
+export { acquireSource, encodeForUpload, encodeRegion, fingerprint, prepareImage } from './image.js';
 
 export type { Target, TargetKind } from './detect.js';
 export { classify, collect, ignoreElements, isBigEnough, targetFromEvent } from './detect.js';

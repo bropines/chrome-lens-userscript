@@ -79,6 +79,20 @@ export interface OcrParagraph {
   lines: OcrLine[];
 }
 
+/** A box in the picture's own proportions: 0..1 on both axes, unrotated. */
+export interface NormalizedBox {
+  cx: number;
+  cy: number;
+  w: number;
+  h: number;
+}
+
+/** Something Lens recognised as a thing - what Chrome draws as a tappable dot. */
+export interface DetectedObject {
+  id: string;
+  geometry: Geometry | null;
+}
+
 export interface LensResult {
   contentLanguage: string;
   ocr: OcrParagraph[];

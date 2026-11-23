@@ -17,7 +17,7 @@ import type {
 const TRANSLATION_SUCCESS = 1;
 const WORD_TYPE_FORMULA = 1;
 
-function parseGeometry(geometry: PbMessage | null): Geometry | null {
+export function parseGeometry(geometry: PbMessage | null): Geometry | null {
   const box = sub(geometry, F.Geometry.boundingBox);
   if (!box) return null;
   return {

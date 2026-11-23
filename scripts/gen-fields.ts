@@ -23,6 +23,22 @@ const OUT_FILE = new URL('../src/gen/fields.ts', import.meta.url);
 
 /** Messages we actually touch. Everything else would be dead weight. */
 const WANTED = new Set([
+  // The search session: cluster info, then interactions against the upload.
+  'LensOverlayServerClusterInfoRequest',
+  'LensOverlayServerClusterInfoResponse',
+  'LensOverlayInteractionRequest',
+  'LensOverlayInteractionResponse',
+  'LensOverlayInteractionRequestMetadata',
+  'LensOverlayInteractionRequestMetadata_SelectionMetadata',
+  'LensOverlayInteractionRequestMetadata_SelectionMetadata_Region',
+  'LensOverlayInteractionRequestMetadata_SelectionMetadata_Object',
+  'LensOverlayInteractionRequestMetadata_QueryMetadata',
+  'TextQuery',
+  'ImageCrop',
+  'ZoomedCrop',
+  'ClientImage',
+  'OverlayObject',
+  'OverlayObject_InteractionProperties',
   'LensOverlayServerRequest',
   'LensOverlayServerResponse',
   'LensOverlayServerError',

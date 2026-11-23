@@ -145,6 +145,48 @@ export async function encodeForUpload(
 }
 
 /**
+ * The pixels of one region, encoded the way the whole picture is.
+ *
+ * A region search sends the crop itself, not just its box: Chromium's
+ * `DownscaleAndEncodeBitmapRegionIfNeeded` cuts it from the full-resolution
+ * screenshot, so fine print the whole-image downscale lost is legible again.
+ * Here that is the decoded source at natural size, which is the same thing.
+ * The box is normalised to the picture, as Lens takes it.
+ */
+export async function encodeRegion(
+  image: Pick<PreparedImage, 'source' | 'sourceWidth' | 'sourceHeight'>,
+  box: { cx: number; cy: number; w: number; h: number },
+  settings: Pick<LensOptions, 'maxArea' | 'maxSide' | 'jpegQuality'>
+): Promise<{ bytes: Bytes; width: number; height: number }> {
+  const W = image.sourceWidth;
+  const H = image.sourceHeight;
+  const sx = Math.max(0, Math.floor((box.cx - box.w / 2) * W));
+  const sy = Math.max(0, Math.floor((box.cy - box.h / 2) * H));
+  const sw = Math.max(1, Math.min(W - sx, Math.ceil(box.w * W)));
+  const sh = Math.max(1, Math.min(H - sy, Math.ceil(box.h * H)));
+  const { width, height } = targetSize(sw, sh, settings);
+
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('Could not get a 2d canvas context');
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, width, height);
+  ctx.drawImage(image.source, sx, sy, sw, sh, 0, 0, width, height);
+
+  const jpeg = await new Promise<Blob | null>((resolve, reject) => {
+    try {
+      canvas.toBlob(resolve, 'image/jpeg', settings.jpegQuality);
+    } catch (e) {
+      reject(e as Error);
+    }
+  });
+  if (!jpeg) throw new Error('Canvas is tainted');
+  return { bytes: new Uint8Array(await jpeg.arrayBuffer()) as Bytes, width, height };
+}
+
+/**
  * Re-request the same URL with CORS so the canvas stays clean.
  *
  * Most image hosts - pbs.twimg.com among them - send

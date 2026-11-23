@@ -1140,6 +1140,12 @@
         if (!value || !value.length) return self;
         return self.tag(field, Wire.Length).raw(encodeVarint(value.length)).raw(value);
       },
+      float(field, value) {
+        if (!value) return self;
+        const out = new Uint8Array(4);
+        new DataView(out.buffer).setFloat32(0, value, true);
+        return self.tag(field, Wire.Fixed32).raw(out);
+      },
       sub(field, build) {
         const inner = writer();
         build(inner);
@@ -1254,51 +1260,52 @@
     const low = BigInt(Math.floor(Math.random() * 4294967296));
     return high << 32n | low;
   }
+  function writeClientContext(client, settings2, translate2) {
+    client.int(F.LensOverlayClientContext.platform, PLATFORM_WEB);
+    client.int(F.LensOverlayClientContext.surface, SURFACE_CHROMIUM);
+    client.sub(
+      F.LensOverlayClientContext.localeContext,
+      (locale) => locale.str(F.LocaleContext.language, settings2.ocrLang || settings2.targetLang).str(F.LocaleContext.region, settings2.region).str(F.LocaleContext.timeZone, settings2.timeZone)
+    );
+    client.sub(
+      F.LensOverlayClientContext.clientFilters,
+      (filters) => filters.sub(F.AppliedFilters.filter, (filter) => {
+        if (!translate2) {
+          filter.int(F.AppliedFilter.filterType, FILTER_AUTO);
+          return;
+        }
+        filter.int(F.AppliedFilter.filterType, FILTER_TRANSLATE);
+        filter.sub(
+          F.AppliedFilter.translate,
+          (t) => t.str(F.AppliedFilter_Translate.targetLanguage, settings2.targetLang).str(F.AppliedFilter_Translate.sourceLanguage, settings2.sourceLang)
+        );
+      })
+    );
+    client.sub(
+      F.LensOverlayClientContext.renderingContext,
+      (rendering) => rendering.int(F.RenderingContext.renderingEnvironment, RENDERING_ENV_LENS_OVERLAY)
+    );
+  }
+  function writeImageData(data, image) {
+    data.sub(F.ImageData.payload, (payload) => payload.bytes(F.ImagePayload.imageBytes, image.imageBytes));
+    data.sub(
+      F.ImageData.imageMetadata,
+      (meta) => meta.int(F.ImageMetadata.width, image.width).int(F.ImageMetadata.height, image.height)
+    );
+  }
   function buildRequest(image, settings2) {
-    const translating = Boolean(settings2.targetLang);
     return writer().sub(F.LensOverlayServerRequest.objectsRequest, (objects) => {
       objects.sub(F.LensOverlayObjectsRequest.requestContext, (ctx) => {
         ctx.sub(
           F.LensOverlayRequestContext.requestId,
           (id) => id.int(F.LensOverlayRequestId.uuid, randomUuid()).int(F.LensOverlayRequestId.sequenceId, 1).int(F.LensOverlayRequestId.imageSequenceId, 1)
         );
-        ctx.sub(F.LensOverlayRequestContext.clientContext, (client) => {
-          client.int(F.LensOverlayClientContext.platform, PLATFORM_WEB);
-          client.int(F.LensOverlayClientContext.surface, SURFACE_CHROMIUM);
-          client.sub(
-            F.LensOverlayClientContext.localeContext,
-            (locale) => locale.str(F.LocaleContext.language, settings2.ocrLang || settings2.targetLang).str(F.LocaleContext.region, settings2.region).str(F.LocaleContext.timeZone, settings2.timeZone)
-          );
-          client.sub(
-            F.LensOverlayClientContext.clientFilters,
-            (filters) => filters.sub(F.AppliedFilters.filter, (filter) => {
-              if (!translating) {
-                filter.int(F.AppliedFilter.filterType, FILTER_AUTO);
-                return;
-              }
-              filter.int(F.AppliedFilter.filterType, FILTER_TRANSLATE);
-              filter.sub(
-                F.AppliedFilter.translate,
-                (translate2) => translate2.str(F.AppliedFilter_Translate.targetLanguage, settings2.targetLang).str(F.AppliedFilter_Translate.sourceLanguage, settings2.sourceLang)
-              );
-            })
-          );
-          client.sub(
-            F.LensOverlayClientContext.renderingContext,
-            (rendering) => rendering.int(F.RenderingContext.renderingEnvironment, RENDERING_ENV_LENS_OVERLAY)
-          );
-        });
-      });
-      objects.sub(F.LensOverlayObjectsRequest.imageData, (data) => {
-        data.sub(
-          F.ImageData.payload,
-          (payload) => payload.bytes(F.ImagePayload.imageBytes, image.imageBytes)
-        );
-        data.sub(
-          F.ImageData.imageMetadata,
-          (meta) => meta.int(F.ImageMetadata.width, image.width).int(F.ImageMetadata.height, image.height)
+        ctx.sub(
+          F.LensOverlayRequestContext.clientContext,
+          (client) => writeClientContext(client, settings2, Boolean(settings2.targetLang))
         );
       });
+      objects.sub(F.LensOverlayObjectsRequest.imageData, (data) => writeImageData(data, image));
     }).finish();
   }
   const TRANSLATION_SUCCESS = 1;

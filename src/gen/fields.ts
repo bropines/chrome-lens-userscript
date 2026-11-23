@@ -22,6 +22,9 @@ export const F = {
     rotationZ: 5,
     coordinateType: 6,
   },
+  ClientImage: {
+    imageContent: 1,
+  },
   DeepGleamData: {
     translation: 10,
     visualObjectId: 11,
@@ -29,6 +32,11 @@ export const F = {
   Geometry: {
     boundingBox: 1,
     segmentationPolygon: 5,
+  },
+  ImageCrop: {
+    cropId: 1,
+    image: 2,
+    zoomedCrop: 3,
   },
   ImageData: {
     payload: 1,
@@ -50,6 +58,36 @@ export const F = {
     clientFilters: 17,
     renderingContext: 20,
     clientLoggingData: 23,
+  },
+  LensOverlayInteractionRequest: {
+    requestContext: 1,
+    interactionRequestMetadata: 2,
+    imageCrop: 3,
+  },
+  LensOverlayInteractionRequestMetadata: {
+    type: 1,
+    selectionMetadata: 2,
+    queryMetadata: 4,
+    isAimFulfillmentContext: 5,
+  },
+  LensOverlayInteractionRequestMetadata_QueryMetadata: {
+    textQuery: 2,
+  },
+  LensOverlayInteractionRequestMetadata_SelectionMetadata: {
+    point: 1,
+    region: 2,
+    object: 3,
+  },
+  LensOverlayInteractionRequestMetadata_SelectionMetadata_Object: {
+    objectId: 1,
+    geometry: 2,
+  },
+  LensOverlayInteractionRequestMetadata_SelectionMetadata_Region: {
+    region: 1,
+  },
+  LensOverlayInteractionResponse: {
+    encodedResponse: 3,
+    text: 5,
   },
   LensOverlayObjectsRequest: {
     requestContext: 1,
@@ -78,6 +116,17 @@ export const F = {
     mediaType: 10,
     contextId: 12,
   },
+  LensOverlayServerClusterInfoRequest: {
+    enableSearchSessionId: 1,
+    surface: 2,
+    platform: 3,
+    renderingContext: 4,
+  },
+  LensOverlayServerClusterInfoResponse: {
+    serverSessionId: 1,
+    searchSessionId: 2,
+    routingInfo: 3,
+  },
   LensOverlayServerError: {
     errorType: 1,
     missingChunksMetadata: 2,
@@ -87,6 +136,7 @@ export const F = {
     interactionRequest: 2,
     clientLogs: 3,
     hasLensIntent: 6,
+    processImageForAim: 7,
   },
   LensOverlayServerResponse: {
     error: 1,
@@ -97,6 +147,16 @@ export const F = {
     language: 1,
     region: 2,
     timeZone: 3,
+  },
+  OverlayObject: {
+    id: 1,
+    geometry: 2,
+    renderingMetadata: 8,
+    interactionProperties: 4,
+    isFulfilled: 9,
+  },
+  OverlayObject_InteractionProperties: {
+    selectOnTap: 1,
   },
   RenderingContext: {
     renderingEnvironment: 2,
@@ -129,6 +189,10 @@ export const F = {
   },
   TextLayout_Word_FormulaMetadata: {
     latex: 1,
+  },
+  TextQuery: {
+    query: 1,
+    isPrimary: 2,
   },
   TranslationData: {
     status: 1,
@@ -166,6 +230,12 @@ export const F = {
   TranslationData_TextStyle: {
     textColor: 1,
     backgroundPrimaryColor: 2,
+  },
+  ZoomedCrop: {
+    crop: 1,
+    parentWidth: 2,
+    parentHeight: 3,
+    zoom: 4,
   },
 } as const;
 
