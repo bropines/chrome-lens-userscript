@@ -945,6 +945,18 @@ lays it out. Verified by rendering two non-bubble fixtures with the old tree and
 the new one and comparing the decoded pixels: identical, as is the manga page
 with the setting `off`.
 
+**Geometry is not a promise, so there is a net under the test.** The same page
+translated twice came back once with all three bubbles as columns and once with
+one of them refused - drawn line by line, every line raised to the floor and
+printed through the next. Widening the thresholds after each such report is a
+chase. `collidesAtFloor` asks the only question that matters for that outcome:
+raised to `max(fitted, floor)`, are two neighbours closer than half their sizes
+added up? If so the paragraph is re-wrapped whatever it is - into an outline if
+the picture has one, else into its own rectangle where the floor yields - but
+it is not called a bubble, so it never gets the invented ellipse. A paragraph
+whose lines stay clear of each other is untouched, which keeps the
+non-bubble renders as they were.
+
 **The shape comes from the pixels** (`bubbleMask`, fed by `findBubble` in
 `canvas.ts`, which reads the *source* at a reduced size - never the canvas,
 which by the third paragraph has two translations on it). The background is the

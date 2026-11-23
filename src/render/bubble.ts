@@ -109,6 +109,37 @@ export function crowdsAtFloor(fitted: number[], floor: number): boolean {
   return floor > 0 && fitted.some((size) => size < floor);
 }
 
+/**
+ * Whether the lines, raised to the floor where they need it, will be written
+ * through each other.
+ *
+ * The safety net under `isBubbleColumn`. That test reads the shape of a
+ * bubble from geometry, and geometry is whatever Lens returned this time: the
+ * same page translated twice came back once as a column and once, for one
+ * bubble, as something the test refused - and that bubble was drawn line by
+ * line, each line enlarged to the floor and printed over the next. Whatever
+ * the paragraph is, that result is never right, so it is re-wrapped instead.
+ *
+ * Each line is drawn at `max(fitted, floor)` centred on its own box; two
+ * neighbours collide when the distance between their centres is less than
+ * half their two sizes added up. `lines` and `fitted` are index for index,
+ * in the same pixels. Unlike a column, a paragraph caught here is not assumed
+ * to be a bubble: it gets an outline if the picture has one, otherwise its own
+ * rectangle, where the floor yields rather than overlap.
+ */
+export function collidesAtFloor(lines: Rect[], fitted: number[], floor: number): boolean {
+  if (lines.length < 2 || lines.length !== fitted.length || !crowdsAtFloor(fitted, floor)) return false;
+  const order = lines
+    .map((line, index) => ({ cy: (line.top + line.bottom) / 2, size: Math.max(fitted[index] ?? 0, floor) }))
+    .sort((a, b) => a.cy - b.cy);
+  for (let i = 1; i < order.length; i += 1) {
+    const above = order[i - 1]!;
+    const below = order[i]!;
+    if (below.cy - above.cy < (above.size + below.size) / 2) return true;
+  }
+  return false;
+}
+
 // -------------------------------------------------------------------- mask
 
 export interface Pixels {

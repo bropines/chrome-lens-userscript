@@ -22,6 +22,7 @@ import {
 import type { Rect } from './layout.js';
 import {
   bubbleMask,
+  collidesAtFloor,
   crowdsAtFloor,
   ellipseShape,
   fitShaped,
@@ -763,23 +764,32 @@ export async function renderToBlob(
     // readable size by leaving its boxes is a bubble being read as a list.
     // Two-line bubbles are common and so are two-line captions; only manga
     // mode knows which this page has.
-    if (!reflow && !vertical && mode === 'auto' && own) {
+    if (!reflow && !vertical && mode === 'auto' && own && lineRects.length >= 2 && draw.minFontPx > 0) {
+      // Index for index with lineRects; a line with no text to draw cannot be
+      // raised past anything, so it counts as fitting exactly.
+      const fitted: number[] = [];
+      const rects: Rect[] = [];
+      for (const [i, line] of block.lines.entries()) {
+        if (!line.geometry) continue;
+        const text = buildLineText(block.translation, line, block.lines[i + 1]);
+        rects.push(rectOf(line.geometry, width, height));
+        fitted.push(
+          text.trim()
+            ? fitFontSize(
+                text,
+                line.geometry.w * width,
+                line.geometry.h * height,
+                fontFamily,
+                draw.maxFontPx,
+                settings.fontWeight
+              )
+            : draw.minFontPx
+        );
+      }
       if (isBubbleColumn(lineRects, own, settings.mangaMode ? 2 : undefined)) {
-        const fitted = block.lines.flatMap((line, i) => {
-          const text = buildLineText(block.translation, line, block.lines[i + 1]);
-          if (!line.geometry || !text.trim()) return [];
-          return [
-            fitFontSize(
-              text,
-              line.geometry.w * width,
-              line.geometry.h * height,
-              fontFamily,
-              draw.maxFontPx,
-              settings.fontWeight
-            ),
-          ];
-        });
         reflow = bubble = crowdsAtFloor(fitted, draw.minFontPx);
+      } else if (collidesAtFloor(rects, fitted, draw.minFontPx)) {
+        reflow = true;
       }
     }
 

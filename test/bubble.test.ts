@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import {
   SHAPE_MARGIN,
   bubbleMask,
+  collidesAtFloor,
   crowdsAtFloor,
   ellipseShape,
   fitShaped,
@@ -109,6 +110,30 @@ describe('crowdsAtFloor', () => {
 
   test('with no floor nothing is ever raised', () => {
     expect(crowdsAtFloor([3, 3, 3], 0)).toBe(false);
+  });
+});
+
+describe('collidesAtFloor', () => {
+  // Five lines 16 px apart, as hand lettering with tight leading comes back.
+  const stack = [0, 1, 2, 3, 4].map((i) => rect(400, 100 + i * 16, 150, 18));
+
+  test('lines raised past their pitch would be written through each other', () => {
+    expect(collidesAtFloor(stack, [9, 10, 9, 9, 8], 24)).toBe(true);
+  });
+
+  test('raised, but still clear of the neighbours, is left as it is', () => {
+    const spaced = [0, 1, 2].map((i) => rect(400, 100 + i * 40, 150, 18));
+    expect(collidesAtFloor(spaced, [9, 10, 9], 24)).toBe(false);
+  });
+
+  test('nothing raised is nothing to rescue', () => {
+    expect(collidesAtFloor(stack, [16, 16, 16, 16, 16], 12)).toBe(false);
+    expect(collidesAtFloor(stack, [9, 9, 9, 9, 9], 0)).toBe(false);
+  });
+
+  test('order of the boxes does not matter, and one line cannot collide', () => {
+    expect(collidesAtFloor([...stack].reverse(), [8, 9, 9, 10, 9], 24)).toBe(true);
+    expect(collidesAtFloor([stack[0]!], [6], 24)).toBe(false);
   });
 });
 

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Lens Translate
 // @namespace    https://github.com/bropines/chrome-lens-userscript
-// @version      2.13.0-beta.6
+// @version      2.13.0-beta.7
 // @author       bropines
 // @description  Hover any image, click the button, and its text is translated in place - rendered the way Chromium's own Lens overlay does it.
 // @license      MIT
@@ -697,7 +697,7 @@
     }
     return null;
   }
-  const VERSION = "2.13.0-beta.6";
+  const VERSION = "2.13.0-beta.7";
   const EN = {
     // --- the controls over a picture
     "act.translate": "Translate",
@@ -4012,6 +4012,16 @@
   function crowdsAtFloor(fitted, floor) {
     return floor > 0 && fitted.some((size) => size < floor);
   }
+  function collidesAtFloor(lines, fitted, floor) {
+    if (lines.length < 2 || lines.length !== fitted.length || !crowdsAtFloor(fitted, floor)) return false;
+    const order = lines.map((line2, index) => ({ cy: (line2.top + line2.bottom) / 2, size: Math.max(fitted[index] ?? 0, floor) })).sort((a, b) => a.cy - b.cy);
+    for (let i = 1; i < order.length; i += 1) {
+      const above = order[i - 1];
+      const below = order[i];
+      if (below.cy - above.cy < (above.size + below.size) / 2) return true;
+    }
+    return false;
+  }
   const BG_TOLERANCE = 32;
   const MIN_BG_SHARE = 0.4;
   const TAIL_SHARE = 0.3;
@@ -4728,23 +4738,28 @@
       const lineRects = block.lines.flatMap(
         (line2) => line2.geometry ? [rectOf(line2.geometry, width, height)] : []
       );
-      if (!reflow && !vertical && mode === "auto" && own) {
+      if (!reflow && !vertical && mode === "auto" && own && lineRects.length >= 2 && draw.minFontPx > 0) {
+        const fitted = [];
+        const rects = [];
+        for (const [i, line2] of block.lines.entries()) {
+          if (!line2.geometry) continue;
+          const text2 = buildLineText(block.translation, line2, block.lines[i + 1]);
+          rects.push(rectOf(line2.geometry, width, height));
+          fitted.push(
+            text2.trim() ? fitFontSize(
+              text2,
+              line2.geometry.w * width,
+              line2.geometry.h * height,
+              fontFamily,
+              draw.maxFontPx,
+              settings.fontWeight
+            ) : draw.minFontPx
+          );
+        }
         if (isBubbleColumn(lineRects, own, settings.mangaMode ? 2 : void 0)) {
-          const fitted = block.lines.flatMap((line2, i) => {
-            const text2 = buildLineText(block.translation, line2, block.lines[i + 1]);
-            if (!line2.geometry || !text2.trim()) return [];
-            return [
-              fitFontSize(
-                text2,
-                line2.geometry.w * width,
-                line2.geometry.h * height,
-                fontFamily,
-                draw.maxFontPx,
-                settings.fontWeight
-              )
-            ];
-          });
           reflow = bubble = crowdsAtFloor(fitted, draw.minFontPx);
+        } else if (collidesAtFloor(rects, fitted, draw.minFontPx)) {
+          reflow = true;
         }
       }
       for (let i = 0; i < block.lines.length; i += 1) {
