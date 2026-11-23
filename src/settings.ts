@@ -62,7 +62,8 @@ export const DEFAULTS: Settings = {
   outlineScale: 1,
   eraseMode: 'patch',
   hullPadding: 0.45,
-  reflowHorizontal: false,
+  reflowHorizontal: 'auto',
+  bubbleShape: true,
   fitToBox: true,
   lineSpacing: 1.25,
   textAlign: 'auto',
@@ -195,7 +196,8 @@ export const FIELDS: ReadonlyArray<Field> = [
   { key: 'outlineScale', tab: 'appearance', type: 'range', min: 0, max: 8, step: 0.1, unit: 'x', wide: true },
   { key: 'minReadablePx', tab: 'appearance', type: 'number', min: 0, max: 64, step: 1 },
   { key: 'verticalText', tab: 'appearance', type: 'select', options: ['auto', 'keep', 'horizontal'] },
-  { key: 'reflowHorizontal', tab: 'appearance', type: 'checkbox' },
+  { key: 'reflowHorizontal', tab: 'appearance', type: 'select', options: ['off', 'auto', 'on'] },
+  { key: 'bubbleShape', tab: 'appearance', type: 'checkbox' },
   { key: 'fitToBox', tab: 'appearance', type: 'checkbox' },
   { key: 'lineSpacing', tab: 'appearance', type: 'range', min: 0.8, max: 2, step: 0.05, unit: 'x' },
   { key: 'mangaBoxGrowth', tab: 'appearance', type: 'number', min: 1, max: 3, step: 0.05 },
@@ -301,6 +303,14 @@ function merge(stored: Record<string, unknown>): Settings {
   // CSS, and an earlier version's import let anything through to the store.
   merged['fontFamily'] =
     typeof merged['fontFamily'] === 'string' ? cleanFontFamily(merged['fontFamily']) : DEFAULTS.fontFamily;
+  // Re-wrapping was a switch, off by default, and saving wrote every key - so a
+  // stored false is what everyone who ever saved anything has, and it says
+  // they left the default alone, not that they refused something: turning it
+  // off took no action. It reads as the new default. A stored true was chosen
+  // and stays on.
+  if (typeof merged['reflowHorizontal'] === 'boolean') {
+    merged['reflowHorizontal'] = merged['reflowHorizontal'] ? 'on' : 'auto';
+  }
   return merged as unknown as Settings;
 }
 
@@ -369,6 +379,8 @@ export function sanitize(field: Field, raw: unknown): Value | undefined {
       return clampTo(field, raw);
     }
     case 'select': {
+      // An exported file from before this was a choice still imports.
+      if (field.key === 'reflowHorizontal' && typeof raw === 'boolean') return (raw ? 'on' : 'auto') as Settings[keyof Settings];
       const text = String(raw);
       if (typeof raw !== 'string' && typeof raw !== 'number') return undefined;
       if (!fieldChoices(field).some(([value]) => value === text)) return undefined;

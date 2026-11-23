@@ -237,7 +237,11 @@ Word offsets index the translation by **UTF-16 code unit**, which is what `icu::
 detected layout line for line, which is faithful and leaves the spacing between
 them out of your hands - a speech bubble is really one text area, so the setting
 lays the paragraph out again inside it, mends any word the server split across
-its own lines, and makes **Line spacing** mean something.
+its own lines, and makes **Line spacing** mean something. It has three values.
+`auto`, the default, re-wraps only a paragraph that looks like a bubble - three
+or more short lines, stacked and centred - and only when its translation cannot
+be set line by line at a readable size; screenshots, signs and single lines are
+left as Chromium has them. `on` re-wraps everything, `off` nothing.
 
 Vertical CJK gets a fifth rule of its own: setting a Russian translation vertically is faithful to the source and miserable to read, so the `verticalText` setting defaults to `auto` and keeps the column only when the target language is itself CJK. Where a column is kept, dashes and brackets (the long-vowel mark, parentheses, corner brackets) turn a quarter turn, as vertical typesetting has them, and kuten/touten hang in the upper right of their cell. Right-to-left targets are set right-to-left whether or not the paragraph was re-wrapped.
 
@@ -293,6 +297,18 @@ A preset for pages of vertical Japanese, off by default:
   since a rectangle would cut across the bubble's outline.
 - **Raises the size floor** to at least 14 px and gives reflowed text the
   four-offset outline that per-line text already had.
+
+Speech bubbles are handled without it, too. Lens reports a bubble as a column
+of two-word lines, and a longer translation set line by line either shrinks to
+nothing or, once the size floor raises it, is drawn through its own neighbours.
+Such a paragraph is re-wrapped as one text area, and the area is the bubble
+itself: its outline is read from the picture, by filling outwards from the text
+over the bubble's own colour until the line that encloses it, and each line of
+the translation is made as wide as the bubble is at that height. Where no
+outline can be found - text over artwork, an open bubble - an ellipse stands in.
+**Fit text to the bubble's shape** turns the reading off and leaves a rectangle.
+Vertical text that is re-set horizontally gets the same shape, and manga mode
+extends the treatment to two-line bubbles.
 
 The outline itself has its own slider, up to 8x, with a live sample drawn over
 simulated residue — the number alone tells you nothing, since the whole point of

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Lens Translate
 // @namespace    https://github.com/bropines/chrome-lens-userscript
-// @version      2.13.0-beta.3
+// @version      2.13.0-beta.4
 // @author       bropines
 // @description  Hover any image, click the button, and its text is translated in place - rendered the way Chromium's own Lens overlay does it.
 // @license      MIT
@@ -697,7 +697,7 @@
     }
     return null;
   }
-  const VERSION = "2.13.0-beta.3";
+  const VERSION = "2.13.0-beta.4";
   const EN = {
     // --- the controls over a picture
     "act.translate": "Translate",
@@ -944,6 +944,11 @@
     "set.textAlign.opt.right": "right",
     "set.reflowHorizontal.label": "Re-wrap horizontal text",
     "set.reflowHorizontal.hint": "treats a paragraph as one text area: better in bubbles, less faithful to the source lines",
+    "set.reflowHorizontal.opt.off": "off - keep the source lines, like Chromium",
+    "set.reflowHorizontal.opt.auto": "auto - only bubbles that would not fit",
+    "set.reflowHorizontal.opt.on": "on - every paragraph",
+    "set.bubbleShape.label": "Fit text to the bubble's shape",
+    "set.bubbleShape.hint": "wraps re-set text to the bubble's outline, read from the picture; off, it gets a rectangle",
     "set.fitToBox.label": "Keep text out of the next bubble",
     "set.fitToBox.hint": "shrinks a paragraph that outgrows its room; off, text stays larger but may overlap",
     "set.lineSpacing.label": "Line spacing",
@@ -1521,7 +1526,8 @@
     outlineScale: 1,
     eraseMode: "patch",
     hullPadding: 0.45,
-    reflowHorizontal: false,
+    reflowHorizontal: "auto",
+    bubbleShape: true,
     fitToBox: true,
     lineSpacing: 1.25,
     textAlign: "auto",
@@ -1612,7 +1618,8 @@
     { key: "outlineScale", tab: "appearance", type: "range", min: 0, max: 8, step: 0.1, unit: "x", wide: true },
     { key: "minReadablePx", tab: "appearance", type: "number", min: 0, max: 64, step: 1 },
     { key: "verticalText", tab: "appearance", type: "select", options: ["auto", "keep", "horizontal"] },
-    { key: "reflowHorizontal", tab: "appearance", type: "checkbox" },
+    { key: "reflowHorizontal", tab: "appearance", type: "select", options: ["off", "auto", "on"] },
+    { key: "bubbleShape", tab: "appearance", type: "checkbox" },
     { key: "fitToBox", tab: "appearance", type: "checkbox" },
     { key: "lineSpacing", tab: "appearance", type: "range", min: 0.8, max: 2, step: 0.05, unit: "x" },
     { key: "mangaBoxGrowth", tab: "appearance", type: "number", min: 1, max: 3, step: 0.05 },
@@ -1693,6 +1700,9 @@
       merged["keyTranslateAll"] = "";
     }
     merged["fontFamily"] = typeof merged["fontFamily"] === "string" ? cleanFontFamily(merged["fontFamily"]) : DEFAULTS.fontFamily;
+    if (typeof merged["reflowHorizontal"] === "boolean") {
+      merged["reflowHorizontal"] = merged["reflowHorizontal"] ? "on" : "auto";
+    }
     return merged;
   }
   function getSettings() {
@@ -1738,6 +1748,7 @@
         return clampTo(field, raw);
       }
       case "select": {
+        if (field.key === "reflowHorizontal" && typeof raw === "boolean") return raw ? "on" : "auto";
         const text2 = String(raw);
         if (typeof raw !== "string" && typeof raw !== "number") return void 0;
         if (!fieldChoices(field).some(([value]) => value === text2)) return void 0;
@@ -3355,6 +3366,7 @@
     eraseMode: 0,
     hullPadding: 0,
     reflowHorizontal: 0,
+    bubbleShape: 0,
     fitToBox: 0,
     lineSpacing: 0,
     textAlign: 0
@@ -3656,6 +3668,315 @@
     }
     return rendered;
   }
+  function reflowMode(value) {
+    if (value === true || value === "on") return "on";
+    if (value === false || value === "off") return "off";
+    return "auto";
+  }
+  const COLUMN_MIN_LINES = 3;
+  const COLUMN_MAX_LINE_ASPECT = 12;
+  const COLUMN_MAX_ASPECT = 2.5;
+  const COLUMN_MAX_OFF_CENTRE = 0.15;
+  const median = (values) => {
+    const sorted = [...values].sort((a, b) => a - b);
+    return sorted[sorted.length >> 1] ?? 0;
+  };
+  function isBubbleColumn(lines, paragraph, minLines = COLUMN_MIN_LINES) {
+    if (lines.length < Math.max(2, minLines)) return false;
+    const paraW = paragraph.right - paragraph.left;
+    const paraH = paragraph.bottom - paragraph.top;
+    if (!(paraW > 0) || !(paraH > 0) || paraW > COLUMN_MAX_ASPECT * paraH) return false;
+    const sorted = [...lines].sort((a, b) => a.top + a.bottom - (b.top + b.bottom));
+    for (let i = 1; i < sorted.length; i += 1) {
+      const above = sorted[i - 1];
+      if (sorted[i].top < (above.top + above.bottom) / 2) return false;
+    }
+    const aspects = sorted.map((line) => (line.right - line.left) / Math.max(1, line.bottom - line.top));
+    if (median(aspects) > COLUMN_MAX_LINE_ASPECT) return false;
+    const centres = sorted.map((line) => (line.left + line.right) / 2);
+    const axis = median(centres);
+    return centres.every((centre) => Math.abs(centre - axis) <= COLUMN_MAX_OFF_CENTRE * paraW);
+  }
+  function crowdsAtFloor(fitted, floor) {
+    return floor > 0 && fitted.some((size) => size < floor);
+  }
+  const BG_TOLERANCE = 32;
+  const MIN_BG_SHARE = 0.4;
+  const TAIL_SHARE = 0.3;
+  const gridBox = (rect, width, height) => ({
+    x0: Math.max(0, Math.min(width, Math.floor(rect.left))),
+    y0: Math.max(0, Math.min(height, Math.floor(rect.top))),
+    x1: Math.max(0, Math.min(width, Math.ceil(rect.right))),
+    y1: Math.max(0, Math.min(height, Math.ceil(rect.bottom)))
+  });
+  function bubbleMask(pixels, lines, blocked, open2, maxArea = Infinity) {
+    const { data, width, height } = pixels;
+    if (width < 1 || height < 1) return null;
+    const boxes = lines.map((line) => gridBox(line, width, height)).filter((box) => box.x1 > box.x0 && box.y1 > box.y0);
+    if (!boxes.length) return null;
+    const bins = new Uint32Array(4096);
+    const binOf = (i) => data[i] >> 4 << 8 | data[i + 1] >> 4 << 4 | data[i + 2] >> 4;
+    let total2 = 0;
+    for (const box of boxes) {
+      for (let y = box.y0; y < box.y1; y += 1) {
+        for (let x = box.x0; x < box.x1; x += 1) {
+          const bin = binOf((y * width + x) * 4);
+          bins[bin] = bins[bin] + 1;
+          total2 += 1;
+        }
+      }
+    }
+    let top = 0;
+    for (let bin = 1; bin < bins.length; bin += 1) {
+      if (bins[bin] > bins[top]) top = bin;
+    }
+    let red = 0;
+    let green = 0;
+    let blue = 0;
+    let members = 0;
+    for (const box of boxes) {
+      for (let y = box.y0; y < box.y1; y += 1) {
+        for (let x = box.x0; x < box.x1; x += 1) {
+          const i = (y * width + x) * 4;
+          if (binOf(i) !== top) continue;
+          red += data[i];
+          green += data[i + 1];
+          blue += data[i + 2];
+          members += 1;
+        }
+      }
+    }
+    if (!members) return null;
+    red /= members;
+    green /= members;
+    blue /= members;
+    const state = new Uint8Array(width * height);
+    for (let p = 0, i = 0; p < state.length; p += 1, i += 4) {
+      const off = Math.max(
+        Math.abs(data[i] - red),
+        Math.abs(data[i + 1] - green),
+        Math.abs(data[i + 2] - blue)
+      );
+      if (off <= BG_TOLERANCE) state[p] = 1;
+    }
+    for (const rect of blocked) {
+      const box = gridBox(rect, width, height);
+      for (let y = box.y0; y < box.y1; y += 1) state.fill(3, y * width + box.x0, y * width + box.x1);
+    }
+    const stack = new Int32Array(width * height);
+    let depth = 0;
+    let seeds = 0;
+    for (const box of boxes) {
+      for (let y = box.y0; y < box.y1; y += 1) {
+        for (let p = y * width + box.x0; p < y * width + box.x1; p += 1) {
+          if (state[p] !== 1) continue;
+          state[p] = 2;
+          stack[depth] = p;
+          depth += 1;
+          seeds += 1;
+        }
+      }
+    }
+    if (seeds < total2 * MIN_BG_SHARE) return null;
+    while (depth > 0) {
+      depth -= 1;
+      const p = stack[depth];
+      const x = p % width;
+      if (x > 0 && state[p - 1] === 1) {
+        state[p - 1] = 2;
+        stack[depth] = p - 1;
+        depth += 1;
+      }
+      if (x < width - 1 && state[p + 1] === 1) {
+        state[p + 1] = 2;
+        stack[depth] = p + 1;
+        depth += 1;
+      }
+      if (p >= width && state[p - width] === 1) {
+        state[p - width] = 2;
+        stack[depth] = p - width;
+        depth += 1;
+      }
+      if (p + width < state.length && state[p + width] === 1) {
+        state[p + width] = 2;
+        stack[depth] = p + width;
+        depth += 1;
+      }
+    }
+    for (let y = 0; y < height; y += 1) {
+      if (open2.left && state[y * width] === 2) return null;
+      if (open2.right && state[y * width + width - 1] === 2) return null;
+    }
+    for (let x = 0; x < width; x += 1) {
+      if (open2.top && state[x] === 2) return null;
+      if (open2.bottom && state[(height - 1) * width + x] === 2) return null;
+    }
+    let linesTop = height;
+    let linesBottom = 0;
+    const thickness = [];
+    for (const box of boxes) {
+      for (let y = box.y0; y < box.y1; y += 1) state.fill(2, y * width + box.x0, y * width + box.x1);
+      linesTop = Math.min(linesTop, box.y0);
+      linesBottom = Math.max(linesBottom, box.y1);
+      thickness.push(Math.min(box.x1 - box.x0, box.y1 - box.y0));
+    }
+    const stroke = median(thickness);
+    for (let y = linesTop; y < linesBottom; y += 1) {
+      let reached = -1;
+      for (let x = 0; x < width; x += 1) {
+        if (state[y * width + x] !== 2) continue;
+        if (reached >= 0 && x - reached > 1 && x - reached - 1 <= stroke) {
+          let clear = true;
+          for (let between = reached + 1; between < x; between += 1) {
+            if (state[y * width + between] === 3) clear = false;
+          }
+          if (clear) state.fill(2, y * width + reached + 1, y * width + x);
+        }
+        reached = x;
+      }
+    }
+    const left = new Int32Array(height).fill(-1);
+    const right = new Int32Array(height).fill(-1);
+    const anchor = [...boxes].sort((a, b) => a.y0 + a.y1 - (b.y0 + b.y1))[boxes.length >> 1];
+    const row = Math.min(height - 1, anchor.y0 + anchor.y1 >> 1);
+    const column = Math.min(width - 1, anchor.x0 + anchor.x1 >> 1);
+    let from = column;
+    let to = column + 1;
+    while (from > 0 && state[row * width + from - 1] === 2) from -= 1;
+    while (to < width && state[row * width + to] === 2) to += 1;
+    left[row] = from;
+    right[row] = to;
+    const follow = (y, lo, hi) => {
+      let best = 0;
+      let x = lo;
+      while (x > 0 && state[y * width + x] === 2 && state[y * width + x - 1] === 2) x -= 1;
+      while (x < hi) {
+        if (state[y * width + x] !== 2) {
+          x += 1;
+          continue;
+        }
+        let end = x;
+        while (end < width && state[y * width + end] === 2) end += 1;
+        const shared = Math.min(end, hi) - Math.max(x, lo);
+        if (shared > best) {
+          best = shared;
+          left[y] = x;
+          right[y] = end;
+        }
+        x = end;
+      }
+      return best > 0;
+    };
+    let first = row;
+    let last = row + 1;
+    for (let y = row - 1; y >= 0; y -= 1) {
+      if (!follow(y, left[y + 1], right[y + 1])) break;
+      first = y;
+    }
+    for (let y = row + 1; y < height; y += 1) {
+      if (!follow(y, left[y - 1], right[y - 1])) break;
+      last = y + 1;
+    }
+    let widest = 0;
+    for (let y = first; y < last; y += 1) widest = Math.max(widest, right[y] - left[y]);
+    const narrow = (y) => right[y] - left[y] < widest * TAIL_SHARE;
+    while (first < linesTop && narrow(first)) first += 1;
+    while (last > linesBottom && narrow(last - 1)) last -= 1;
+    let area = 0;
+    for (let y = first; y < last; y += 1) area += right[y] - left[y];
+    if (area > maxArea) return null;
+    return { width, height, top: first, bottom: last, left, right };
+  }
+  function maskShape(mask, originX, originY, scaleX, scaleY) {
+    return {
+      top: originY + mask.top * scaleY,
+      bottom: originY + mask.bottom * scaleY,
+      span(y0, y1) {
+        const from = Math.floor((y0 - originY) / scaleY);
+        const to = Math.ceil((y1 - originY) / scaleY);
+        if (from < mask.top || to > mask.bottom || to <= from) return null;
+        let lo = -Infinity;
+        let hi = Infinity;
+        for (let y = from; y < to; y += 1) {
+          lo = Math.max(lo, mask.left[y]);
+          hi = Math.min(hi, mask.right[y]);
+        }
+        return hi > lo ? [originX + lo * scaleX, originX + hi * scaleX] : null;
+      }
+    };
+  }
+  function ellipseShape(cx, cy, rx, ry) {
+    return {
+      top: cy - ry,
+      bottom: cy + ry,
+      span(y0, y1) {
+        const reach = Math.max(Math.abs(y0 - cy), Math.abs(y1 - cy)) / ry;
+        if (!(reach < 1) || !(rx > 0)) return null;
+        const half = rx * Math.sqrt(1 - reach * reach);
+        return [cx - half, cx + half];
+      }
+    };
+  }
+  const SHAPE_MARGIN = 0.25;
+  function arrange(widths, gap, shape, size, spacing) {
+    const pitch = size * spacing;
+    const margin = size * SHAPE_MARGIN;
+    const middle = (shape.top + shape.bottom) / 2;
+    const height = shape.bottom - shape.top;
+    for (let count = 1; count * pitch <= height && count <= widths.length; count += 1) {
+      const slots = [];
+      let next = 0;
+      const blockTop = middle - count * pitch / 2;
+      for (let i = 0; i < count && next < widths.length; i += 1) {
+        const y = blockTop + i * pitch + (pitch - size) / 2;
+        const span = shape.span(y - margin, y + size + margin);
+        if (!span) break;
+        const left = span[0] + margin;
+        const right = span[1] - margin;
+        const from = next;
+        let used = 0;
+        while (next < widths.length) {
+          const wider = used + (next > from ? gap : 0) + widths[next];
+          if (wider > right - left) break;
+          used = wider;
+          next += 1;
+        }
+        if (next === from) break;
+        slots.push({ from, to: next, left, right, y });
+      }
+      if (next >= widths.length) return slots;
+    }
+    return null;
+  }
+  function layoutShaped(measure, tokens, joiner, shape, size, spacing) {
+    const slots = arrange(tokens.map(measure), joiner ? measure(joiner) : 0, shape, size, spacing);
+    if (!slots) return null;
+    const lines = [];
+    for (const slot of slots) {
+      const text2 = tokens.slice(slot.from, slot.to).join(joiner);
+      if (measure(text2) > slot.right - slot.left) return null;
+      lines.push({ text: text2, left: slot.left, right: slot.right, y: slot.y });
+    }
+    return lines;
+  }
+  function fitShaped(setFont, measure, text2, shape, spacing, perCharacter = false, maxSize = MAX_FONT_SIZE) {
+    const flat = text2.trim().replace(/\s+/g, " ");
+    if (!flat) return null;
+    const tokens = perCharacter ? [...flat] : flat.split(" ");
+    const joiner = perCharacter ? "" : " ";
+    const high = Math.max(MIN_FONT_SIZE, Math.floor(maxSize));
+    setFont(high);
+    const widths = tokens.map(measure);
+    const gap = joiner ? measure(joiner) : 0;
+    for (let size = high; size >= MIN_FONT_SIZE; size -= 1) {
+      const ratio = size / high;
+      if (!arrange(widths.map((width) => width * ratio), gap * ratio, shape, size, spacing)) continue;
+      setFont(size);
+      const lines = layoutShaped(measure, tokens, joiner, shape, size, spacing);
+      if (lines) return { size, lines };
+    }
+    return null;
+  }
   function boxCorners(geometry, width, height) {
     const cx = geometry.cx * width;
     const cy = geometry.cy * height;
@@ -3852,6 +4173,103 @@
     }
     ctx.restore();
   }
+  const WINDOW_PAD = 1.5;
+  const MASK_PIXELS = 12e4;
+  const MAX_COVER = 0.5;
+  const UPRIGHT = 1;
+  const MAX_UPSCALE = 1.6;
+  function findBubble(source, canvasScale, width, height, own, lines, others) {
+    const pad = Math.max(own.right - own.left, own.bottom - own.top) * WINDOW_PAD;
+    if (!(pad > 0)) return null;
+    const room = roomFor(own, others, 1e6, width, height);
+    const open2 = {
+      left: own.left - pad > room.left,
+      top: own.top - pad > room.top,
+      right: own.right + pad < room.right,
+      bottom: own.bottom + pad < room.bottom
+    };
+    const sx = Math.floor(Math.max(room.left, own.left - pad) / canvasScale);
+    const sy = Math.floor(Math.max(room.top, own.top - pad) / canvasScale);
+    const sw = Math.ceil(Math.min(room.right, own.right + pad) / canvasScale) - sx;
+    const sh = Math.ceil(Math.min(room.bottom, own.bottom + pad) / canvasScale) - sy;
+    if (sw < 2 || sh < 2) return null;
+    const shrink = Math.min(1, Math.sqrt(MASK_PIXELS / (sw * sh)));
+    const gw = Math.max(1, Math.round(sw * shrink));
+    const gh = Math.max(1, Math.round(sh * shrink));
+    const scaleX = sw / gw * canvasScale;
+    const scaleY = sh / gh * canvasScale;
+    const x = sx * canvasScale;
+    const y = sy * canvasScale;
+    let pixels;
+    try {
+      const scratch = document.createElement("canvas");
+      scratch.width = gw;
+      scratch.height = gh;
+      const ctx = scratch.getContext("2d", { willReadFrequently: true });
+      if (!ctx) return null;
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, gw, gh);
+      ctx.imageSmoothingQuality = "high";
+      ctx.drawImage(source, sx, sy, sw, sh, 0, 0, gw, gh);
+      pixels = ctx.getImageData(0, 0, gw, gh);
+    } catch {
+      return null;
+    }
+    const toGrid = (rect, grow = 0) => ({
+      left: (rect.left - grow - x) / scaleX,
+      right: (rect.right + grow - x) / scaleX,
+      top: (rect.top - grow - y) / scaleY,
+      bottom: (rect.bottom + grow - y) / scaleY
+    });
+    const mask = bubbleMask(
+      pixels,
+      lines.map((line) => toGrid(line)),
+      // The same daylight roomFor keeps between two paragraphs.
+      others.map((other) => toGrid(other, 2)),
+      open2,
+      MAX_COVER * width * height / (scaleX * scaleY)
+    );
+    return mask ? { mask, x, y, scaleX, scaleY } : null;
+  }
+  function drawShapedParagraph(draw, block, settings, shape, frame) {
+    const style = block.lines[0];
+    const text2 = block.translation.trim();
+    if (!style || !text2) return false;
+    const { ctx, fontFamily, fontWeight } = draw;
+    const spacing = settings.lineSpacing > 0 ? settings.lineSpacing : 1.25;
+    const measure = (candidate) => ctx.measureText(candidate).width;
+    const setFont = (px2) => {
+      ctx.font = fontOf(px2, fontFamily, fontWeight);
+    };
+    const heights = block.lines.flatMap(
+      (line) => line.geometry ? [Math.min(line.geometry.w * draw.width, line.geometry.h * draw.height)] : []
+    ).sort((a, b) => a - b);
+    const sourceSize2 = heights[heights.length >> 1] ?? 0;
+    const ceiling = sourceSize2 > 0 ? Math.min(draw.maxFontPx, Math.max(sourceSize2 * MAX_UPSCALE, draw.minFontPx)) : draw.maxFontPx;
+    ctx.save();
+    ctx.translate(frame.x, frame.y);
+    ctx.rotate(frame.angle * DEG);
+    ctx.direction = isRtl(block) ? "rtl" : "ltr";
+    const fit = fitShaped(setFont, measure, text2, shape, spacing, wrapsPerCharacter(block), ceiling);
+    if (!fit || fit.size < draw.minFontPx && !settings.fitToBox) {
+      ctx.restore();
+      return false;
+    }
+    ctx.textAlign = "left";
+    ctx.textBaseline = "top";
+    const fill = settings.textColor || argbToCss(style.textColor);
+    const outline = Math.max(0, Math.round(fit.size * OUTLINE_RATIO * 2 * settings.outlineScale));
+    const outlineColor = settings.outlineColor || argbToCss(style.bgColor);
+    for (const line of fit.lines) {
+      const advance = measure(line.text);
+      const x = settings.textAlign === "left" ? line.left : settings.textAlign === "right" ? line.right - advance : (line.left + line.right - advance) / 2;
+      strokeThenFill(ctx, line.text, x, line.y, outline, outlineColor);
+      ctx.fillStyle = fill;
+      ctx.fillText(line.text, x, line.y);
+    }
+    ctx.restore();
+    return true;
+  }
   function eraseTextArea(draw, block, settings) {
     const { ctx, width, height } = draw;
     const points = [];
@@ -3986,12 +4404,37 @@
       (block) => block.geometry ? rectOf(block.geometry, width, height) : null
     );
     const growth = settings.mangaMode ? Math.max(1, settings.mangaBoxGrowth) : 1;
+    const mode = reflowMode(settings.reflowHorizontal);
     for (const [index, block] of blocks.entries()) {
       const vertical = block.writingDirection === 2;
       const stayVertical = !settings.mangaMode && shouldStayVertical(block, settings.verticalText);
       const hull = settings.drawBackground && (settings.eraseMode === "hull" || settings.mangaMode);
       if (hull) eraseTextArea(draw, block, settings);
-      const reflow = Boolean(block.geometry) && !stayVertical && (vertical || settings.reflowHorizontal);
+      let reflow = Boolean(block.geometry) && !stayVertical && (vertical || mode === "on");
+      let bubble = settings.mangaMode;
+      const own = boxes[index];
+      const lineRects = block.lines.flatMap(
+        (line) => line.geometry ? [rectOf(line.geometry, width, height)] : []
+      );
+      if (!reflow && !vertical && mode === "auto" && own) {
+        if (isBubbleColumn(lineRects, own, settings.mangaMode ? 2 : void 0)) {
+          const fitted = block.lines.flatMap((line, i) => {
+            const text2 = buildLineText(block.translation, line, block.lines[i + 1]);
+            if (!line.geometry || !text2.trim()) return [];
+            return [
+              fitFontSize(
+                text2,
+                line.geometry.w * width,
+                line.geometry.h * height,
+                fontFamily,
+                draw.maxFontPx,
+                settings.fontWeight
+              )
+            ];
+          });
+          reflow = bubble = crowdsAtFloor(fitted, draw.minFontPx);
+        }
+      }
       for (let i = 0; i < block.lines.length; i += 1) {
         const line = block.lines[i];
         if (!line) continue;
@@ -3999,10 +4442,38 @@
           if (!hull) await drawLine(draw, block, line, block.lines[i + 1], settings, true);
         } else await drawLine(draw, block, line, block.lines[i + 1], settings, false, hull);
       }
-      if (reflow) {
-        const own = boxes[index];
-        if (own) {
-          const others = boxes.filter((rect, at) => rect !== null && at !== index);
+      if (reflow && own && block.geometry) {
+        const others = boxes.filter((rect, at) => rect !== null && at !== index);
+        let shaped = false;
+        if (settings.bubbleShape) {
+          const angle = block.geometry.angle;
+          const found = Math.abs(angle) <= UPRIGHT ? findBubble(source, scale, width, height, own, lineRects, others) : null;
+          if (found) {
+            const shape = maskShape(found.mask, found.x, found.y, found.scaleX, found.scaleY);
+            shaped = drawShapedParagraph(draw, block, settings, shape, { x: 0, y: 0, angle: 0 });
+          } else if (bubble) {
+            const room = roomFor(own, others, Math.max(growth, Math.SQRT2), width, height);
+            const box = fitInside(
+              {
+                cx: (room.left + room.right) / 2,
+                cy: (room.top + room.bottom) / 2,
+                w: room.right - room.left,
+                h: room.bottom - room.top,
+                angle
+              },
+              width,
+              height
+            );
+            shaped = drawShapedParagraph(
+              draw,
+              block,
+              settings,
+              ellipseShape(0, 0, box.w / 2, box.h / 2),
+              { x: box.cx, y: box.cy, angle }
+            );
+          }
+        }
+        if (!shaped) {
           drawReflowedParagraph(draw, block, settings, roomFor(own, others, growth, width, height));
         }
       }

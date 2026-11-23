@@ -231,6 +231,7 @@ const DRAWN = Object.keys({
   eraseMode: 0,
   hullPadding: 0,
   reflowHorizontal: 0,
+  bubbleShape: 0,
   fitToBox: 0,
   lineSpacing: 0,
   textAlign: 0,

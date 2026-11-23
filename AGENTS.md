@@ -77,6 +77,8 @@ src/
   lens/                 request builder, response parser, transport, plain text
   render/
     layout.ts           the pure layout maths, shared by both renderers
+    bubble.ts           a speech bubble as a text area: is it one, its shape
+                        from the pixels, the largest type that shape holds (pure)
     background.ts       a CSS background as geometry (pure)
     canvas.ts           paints the translation into a bitmap
     cover.ts            lays that bitmap over the image as a sibling
@@ -821,8 +823,9 @@ text does not, and Chromium never does - but a speech bubble is one text area,
 not a transcript of where the source happened to break. Re-wrapping also mends
 a word the server split across two of its lines.
 
-It is off by default, because repeating the source layout is the faithful
-behaviour and the one people get without asking.
+It was off by default, because repeating the source layout is the faithful
+behaviour. It is `auto` now, which is still that for everything except the one
+case where faithful is unreadable - see the next section.
 
 It has to reach **both** halves of the reflow: the multiple `fitTextBlock`
 measures against and the one the draw loop advances by. Fitting against 1.25 and
@@ -832,6 +835,103 @@ A looser spacing therefore yields a *smaller* font, not a taller block - the fit
 trades one for the other, and the block stays inside the box either way. Anyone
 measuring this from pixels should measure that invariant; the pitch between
 bands merges into one at tight spacings and is not a reliable read.
+
+### A bubble is one text area, and its shape is in the picture
+
+Lens returns a speech bubble as a column of short lines, one or two words each.
+A Russian translation is longer per line, so the per-line fit shrinks it, the
+readable-size floor puts the size back, and the lines - still pinned to boxes a
+pitch apart - are drawn through each other. Measured on a real page shown at
+half its natural width: 1102 pixels inked by two lines at once, and at phone
+width 33726, with 40-58% of each paragraph's ink outside its bubble.
+`reflowHorizontal` could always fix that, but as a switch it also re-wrapped
+every screenshot, so it was off and nobody found it.
+
+It is `'off' | 'auto' | 'on'` now and `auto` is the default. `render/bubble.ts`
+holds all of it, as arithmetic that runs without a page.
+
+**The decision is two tests, and the second is the guard.** `isBubbleColumn`
+reads geometry alone: at least three lines (two in manga mode - two-line
+bubbles are common and so are two-line captions, and only manga mode knows which
+the page has), stacked rather than side by side, a median line no wider than 12
+line heights, a paragraph no wider than 2.5 of its height, and every line centre
+within 0.15 of the paragraph's width of the common axis. The real bubbles sit at
+0.55-1.75 for the aspect and under 0.04 for the centring; left-aligned text with
+a short last line is off-centre by 0.25, which is what that test is for. But a
+centred three-line headline passes all of it, so the column is re-wrapped only
+if `crowdsAtFloor` also holds: some line's fitted size is under the floor. A
+fitted line is inside its own box by construction, so "under the floor" and
+"will overlap" are one event, and a column that fits is left exactly as Chromium
+lays it out. Verified by rendering two non-bubble fixtures with the old tree and
+the new one and comparing the decoded pixels: identical, as is the manga page
+with the setting `off`.
+
+**The shape comes from the pixels** (`bubbleMask`, fed by `findBubble` in
+`canvas.ts`, which reads the *source* at a reduced size - never the canvas,
+which by the third paragraph has two translations on it). The background is the
+commonest colour inside the line boxes, as a mode over 16-level bins: the boxes
+hug the glyphs, so what is not ink there is bubble, and a mode survives the ink
+being nearly half the pixels. From those pixels a four-connected fill spreads
+over everything within 32 levels of that colour - compared with the colour, not
+with the neighbouring pixel, so a gradient cannot walk it out - and stops at the
+outline. Things that were each wrong first:
+
+- **The window has open and closed edges.** It is the paragraph padded by 1.5 of
+  its longer side, cut back by the picture and by a neighbour in the same band
+  (`roomFor` with no cap). A fill that reaches an edge the padding put there was
+  not inside anything, and the mask is discarded; reaching the picture's edge or
+  a neighbour's is normal - two paragraphs in one bubble each get their half.
+- **The line boxes are inside by fiat**, because glyphs are holes and a shape
+  with holes has no span per row. That is not enough: a comma or a descender
+  crosses the row between two boxes and cuts that row in half, which showed as
+  lines pushed to one side of a symmetrical bubble. On the rows the text stood
+  on, a gap in the fill narrower than a line is tall is bridged.
+- **One span per row, chosen by overlap with the row before**, walking out from
+  the middle line - so a lobe reached round a corner is not text area - and rows
+  under 0.3 of the widest are trimmed from the ends, because a tail included in
+  the shape pulls the centred block towards the speaker.
+- Refused: under 0.4 of the line boxes is the background colour (text over
+  artwork), or the mask is over half the picture. Then a paragraph that is a
+  bubble by the decision above, or by manga mode, gets an ellipse inscribed in
+  its room grown by the square root of two - the smallest ellipse that contains
+  a box is that box grown by exactly that - and anything else gets the rectangle
+  it always had.
+
+A mask is axis-aligned, so it is only used for text within a degree of upright.
+
+**The fit is not a binary search**, though `fitTextBlock` is one. Each line is
+as wide as the narrowest row of its own band, less a quarter-em margin; the
+block is centred vertically, so the bands depend on the line count and the line
+count on the bands, and counts are tried from one upwards. That makes feasible
+and infeasible sizes interleave, and a bisection returns whichever feasible size
+its midpoints visit: one bubble came out at 36px or 40px depending only on the
+upper bound, and the upper bound depends on the displayed width, so the same
+paragraph changed size as the window was resized. `fitShaped` tries every size
+from the top down - token widths measured once and scaled, which is arithmetic,
+and only a size that looks feasible measured for real. That last measurement is
+the layout that is painted, so the wrap is still measured at the size drawn.
+
+The ceiling is 1.6 of the source's line height (or the floor, if higher): a
+bubble is often far larger than what is said in it. Below the floor, the floor
+yields, as `fitToBox` has it for rectangles; with `fitToBox` off the shape is
+abandoned for the rectangle instead, since someone asked for size over fit.
+
+Measured as the overlap section above describes, by replaying every `fillText`
+alone: overlap 1102 -> 0 and 33726 -> 0, no ink outside any mask, and sizes of
+27-46 canvas pixels against 19-30 for the rectangle. Reading a mask takes 1-4 ms
+once warm; the first on a page is 10-40.
+
+`bubbleShape` turns the mask off and leaves the rectangle: for textured or
+open bubbles, where the outline is misread, and it is in `DRAWN`.
+
+A profile saved by an older version stores `reflowHorizontal: false` whether or
+not anyone chose it, because saving writes every key. It reads as `off`. That
+is deliberate - turning on what may have been refused is the worse mistake -
+and it means only new profiles and reset ones get `auto`.
+
+The engine's `RenderOptions.reflowHorizontal` changed type with this. The
+renderer still takes `true` and `false` through `reflowMode`, so a consumer
+that has not caught up draws as before, but its type check will say so.
 
 ### Wrapping is a property of the language, not the string
 
@@ -874,7 +974,8 @@ width `2 * pad`, then fill.
 ## Verifying changes
 
 `bun test` covers what can be checked without a page: the protobuf codec, URL
-normalisation and the cache budget, the layout maths (`test/layout.test.ts`,
+normalisation and the cache budget, bubbles on synthetic pictures
+(`test/bubble.test.ts`), the layout maths (`test/layout.test.ts`,
 partly ported from `chrome-lens-py/tests/test_units.py` - and the rotated
 punctuation set is compared with the Python one when the sibling checkout is
 there), background geometry, the IndexedDB store, `gm.ts`, the per-site rules,

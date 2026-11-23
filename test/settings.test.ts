@@ -247,6 +247,19 @@ describe('stored settings from an older version', () => {
     expect((await load(both)).getSettings().keyTranslateAll).toBe('Ctrl+KeyB');
   });
 
+  test('re-wrapping was a switch: on stays on, off stays off, never stored is auto', async () => {
+    const stored = (value: unknown) => new Map<string, unknown>([[KEY, JSON.stringify({ reflowHorizontal: value })]]);
+    expect((await load(stored(true))).getSettings().reflowHorizontal).toBe('on');
+    expect((await load(stored(false))).getSettings().reflowHorizontal).toBe('auto');
+    expect((await load(stored('on'))).getSettings().reflowHorizontal).toBe('on');
+    expect((await load()).getSettings().reflowHorizontal).toBe('auto');
+    // And a file exported while it was a switch still imports.
+    const { importSettings } = await load();
+    expect(importSettings({ reflowHorizontal: true })?.patch).toEqual({ reflowHorizontal: 'on' });
+    expect(importSettings({ reflowHorizontal: false })?.patch).toEqual({ reflowHorizontal: 'auto' });
+    expect(importSettings({ reflowHorizontal: 'sometimes' })?.invalid).toEqual(['reflowHorizontal']);
+  });
+
   test('saving writes one string, as every host can keep', async () => {
     const stored = new Map<string, unknown>();
     const { saveSettings } = await load(stored);

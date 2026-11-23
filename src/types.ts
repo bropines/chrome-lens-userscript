@@ -114,6 +114,8 @@ export const Alignment = {
 export type Alignment = (typeof Alignment)[keyof typeof Alignment];
 
 export type VerticalTextMode = 'auto' | 'keep' | 'horizontal';
+/** Whether a horizontal paragraph is laid out again: never, when it is a bubble that needs it, always. */
+export type ReflowMode = 'off' | 'auto' | 'on';
 export type HotkeyModifier = 'alt' | 'ctrl' | 'shift' | 'none';
 export type ButtonMode = 'auto' | 'hover' | 'pinned';
 export type PeekKey = 'off' | 'backquote' | 'shift' | 'control';
@@ -228,8 +230,24 @@ export interface RenderOptions {
    *
    * A vertical column is re-wrapped regardless: horizontal text cannot occupy
    * a tall narrow box at all.
+   *
+   * 'auto' re-wraps only a paragraph that is a bubble's column - several short
+   * lines stacked on one axis - and only when its translation cannot be set
+   * line by line at a readable size. Everything else is left as Chromium has
+   * it. This was a switch once; the renderer still takes `true` and `false`
+   * for 'on' and 'off', from a caller that has not caught up.
    */
-  reflowHorizontal: boolean;
+  reflowHorizontal: ReflowMode;
+  /**
+   * Wrap re-set text to the bubble's own outline, read from the picture.
+   *
+   * A bubble is round and a paragraph box is not: a rectangle that stays
+   * inside the bubble wastes its middle, and one that uses the middle crosses
+   * the outline at the corners. Off, re-wrapped text gets the rectangle - for
+   * a page whose bubbles are textured or open, where the outline is misread,
+   * and for anyone who wants the same layout whatever is in the picture.
+   */
+  bubbleShape: boolean;
   /**
    * Let the readable-size floor give way rather than the layout.
    *

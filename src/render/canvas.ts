@@ -20,6 +20,16 @@ import {
   wrapsPerCharacter,
 } from './layout.js';
 import type { Rect } from './layout.js';
+import {
+  bubbleMask,
+  crowdsAtFloor,
+  ellipseShape,
+  fitShaped,
+  isBubbleColumn,
+  maskShape,
+  reflowMode,
+} from './bubble.js';
+import type { Mask, Shape } from './bubble.js';
 import { boxCorners, convexHull, fillHull } from './hull.js';
 import type { Point } from './hull.js';
 import type { RenderOptions, TranslatedLine, TranslationBlock } from '../types.js';
@@ -288,6 +298,197 @@ function drawReflowedParagraph(
 }
 
 /**
+ * How far past the paragraph the bubble is looked for, in multiples of the
+ * paragraph's longer side, on each side. The bubbles this was measured on
+ * reach 0.75 of it past the box; double that, because a window that is too
+ * small reads a whole bubble as a leak and costs it its shape.
+ */
+const WINDOW_PAD = 1.5;
+/**
+ * The most pixels a bubble is read at. A window larger than this is scaled
+ * down first, which is what keeps the cost to a few milliseconds whatever the
+ * scan's resolution; an outline two pixels wide survives a threefold
+ * reduction as a line the fill still cannot cross.
+ */
+const MASK_PIXELS = 120_000;
+/** A "bubble" over half the picture is the page, not a bubble. */
+const MAX_COVER = 0.5;
+/** A mask is axis-aligned, so it is only trusted for text that is too. Degrees. */
+const UPRIGHT = 1;
+/**
+ * Re-set text may be this many times the source's line height and no more.
+ * The bubble is often far larger than what was said in it, and two words blown
+ * up to fill one read as shouting the source never did.
+ */
+const MAX_UPSCALE = 1.6;
+
+export interface BubbleArea {
+  mask: Mask;
+  /** Canvas position of the mask's first column and row, and the size of one cell. */
+  x: number;
+  y: number;
+  scaleX: number;
+  scaleY: number;
+}
+
+/**
+ * Find the bubble a paragraph stands in, from the picture's own pixels.
+ *
+ * Rectangles are in canvas pixels; the picture is read from `source` at its
+ * natural size or below, never from the canvas, because by the time the third
+ * paragraph is drawn the canvas has two translations on it.
+ *
+ * The window is the paragraph's box padded on every side, cut back by whatever
+ * `roomFor` says is in the way: the picture's edge, and a neighbour sharing
+ * the band - which is how two paragraphs in one bubble each get their own half
+ * of it. An edge the padding put there is "open", and a fill that reaches one
+ * was not inside anything.
+ */
+export function findBubble(
+  source: CanvasImageSource,
+  canvasScale: number,
+  width: number,
+  height: number,
+  own: Rect,
+  lines: Rect[],
+  others: Rect[]
+): BubbleArea | null {
+  const pad = Math.max(own.right - own.left, own.bottom - own.top) * WINDOW_PAD;
+  if (!(pad > 0)) return null;
+  const room = roomFor(own, others, 1e6, width, height);
+  const open = {
+    left: own.left - pad > room.left,
+    top: own.top - pad > room.top,
+    right: own.right + pad < room.right,
+    bottom: own.bottom + pad < room.bottom,
+  };
+  // In the source's pixels, whole ones.
+  const sx = Math.floor(Math.max(room.left, own.left - pad) / canvasScale);
+  const sy = Math.floor(Math.max(room.top, own.top - pad) / canvasScale);
+  const sw = Math.ceil(Math.min(room.right, own.right + pad) / canvasScale) - sx;
+  const sh = Math.ceil(Math.min(room.bottom, own.bottom + pad) / canvasScale) - sy;
+  if (sw < 2 || sh < 2) return null;
+
+  const shrink = Math.min(1, Math.sqrt(MASK_PIXELS / (sw * sh)));
+  const gw = Math.max(1, Math.round(sw * shrink));
+  const gh = Math.max(1, Math.round(sh * shrink));
+  const scaleX = (sw / gw) * canvasScale;
+  const scaleY = (sh / gh) * canvasScale;
+  const x = sx * canvasScale;
+  const y = sy * canvasScale;
+
+  let pixels: ImageData;
+  try {
+    const scratch = document.createElement('canvas');
+    scratch.width = gw;
+    scratch.height = gh;
+    const ctx = scratch.getContext('2d', { willReadFrequently: true });
+    if (!ctx) return null;
+    // Transparent reads back as black, and black is the one colour an outline is.
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, gw, gh);
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(source, sx, sy, sw, sh, 0, 0, gw, gh);
+    pixels = ctx.getImageData(0, 0, gw, gh);
+  } catch {
+    // A source that cannot be read back is one whose shape is not known.
+    return null;
+  }
+
+  const toGrid = (rect: Rect, grow = 0): Rect => ({
+    left: (rect.left - grow - x) / scaleX,
+    right: (rect.right + grow - x) / scaleX,
+    top: (rect.top - grow - y) / scaleY,
+    bottom: (rect.bottom + grow - y) / scaleY,
+  });
+  const mask = bubbleMask(
+    pixels,
+    lines.map((line) => toGrid(line)),
+    // The same daylight roomFor keeps between two paragraphs.
+    others.map((other) => toGrid(other, 2)),
+    open,
+    (MAX_COVER * width * height) / (scaleX * scaleY)
+  );
+  return mask ? { mask, x, y, scaleX, scaleY } : null;
+}
+
+/**
+ * Set a paragraph inside a shape: each line as wide as the shape is there.
+ *
+ * False when nothing was drawn, and the rectangle is used instead: the text
+ * does not fit at any size, or it fits only below the readable-size floor and
+ * the floor has been told not to yield.
+ */
+function drawShapedParagraph(
+  draw: DrawContext,
+  block: TranslationBlock,
+  settings: RenderOptions,
+  shape: Shape,
+  frame: { x: number; y: number; angle: number }
+): boolean {
+  const style = block.lines[0];
+  const text = block.translation.trim();
+  if (!style || !text) return false;
+
+  const { ctx, fontFamily, fontWeight } = draw;
+  const spacing = settings.lineSpacing > 0 ? settings.lineSpacing : 1.25;
+  const measure = (candidate: string): number => ctx.measureText(candidate).width;
+  const setFont = (px: number): void => {
+    ctx.font = fontOf(px, fontFamily, fontWeight);
+  };
+
+  // A line box's short side is the height of the lettering, whichever way the
+  // source ran.
+  const heights = block.lines
+    .flatMap((line) =>
+      line.geometry ? [Math.min(line.geometry.w * draw.width, line.geometry.h * draw.height)] : []
+    )
+    .sort((a, b) => a - b);
+  const sourceSize = heights[heights.length >> 1] ?? 0;
+  const ceiling =
+    sourceSize > 0
+      ? Math.min(draw.maxFontPx, Math.max(sourceSize * MAX_UPSCALE, draw.minFontPx))
+      : draw.maxFontPx;
+
+  ctx.save();
+  ctx.translate(frame.x, frame.y);
+  ctx.rotate(frame.angle * DEG);
+  ctx.direction = isRtl(block) ? 'rtl' : 'ltr';
+
+  const fit = fitShaped(setFont, measure, text, shape, spacing, wrapsPerCharacter(block), ceiling);
+  // Below the floor, the floor gives way rather than the shape - the same
+  // choice fitToBox makes for a rectangle, and for the same reason: text that
+  // shrinks is readable, text across the outline is not.
+  if (!fit || (fit.size < draw.minFontPx && !settings.fitToBox)) {
+    ctx.restore();
+    return false;
+  }
+
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+  const fill = settings.textColor || argbToCss(style.textColor);
+  const outline = Math.max(0, Math.round(fit.size * OUTLINE_RATIO * 2 * settings.outlineScale));
+  const outlineColor = settings.outlineColor || argbToCss(style.bgColor);
+
+  for (const line of fit.lines) {
+    const advance = measure(line.text);
+    // A bubble is centred whatever the source's alignment says; only someone
+    // who asked for a side gets one.
+    const x =
+      settings.textAlign === 'left'
+        ? line.left
+        : settings.textAlign === 'right'
+          ? line.right - advance
+          : (line.left + line.right - advance) / 2;
+    strokeThenFill(ctx, line.text, x, line.y, outline, outlineColor);
+    ctx.fillStyle = fill;
+    ctx.fillText(line.text, x, line.y);
+  }
+  ctx.restore();
+  return true;
+}
+
+/**
  * Cover the whole area the source text occupied, in one shape.
  *
  * Preferred over per-line patches when the inpainting's leftovers matter more
@@ -535,6 +736,7 @@ export async function renderToBlob(
     block.geometry ? rectOf(block.geometry, width, height) : null
   );
   const growth = settings.mangaMode ? Math.max(1, settings.mangaBoxGrowth) : 1;
+  const mode = reflowMode(settings.reflowHorizontal);
 
   for (const [index, block] of blocks.entries()) {
     const vertical = block.writingDirection === 2;
@@ -550,8 +752,36 @@ export async function renderToBlob(
     // in it at all. A horizontal paragraph does not have to be, and Chromium
     // never is - but keeping the server's lines is also what leaves the spacing
     // between them out of anyone's hands, so it is a setting.
-    const reflow =
-      Boolean(block.geometry) && !stayVertical && (vertical || settings.reflowHorizontal);
+    let reflow = Boolean(block.geometry) && !stayVertical && (vertical || mode === 'on');
+    // Manga mode says the page is bubbles; otherwise the paragraph has to.
+    let bubble = settings.mangaMode;
+    const own = boxes[index];
+    const lineRects = block.lines.flatMap((line) =>
+      line.geometry ? [rectOf(line.geometry, width, height)] : []
+    );
+    // A column of short centred lines whose translation only reaches a
+    // readable size by leaving its boxes is a bubble being read as a list.
+    // Two-line bubbles are common and so are two-line captions; only manga
+    // mode knows which this page has.
+    if (!reflow && !vertical && mode === 'auto' && own) {
+      if (isBubbleColumn(lineRects, own, settings.mangaMode ? 2 : undefined)) {
+        const fitted = block.lines.flatMap((line, i) => {
+          const text = buildLineText(block.translation, line, block.lines[i + 1]);
+          if (!line.geometry || !text.trim()) return [];
+          return [
+            fitFontSize(
+              text,
+              line.geometry.w * width,
+              line.geometry.h * height,
+              fontFamily,
+              draw.maxFontPx,
+              settings.fontWeight
+            ),
+          ];
+        });
+        reflow = bubble = crowdsAtFloor(fitted, draw.minFontPx);
+      }
+    }
 
     for (let i = 0; i < block.lines.length; i += 1) {
       const line = block.lines[i];
@@ -562,10 +792,45 @@ export async function renderToBlob(
         if (!hull) await drawLine(draw, block, line, block.lines[i + 1], settings, true);
       } else await drawLine(draw, block, line, block.lines[i + 1], settings, false, hull);
     }
-    if (reflow) {
-      const own = boxes[index];
-      if (own) {
-        const others = boxes.filter((rect, at): rect is Rect => rect !== null && at !== index);
+    if (reflow && own && block.geometry) {
+      const others = boxes.filter((rect, at): rect is Rect => rect !== null && at !== index);
+      let shaped = false;
+      if (settings.bubbleShape) {
+        const angle = block.geometry.angle;
+        const found =
+          Math.abs(angle) <= UPRIGHT
+            ? findBubble(source, scale, width, height, own, lineRects, others)
+            : null;
+        if (found) {
+          const shape = maskShape(found.mask, found.x, found.y, found.scaleX, found.scaleY);
+          shaped = drawShapedParagraph(draw, block, settings, shape, { x: 0, y: 0, angle: 0 });
+        } else if (bubble) {
+          // No outline to be found, but a bubble all the same. The smallest
+          // ellipse that still contains a box is the box grown by the square
+          // root of two, so that much room is the least a bubble round this
+          // text can have - and the neighbours still cap it.
+          const room = roomFor(own, others, Math.max(growth, Math.SQRT2), width, height);
+          const box = fitInside(
+            {
+              cx: (room.left + room.right) / 2,
+              cy: (room.top + room.bottom) / 2,
+              w: room.right - room.left,
+              h: room.bottom - room.top,
+              angle,
+            },
+            width,
+            height
+          );
+          shaped = drawShapedParagraph(
+            draw,
+            block,
+            settings,
+            ellipseShape(0, 0, box.w / 2, box.h / 2),
+            { x: box.cx, y: box.cy, angle }
+          );
+        }
+      }
+      if (!shaped) {
         drawReflowedParagraph(draw, block, settings, roomFor(own, others, growth, width, height));
       }
     }
