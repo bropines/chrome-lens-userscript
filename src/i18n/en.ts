@@ -179,6 +179,9 @@ export const EN = {
   'chord.clear': 'Clear',
   'color.auto': 'From the picture',
   'color.pick': 'Choose a colour',
+  'preview.title': 'Preview',
+  'preview.note':
+    'A sample picture, drawn with the values in this form. It follows them as they change; nothing is kept until you save.',
   'lang.auto': 'Auto (browser language)',
   'lang.detect': 'Detect automatically',
   'lang.followTarget': 'Follow the target',

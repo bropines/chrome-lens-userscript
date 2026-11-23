@@ -147,6 +147,8 @@
   "chord.clear": "지우기",
   "color.auto": "그림에서 가져오기",
   "color.pick": "색상 선택",
+  "preview.title": "미리보기",
+  "preview.note": "이 양식의 값으로 그린 예시 그림입니다. 값을 바꾸면 바로 반영되며, 저장하기 전에는 아무것도 유지되지 않습니다.",
   "lang.auto": "자동 (브라우저 언어)",
   "lang.detect": "자동 감지",
   "lang.followTarget": "번역 대상 언어에 맞춤",

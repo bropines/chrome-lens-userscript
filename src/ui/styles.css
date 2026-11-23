@@ -891,6 +891,120 @@
   margin-top: 6px;
 }
 
+/* The sample translation on the Appearance tab (ui/preview.ts). Stuck to the
+   top of the scrolling body so it is in view from whichever field is being
+   changed, and opaque whatever the popup opacity is: fields scroll under it. */
+.lt-live {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  margin: 2px 0 6px;
+  background: var(--background);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  /* The body's own padding is above it, and fields would show in that strip. */
+  box-shadow: 0 -6px 0 var(--background);
+}
+.lt-live[hidden] {
+  display: none;
+}
+.lt-live-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 0 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted-foreground);
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+.lt-live-head::-webkit-details-marker {
+  display: none;
+}
+.lt-live-head:hover {
+  color: var(--foreground);
+}
+.lt-live-chevron {
+  display: flex;
+  transition: transform 0.15s ease;
+}
+.lt-live:not([open]) .lt-live-chevron {
+  transform: rotate(-90deg);
+}
+.lt-live-body {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 0 10px 10px;
+}
+/* Sized here and not by its bitmap, which changes with the render sharpness.
+   The height gives way as the window does - a phone with its keyboard up has
+   a body a few fields tall, and the sample may not be most of it. 210px is
+   roughly what the header, the tabs and the footer take. */
+.lt-live-canvas {
+  flex: none;
+  display: block;
+  height: clamp(56px, calc((var(--lt-svh) * 100 - var(--lt-kb) - 210px) * 0.3), 176px);
+  width: auto;
+  max-width: 100%;
+  aspect-ratio: 20 / 11;
+  border-radius: calc(var(--radius) - 2px);
+  border: 1px solid var(--border);
+}
+.lt-live-note {
+  min-width: 0;
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+
+/* A choice that is about where something goes, with a picture of the chosen
+   value (ui/schematics.ts). Tones are classes so the theme colours them. */
+.lt-pick {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.lt-pick .lt-input {
+  flex: 1;
+}
+.lt-sch {
+  flex: none;
+  width: 54px;
+  height: 36px;
+  color: var(--foreground);
+  background: var(--background);
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) - 2px);
+  fill: none;
+  stroke: none;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.lt-sch-dim {
+  stroke: var(--muted-foreground);
+  stroke-width: 1.25;
+}
+.lt-sch-ink {
+  stroke: currentColor;
+}
+.lt-sch-solid {
+  fill: currentColor;
+}
+.lt-sch-soft {
+  fill: var(--input);
+  stroke: var(--input);
+}
+.lt-sch text {
+  font: 600 11px system-ui, -apple-system, 'Segoe UI', sans-serif;
+  text-anchor: middle;
+}
+
 /* Section headings. */
 .lt-group {
   margin: 18px 0 4px;
@@ -1155,6 +1269,23 @@
     width: 44px;
     height: 44px;
   }
+  .lt-sch {
+    width: 66px;
+    height: 44px;
+  }
+  /* The title says what it is; the sentence would cost the picture its room. */
+  .lt-live-head {
+    min-height: 40px;
+  }
+  .lt-live-body {
+    justify-content: center;
+  }
+  .lt-live-note {
+    display: none;
+  }
+  .lt-live-canvas {
+    height: clamp(48px, calc((var(--lt-svh) * 100 - var(--lt-kb) - 210px) * 0.3), 132px);
+  }
   .lt-order-item {
     min-height: 52px;
   }
@@ -1189,6 +1320,7 @@
 
 @media (prefers-reduced-motion: reduce) {
   .lt-ctl,
+  .lt-live-chevron,
   #lt-toast,
   .lt-dot::after,
   .lt-objbox {

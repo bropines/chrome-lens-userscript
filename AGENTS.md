@@ -88,6 +88,10 @@ src/
                         buttons.ts and shortcuts.ts are the row and the key
                         chords as plain data
     geometry.ts         pure: object-fit rect, drag -> region, keyboard inset
+    sample.ts           the picture the settings preview translates, as data:
+                        its boxes, a hand-written Lens answer, what redraws it
+    preview.ts          paints that picture and runs the real renderer over it
+    schematics.ts       small pictures for spatial choices, as lists of shapes
     tools.ts            the layer over a picture: area, objects, words
     icons.ts            stroke icons as path data
 ```
@@ -278,6 +282,26 @@ One function decides what a setting may hold: `sanitize` in settings.ts. The
 form goes through it (`coerce`) and so does an imported file, so the two cannot
 disagree about a range. Import, reset and "reset all" write into the *form*;
 only Save writes the store.
+
+The Appearance tab carries a sample translation (`ui/preview.ts`): a scene
+painted in code, an answer for it written by hand (`ui/sample.ts`) and the real
+`renderToBlob` in between, redrawn from the form's values a moment after any
+edit. Three things about it:
+
+- **It is one node for the life of the window**, put back into its pane each
+  time `fill` rebuilds the form. Rebuilt with the rest, every reset blanked the
+  picture and waited for the next one.
+- **It is drawn for the sample's own width, not the width it is shown at.** The
+  readable-size floor is in displayed pixels, and at a thumbnail's 240 of them
+  the floor nearly doubles every size and is all the sample shows. The sample
+  stands for a picture at its natural size.
+- **Its patches keep a faint copy of the source lettering**, as the server's
+  inpainting does. With clean ones the outline and the hull would have nothing
+  to do and look like settings that change nothing.
+
+A select about where something goes (`buttonCorner`, `eraseMode`, ...) has a
+small picture of the chosen value beside it, from `ui/schematics.ts` - shapes
+as data, drawn with `createElementNS`, coloured by class so the theme applies.
 
 The control row is rebuilt from settings (`buildControls` in main.ts), so
 nothing may hold a reference to a control across a save: listeners are attached
@@ -980,7 +1004,8 @@ partly ported from `chrome-lens-py/tests/test_units.py` - and the rotated
 punctuation set is compared with the Python one when the sibling checkout is
 there), background geometry, the IndexedDB store, `gm.ts`, the per-site rules,
 the settings schema and import (`test/settings.test.ts`), the button list and
-key chords (`test/controls.test.ts`) and the locales (`test/i18n.test.ts`).
+key chords (`test/controls.test.ts`), the settings preview's sample answer and
+the schematics (`test/preview.test.ts`) and the locales (`test/i18n.test.ts`).
 
 - `test/setup.ts` stands in for the page with a ruler anyone can do in their
   head (a Latin glyph is half an em, a CJK one a full em, the font box one em

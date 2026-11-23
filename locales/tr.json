@@ -147,6 +147,8 @@
   "chord.clear": "Temizle",
   "color.auto": "Resimden al",
   "color.pick": "Renk seç",
+  "preview.title": "Önizleme",
+  "preview.note": "Bu formdaki değerlerle çizilmiş örnek bir resim. Değerler değiştikçe o da değişir; kaydedene kadar hiçbir şey saklanmaz.",
   "lang.auto": "Otomatik (tarayıcı dili)",
   "lang.detect": "Otomatik algıla",
   "lang.followTarget": "Hedef dili izle",

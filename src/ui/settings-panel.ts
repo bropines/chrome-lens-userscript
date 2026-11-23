@@ -27,7 +27,9 @@ import type { ButtonEntry, ButtonId } from './buttons.js';
 import { icon } from './icons.js';
 import type { IconName } from './icons.js';
 import { isCompact } from './menu.js';
+import { createPreview } from './preview.js';
 import { applyPopupOpacity, uiRoot } from './root.js';
+import { SCHEMATIC_H, SCHEMATIC_W, hasSchematic, schematic } from './schematics.js';
 import { chordFromEvent, formatChord, serializeChord } from './shortcuts.js';
 
 /** What the window needs from the front end that opened it. */
@@ -159,6 +161,56 @@ function button(className: string, text: string, act?: string): HTMLButtonElemen
 const changed = (input: HTMLElement): void => {
   input.dispatchEvent(new Event('input', { bubbles: true }));
 };
+
+const SVG = 'http://www.w3.org/2000/svg';
+
+/**
+ * Draw one of the small pictures from ./schematics.ts into an <svg>.
+ *
+ * Built node by node: the shapes are data, and markup assembled from data is
+ * the habit that ends with somebody's string in `innerHTML`. A tone becomes a
+ * class, and the stylesheet gives the class the theme's colour.
+ */
+function drawSchematic(svg: SVGSVGElement, key: keyof Settings, value: string): void {
+  svg.textContent = '';
+  for (const shape of schematic(key, value)) {
+    const node = document.createElementNS(SVG, shape.kind);
+    node.setAttribute('class', `lt-sch-${shape.tone}`);
+    const set = (attributes: Record<string, number>): void => {
+      for (const [name, number] of Object.entries(attributes)) node.setAttribute(name, String(number));
+    };
+    if (shape.kind === 'rect') {
+      set({ x: shape.x, y: shape.y, width: shape.w, height: shape.h, rx: shape.r });
+    } else if (shape.kind === 'line') {
+      set({ x1: shape.x1, y1: shape.y1, x2: shape.x2, y2: shape.y2 });
+    } else if (shape.kind === 'ellipse') {
+      set({ cx: shape.cx, cy: shape.cy, rx: shape.rx, ry: shape.ry });
+    } else if (shape.kind === 'polygon') {
+      node.setAttribute('points', shape.points.map(([x, y]) => `${x},${y}`).join(' '));
+    } else {
+      set({ x: shape.x, y: shape.y });
+      node.textContent = shape.text;
+    }
+    svg.appendChild(node);
+  }
+}
+
+/** A select with a picture of the chosen value beside it. */
+function withSchematic(field: Field, select: HTMLSelectElement): HTMLElement {
+  const svg = document.createElementNS(SVG, 'svg');
+  svg.setAttribute('class', 'lt-sch');
+  svg.setAttribute('viewBox', `0 0 ${SCHEMATIC_W} ${SCHEMATIC_H}`);
+  // The option's own words say the same thing to a screen reader.
+  svg.setAttribute('aria-hidden', 'true');
+  const refresh = (): void => drawSchematic(svg, field.key, select.value);
+  select.addEventListener('input', refresh);
+  select.addEventListener('change', refresh);
+  refresh();
+
+  const holder = el('span', 'lt-pick');
+  holder.append(svg, select);
+  return holder;
+}
 
 function readout(field: Field, value: number): string {
   if (field.unit === '%') return `${Math.round(value * 100)}%`;
@@ -446,7 +498,7 @@ function buildField(field: Field, settings: Settings): HTMLElement {
     }
     select.value = String(settings[field.key]);
     select.dataset['key'] = field.key;
-    row.appendChild(select);
+    row.appendChild(hasSchematic(field.key) ? withSchematic(field, select) : select);
   } else {
     const control = el('input', 'lt-input');
     control.type = field.type;
@@ -602,6 +654,14 @@ export function openSettings(context: SettingsContext, restore?: Restore): void 
   const current = (): Settings => ({ ...draft, ...collect(backdrop, baseline) });
   const isDirty = (): boolean => settingsDiffer(current(), getSettings());
 
+  /**
+   * The sample translation on the Appearance tab. One for the life of the
+   * window, put back into the pane each time `fill` rebuilds it, so a reset
+   * does not blank the picture and wait for it to come back.
+   */
+  const preview = createPreview();
+  const refreshPreview = (delay?: number): void => preview.schedule(current, delay);
+
   const setGuard = (on: boolean): void => {
     guard.hidden = !on;
     discard.hidden = !on;
@@ -661,6 +721,8 @@ export function openSettings(context: SettingsContext, restore?: Restore): void 
     search.value = '';
     applyFilter();
     body.scrollTop = 0;
+    // Drawn when it is first looked at, not before; see ./preview.ts.
+    refreshPreview(0);
     tabs
       .querySelector<HTMLElement>(`[data-tab="${tab}"]`)
       ?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
@@ -863,6 +925,8 @@ export function openSettings(context: SettingsContext, restore?: Restore): void 
         paneHead.appendChild(tabReset);
       }
       pane.appendChild(paneHead);
+      // Above the fields and stuck there, so it is in view from any of them.
+      if (pro && tab === 'appearance') pane.appendChild(preview.element);
 
       if (fields.length) {
         const grid = el('div', 'lt-grid');
@@ -888,6 +952,7 @@ export function openSettings(context: SettingsContext, restore?: Restore): void 
     applyFilter();
     markChanged();
     body.scrollTop = scroll;
+    refreshPreview(0);
   }
   fill(draft);
 
@@ -915,6 +980,8 @@ export function openSettings(context: SettingsContext, restore?: Restore): void 
     markChanged();
     const target = event.target as HTMLElement;
     if (target === search) applyFilter();
+    // Every edit asks; the preview itself knows which ones change the drawing.
+    refreshPreview();
   });
   backdrop.addEventListener('change', (event) => {
     markChanged();
@@ -926,6 +993,7 @@ export function openSettings(context: SettingsContext, restore?: Restore): void 
     // moment (from the host's store, or GitHub the first time) and the window
     // redraws itself where it stands; Cancel puts the stored one back.
     if (key === 'language') useLanguage(current().language);
+    refreshPreview();
   });
 
   backdrop.addEventListener('click', (event) => {
@@ -999,6 +1067,7 @@ export function openSettings(context: SettingsContext, restore?: Restore): void 
   stopListening = (): void => {
     document.removeEventListener('keydown', onKey, true);
     unsubscribe();
+    preview.dispose();
   };
 
   uiRoot().appendChild(backdrop);

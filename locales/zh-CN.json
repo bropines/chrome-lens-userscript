@@ -147,6 +147,8 @@
   "chord.clear": "清除",
   "color.auto": "取自图片",
   "color.pick": "选择颜色",
+  "preview.title": "预览",
+  "preview.note": "用此表单中的值绘制的示例图片。它会随设置的更改而变化；保存之前不会保留任何内容。",
   "lang.auto": "自动（浏览器语言）",
   "lang.detect": "自动检测",
   "lang.followTarget": "跟随目标语言",

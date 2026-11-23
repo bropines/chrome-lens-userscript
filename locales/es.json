@@ -147,6 +147,8 @@
   "chord.clear": "Borrar",
   "color.auto": "Según la imagen",
   "color.pick": "Elegir un color",
+  "preview.title": "Vista previa",
+  "preview.note": "Una imagen de ejemplo, dibujada con los valores de este formulario. Cambia con ellos; nada se guarda hasta que pulses Guardar.",
   "lang.auto": "Automático (idioma del navegador)",
   "lang.detect": "Detectar automáticamente",
   "lang.followTarget": "Según el idioma de destino",

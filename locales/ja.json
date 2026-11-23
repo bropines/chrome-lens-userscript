@@ -147,6 +147,8 @@
   "chord.clear": "クリア",
   "color.auto": "画像から取得",
   "color.pick": "色を選択",
+  "preview.title": "プレビュー",
+  "preview.note": "このフォームの値で描いたサンプル画像です。値を変えるとすぐに反映されますが、保存するまで設定は変わりません。",
   "lang.auto": "自動（ブラウザーの言語）",
   "lang.detect": "自動検出",
   "lang.followTarget": "翻訳先に合わせる",

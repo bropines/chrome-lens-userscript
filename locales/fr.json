@@ -147,6 +147,8 @@
   "chord.clear": "Effacer",
   "color.auto": "D'après l'image",
   "color.pick": "Choisir une couleur",
+  "preview.title": "Aperçu",
+  "preview.note": "Une image d’exemple, dessinée avec les valeurs de ce formulaire. Elle suit chaque changement ; rien n’est conservé avant l’enregistrement.",
   "lang.auto": "Auto (langue du navigateur)",
   "lang.detect": "Détecter automatiquement",
   "lang.followTarget": "Suivre la langue cible",

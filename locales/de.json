@@ -147,6 +147,8 @@
   "chord.clear": "Löschen",
   "color.auto": "Aus dem Bild",
   "color.pick": "Farbe wählen",
+  "preview.title": "Vorschau",
+  "preview.note": "Ein Beispielbild, gezeichnet mit den Werten in diesem Formular. Es folgt jeder Änderung; gespeichert wird erst mit „Speichern“.",
   "lang.auto": "Auto (Browsersprache)",
   "lang.detect": "Automatisch erkennen",
   "lang.followTarget": "Wie die Zielsprache",
