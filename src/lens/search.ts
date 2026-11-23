@@ -230,6 +230,12 @@ export class ImageSearch {
   private uuid = randomUuid();
   private contextId = randomUuid();
   private sequence = 0;
+  /**
+   * Every request goes through this chain, one at a time. The sequence numbers
+   * are a counter, and two searches interleaving their requests would number
+   * them 2,3,4,5 in the wrong order - or, on an expired session, both reopen it.
+   */
+  private queue: Promise<unknown> = Promise.resolve();
 
   private constructor(
     private readonly image: Pick<PreparedImage, 'imageBytes' | 'width' | 'height'>,
@@ -250,8 +256,8 @@ export class ImageSearch {
     return Boolean(this.ids) && Date.now() - (this.ids?.openedAt ?? 0) < SESSION_LIFETIME_MS - SESSION_MARGIN_MS;
   }
 
-  private endpoint(): string {
-    return `${LENS_ENDPOINT}?gsessionid=${encodeURIComponent(this.ids?.serverSessionId ?? '')}`;
+  private static endpoint(ids: SessionIds): string {
+    return `${LENS_ENDPOINT}?gsessionid=${encodeURIComponent(ids.serverSessionId)}`;
   }
 
   private nextId(analyticsId: Bytes): RequestId {
@@ -265,13 +271,19 @@ export class ImageSearch {
     };
   }
 
+  /**
+   * Open a session and upload the picture into it.
+   *
+   * Nothing is kept until the upload has succeeded: a session whose upload
+   * failed has no picture in it, and searching it would mint URLs that show
+   * nothing.
+   */
   private async start(): Promise<void> {
-    this.ids = await openSession(this.settings);
-    this.uuid = randomUuid();
-    this.contextId = randomUuid();
-    this.sequence = 0;
-    const id = this.nextId(randomBytes(16));
-    const routing = this.ids.routingInfo;
+    const ids = await openSession(this.settings);
+    const uuid = randomUuid();
+    const contextId = randomUuid();
+    const id: RequestId = { uuid, sequenceId: 1, imageSequenceId: 1, analyticsId: randomBytes(16), contextId };
+    const routing = ids.routingInfo;
     const body = writer()
       .sub(F.LensOverlayServerRequest.objectsRequest, (objects) => {
         objects.sub(F.LensOverlayObjectsRequest.requestContext, (ctx) => {
@@ -284,13 +296,18 @@ export class ImageSearch {
       })
       .finish();
     const response = await getTransport().post({
-      url: this.endpoint(),
+      url: ImageSearch.endpoint(ids),
       headers: { 'Content-Type': 'application/x-protobuf', 'X-Goog-Api-Key': this.settings.apiKey },
       body,
       timeoutMs: this.settings.timeoutMs,
     });
-    this.result = parseResponse(response.bytes);
+    const result = parseResponse(response.bytes);
+    this.result = result;
     this.objects = parseObjects(response.bytes);
+    this.ids = ids;
+    this.uuid = uuid;
+    this.contextId = contextId;
+    this.sequence = 1;
   }
 
   /**
@@ -300,7 +317,13 @@ export class ImageSearch {
    * resolves `vsrid` against the interaction, so this waits for the answer:
    * opening the page first would race the request it names.
    */
-  async search(selection: Selection, options: SearchOptions = {}): Promise<string> {
+  search(selection: Selection, options: SearchOptions = {}): Promise<string> {
+    const run = this.queue.then(() => this.searchNow(selection, options));
+    this.queue = run.catch(() => undefined);
+    return run;
+  }
+
+  private async searchNow(selection: Selection, options: SearchOptions): Promise<string> {
     if (!this.fresh) await this.start();
     const ids = this.ids;
     if (!ids) throw new Error('Lens did not open a search session');
@@ -362,7 +385,7 @@ export class ImageSearch {
       .finish();
 
     const response = await getTransport().post({
-      url: this.endpoint(),
+      url: ImageSearch.endpoint(ids),
       headers: { 'Content-Type': 'application/x-protobuf', 'X-Goog-Api-Key': this.settings.apiKey },
       body,
       timeoutMs: this.settings.timeoutMs,

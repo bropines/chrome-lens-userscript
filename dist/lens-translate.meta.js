@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Lens Translate
 // @namespace    https://github.com/bropines/chrome-lens-userscript
-// @version      2.12.0
+// @version      2.13.0-beta.1
 // @author       bropines
 // @description  Hover any image, click the button, and its text is translated in place - rendered the way Chromium's own Lens overlay does it.
 // @license      MIT
@@ -16,11 +16,13 @@
 // @connect      lensfrontend-pa.googleapis.com
 // @connect      *
 // @grant        GM.getValue
+// @grant        GM.openInTab
 // @grant        GM.setClipboard
 // @grant        GM.setValue
 // @grant        GM.xmlHttpRequest
 // @grant        GM_getValue
 // @grant        GM_info
+// @grant        GM_openInTab
 // @grant        GM_registerMenuCommand
 // @grant        GM_setClipboard
 // @grant        GM_setValue

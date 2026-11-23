@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Lens Translate
 // @namespace    https://github.com/bropines/chrome-lens-userscript
-// @version      2.12.0
+// @version      2.13.0-beta.1
 // @author       bropines
 // @description  Hover any image, click the button, and its text is translated in place - rendered the way Chromium's own Lens overlay does it.
 // @license      MIT
@@ -16,11 +16,13 @@
 // @connect      lensfrontend-pa.googleapis.com
 // @connect      *
 // @grant        GM.getValue
+// @grant        GM.openInTab
 // @grant        GM.setClipboard
 // @grant        GM.setValue
 // @grant        GM.xmlHttpRequest
 // @grant        GM_getValue
 // @grant        GM_info
+// @grant        GM_openInTab
 // @grant        GM_registerMenuCommand
 // @grant        GM_setClipboard
 // @grant        GM_setValue
@@ -36,6 +38,7 @@
   var _GM = /* @__PURE__ */ (() => typeof GM != "undefined" ? GM : void 0)();
   var _GM_getValue = /* @__PURE__ */ (() => typeof GM_getValue != "undefined" ? GM_getValue : void 0)();
   var _GM_info = /* @__PURE__ */ (() => typeof GM_info != "undefined" ? GM_info : void 0)();
+  var _GM_openInTab = /* @__PURE__ */ (() => typeof GM_openInTab != "undefined" ? GM_openInTab : void 0)();
   var _GM_registerMenuCommand = /* @__PURE__ */ (() => typeof GM_registerMenuCommand != "undefined" ? GM_registerMenuCommand : void 0)();
   var _GM_setClipboard = /* @__PURE__ */ (() => typeof GM_setClipboard != "undefined" ? GM_setClipboard : void 0)();
   var _GM_setValue = /* @__PURE__ */ (() => typeof GM_setValue != "undefined" ? GM_setValue : void 0)();
@@ -112,12 +115,84 @@
       area.style.cssText = "position:fixed;top:0;left:0;opacity:0;pointer-events:none";
       document.body.appendChild(area);
       area.select();
-      const copied = document.execCommand("copy");
+      const copied2 = document.execCommand("copy");
       area.remove();
-      return copied;
+      return copied2;
     } catch {
       return false;
     }
+  }
+  function hostOpener() {
+    if (typeof _GM_openInTab === "function") return (url) => _GM_openInTab(url, false);
+    if (typeof _GM?.openInTab === "function") return (url) => _GM.openInTab(url, false);
+    return null;
+  }
+  function openWindow(url) {
+    try {
+      const tab = window.open(url, "_blank");
+      if (tab) {
+        try {
+          tab.opener = null;
+        } catch {
+        }
+      }
+      return tab ?? null;
+    } catch {
+      return null;
+    }
+  }
+  function navigate(tab, url) {
+    try {
+      const link = tab.document.createElement("a");
+      link.href = url;
+      link.rel = "noreferrer";
+      tab.document.body.appendChild(link);
+      link.click();
+    } catch {
+      tab.location.replace(url);
+    }
+  }
+  function prepareTab(preopen) {
+    const viaHost = hostOpener();
+    if (viaHost) {
+      return {
+        go(url) {
+          try {
+            const tab2 = viaHost(url);
+            return tab2 !== null && tab2 !== false && tab2?.closed !== true;
+          } catch {
+            return false;
+          }
+        },
+        cancel() {
+        }
+      };
+    }
+    const tab = preopen ? openWindow("about:blank") : null;
+    if (tab) {
+      try {
+        tab.document.title = "Lens";
+        tab.document.body.textContent = "Searching with Lens...";
+      } catch {
+      }
+    }
+    return {
+      go(url) {
+        if (!tab || tab.closed) return false;
+        try {
+          navigate(tab, url);
+          return true;
+        } catch {
+          return false;
+        }
+      },
+      cancel() {
+        try {
+          tab?.close();
+        } catch {
+        }
+      }
+    };
   }
   const commands = [];
   function registerCommand(command) {
@@ -129,7 +204,9 @@
   function panelCommands() {
     const out = [];
     for (const command of commands) {
-      if (command.label !== null) out.push({ label: command.label, run: command.run });
+      if (command.label !== null) {
+        out.push({ label: command.label, essential: command.essential === true, run: command.run });
+      }
     }
     return out;
   }
@@ -163,6 +240,10 @@
     const match = /^content-type:\s*(.+)$/im.exec(headers ?? "");
     return match?.[1]?.trim() ?? "";
   }
+  function locationOf(headers) {
+    const match = /^location:\s*(.+)$/im.exec(headers ?? "");
+    return match?.[1]?.trim() ?? "";
+  }
   function timedOut() {
     const error = new Error("Timed out");
     error.name = "TimeoutError";
@@ -174,17 +255,19 @@
         reject(new Error(`${hostName()} has no GM_xmlhttpRequest`));
         return;
       }
-      const deliver = (response) => {
+      const deliver2 = (response) => {
         void (async () => {
           const bytes2 = await toBytes(response.response, response.responseText);
           if (!bytes2) {
             reject(new Error(`${hostName()} returned a response this script cannot read`));
             return;
           }
+          const location2 = locationOf(response.responseHeaders);
           resolve2({
             status: response.status,
             bytes: bytes2,
-            contentType: contentTypeOf(response.responseHeaders)
+            contentType: contentTypeOf(response.responseHeaders),
+            ...location2 ? { location: location2 } : {}
           });
         })();
       };
@@ -198,10 +281,10 @@
         responseType: "arraybuffer",
         overrideMimeType: BINARY_MIME,
         timeout: attempt.timeoutMs,
-        onload: deliver,
+        onload: deliver2,
         onerror: (response) => {
           if (response.status > 0) {
-            deliver(response);
+            deliver2(response);
             return;
           }
           const detail = response.error || response.statusText || "network error";
@@ -268,9 +351,48 @@
     throw new Error(failures.join("; ") || "the request was never sent");
   }
   function postBinary(options) {
-    return climb({ ...options, method: "POST", encoding: "typed" }, true);
+    return climb({ ...options, method: "POST", encoding: "typed", withCookies: false }, true);
   }
-  function getBinary(url, timeoutMs, options = {}) {
+  const MAX_REDIRECTS = 5;
+  function isWebPage(response) {
+    if (/^image\//i.test(response.contentType)) return false;
+    if (/text\/html/i.test(response.contentType)) return true;
+    for (const byte of response.bytes) {
+      if (byte === 32 || byte === 9 || byte === 10 || byte === 13) continue;
+      return byte === 60;
+    }
+    return false;
+  }
+  async function getBinary(url, timeoutMs, options = {}) {
+    let current = url;
+    for (let hop = 0; hop <= MAX_REDIRECTS; hop += 1) {
+      const response = await getOnce(current, timeoutMs, options);
+      const redirected = response.status >= 300 && response.status < 400;
+      if ((redirected || isWebPage(response)) && response.location) {
+        current = new URL(response.location, current).href;
+        continue;
+      }
+      if (redirected || isWebPage(response)) {
+        try {
+          const page = await sendViaFetch({
+            method: "GET",
+            url: current,
+            headers: {},
+            body: null,
+            encoding: "typed",
+            timeoutMs
+          });
+          if (page.status < 400 && !isWebPage(page)) return page;
+        } catch {
+        }
+        throw new Error(`the image host answered with a web page, not a picture (HTTP ${response.status})`);
+      }
+      const { location: _location, ...plain } = response;
+      return plain;
+    }
+    throw new Error(`the image host redirected more than ${MAX_REDIRECTS} times`);
+  }
+  function getOnce(url, timeoutMs, options) {
     return climb(
       {
         method: "GET",
@@ -304,7 +426,8 @@
         has("xmlhttpRequest", request),
         has("getValue", _GM_getValue ?? _GM?.getValue),
         has("setValue", _GM_setValue ?? _GM?.setValue),
-        has("registerMenuCommand", _GM_registerMenuCommand)
+        has("registerMenuCommand", _GM_registerMenuCommand),
+        has("openInTab", _GM_openInTab ?? _GM?.openInTab)
       ].join(", ")
     ];
   }
@@ -699,9 +822,12 @@
     reflowHorizontal: false,
     fitToBox: true,
     lineSpacing: 1.25,
-    textAlign: "auto"
+    textAlign: "auto",
+    uiMode: "simple",
+    aiPrompt: "What is in this picture?"
   };
   const GROUPS = [
+    "Interface",
     "Languages",
     "Layout",
     "Erasing the original",
@@ -710,7 +836,25 @@
     "Advanced"
   ];
   const FIELDS = [
-    { key: "enabled", group: "Behaviour", label: "Translation enabled", type: "checkbox" },
+    {
+      key: "uiMode",
+      group: "Interface",
+      essential: true,
+      label: "Interface",
+      type: "select",
+      options: [
+        ["simple", "simple - translate, search, ask, copy"],
+        ["pro", "pro - areas, objects, text picking, every setting"]
+      ]
+    },
+    {
+      key: "aiPrompt",
+      group: "Interface",
+      label: "Default AI question",
+      type: "text",
+      hint: 'what the "Ask AI" field starts with; blank sends the picture alone'
+    },
+    { key: "enabled", group: "Behaviour", essential: true, label: "Translation enabled", type: "checkbox" },
     {
       key: "renderMode",
       group: "Behaviour",
@@ -721,10 +865,11 @@
         ["overlay", "overlay - crisp text, can drift on dynamic pages"]
       ]
     },
-    { key: "targetLang", group: "Languages", label: "Translate to", type: "select", options: languageOptions() },
+    { key: "targetLang", group: "Languages", essential: true, label: "Translate to", type: "select", options: languageOptions() },
     {
       key: "sourceLang",
       group: "Languages",
+      essential: true,
       label: "Translate from",
       type: "select",
       options: languageOptions("Detect automatically")
@@ -762,6 +907,7 @@
     {
       key: "mangaMode",
       group: "Layout",
+      essential: true,
       label: "Manga mode",
       type: "checkbox",
       hint: "always reflow vertical text, widen the layout area, bigger minimum size"
@@ -808,7 +954,7 @@
       hint: "thickens the outline behind translated text; 0 removes it"
     },
     { key: "fontFamily", group: "Layout", label: "Font family", type: "text", hint: "blank = the page font" },
-    { key: "showButton", group: "Behaviour", label: "Show the hover button", type: "checkbox" },
+    { key: "showButton", group: "Behaviour", label: "Show the button over images", type: "checkbox" },
     {
       key: "hotkey",
       group: "Behaviour",
@@ -895,6 +1041,7 @@
     {
       key: "buttonMode",
       group: "Behaviour",
+      essential: true,
       label: "When to show it",
       type: "select",
       options: [
@@ -956,6 +1103,7 @@
       const value = Number(raw);
       return value >= 1 && value <= 3 ? value : DEFAULTS.supersample;
     }
+    if (field.key === "uiMode") return raw === "pro" ? "pro" : "simple";
     if (field.type === "checkbox") return Boolean(raw);
     if (field.type === "number" || field.type === "range") {
       const value = Number(raw);
@@ -980,13 +1128,21 @@
       centerY: 2,
       width: 3,
       height: 4,
-      rotationZ: 5
+      rotationZ: 5,
+      coordinateType: 6
+    },
+    ClientImage: {
+      imageContent: 1
     },
     DeepGleamData: {
       translation: 10
     },
     Geometry: {
       boundingBox: 1
+    },
+    ImageCrop: {
+      image: 2,
+      zoomedCrop: 3
     },
     ImageData: {
       payload: 1,
@@ -1006,11 +1162,35 @@
       clientFilters: 17,
       renderingContext: 20
     },
+    LensOverlayInteractionRequest: {
+      requestContext: 1,
+      interactionRequestMetadata: 2,
+      imageCrop: 3
+    },
+    LensOverlayInteractionRequestMetadata: {
+      type: 1,
+      selectionMetadata: 2,
+      queryMetadata: 4
+    },
+    LensOverlayInteractionRequestMetadata_QueryMetadata: {
+      textQuery: 2
+    },
+    LensOverlayInteractionRequestMetadata_SelectionMetadata: {
+      region: 2,
+      object: 3
+    },
+    LensOverlayInteractionRequestMetadata_SelectionMetadata_Object: {
+      objectId: 1
+    },
+    LensOverlayInteractionRequestMetadata_SelectionMetadata_Region: {
+      region: 1
+    },
     LensOverlayObjectsRequest: {
       requestContext: 1,
       imageData: 3
     },
     LensOverlayObjectsResponse: {
+      overlayObjects: 2,
       text: 3,
       deepGleams: 4
     },
@@ -1021,13 +1201,30 @@
     LensOverlayRequestId: {
       uuid: 1,
       sequenceId: 2,
-      imageSequenceId: 3
+      imageSequenceId: 3,
+      analyticsId: 4,
+      longContextId: 9,
+      routingInfo: 6,
+      timeUsec: 7,
+      contextId: 12
+    },
+    LensOverlayServerClusterInfoRequest: {
+      enableSearchSessionId: 1,
+      surface: 2,
+      platform: 3,
+      renderingContext: 4
+    },
+    LensOverlayServerClusterInfoResponse: {
+      serverSessionId: 1,
+      searchSessionId: 2,
+      routingInfo: 3
     },
     LensOverlayServerError: {
       errorType: 1
     },
     LensOverlayServerRequest: {
-      objectsRequest: 1
+      objectsRequest: 1,
+      interactionRequest: 2
     },
     LensOverlayServerResponse: {
       error: 1,
@@ -1037,6 +1234,10 @@
       language: 1,
       region: 2,
       timeZone: 3
+    },
+    OverlayObject: {
+      id: 1,
+      geometry: 2
     },
     RenderingContext: {
       renderingEnvironment: 2
@@ -1067,6 +1268,9 @@
     TextLayout_Word_FormulaMetadata: {
       latex: 1
     },
+    TextQuery: {
+      query: 1
+    },
     TranslationData: {
       status: 1,
       targetLanguage: 2,
@@ -1096,6 +1300,12 @@
     TranslationData_TextStyle: {
       textColor: 1,
       backgroundPrimaryColor: 2
+    },
+    ZoomedCrop: {
+      crop: 1,
+      parentWidth: 2,
+      parentHeight: 3,
+      zoom: 4
     }
   };
   const Wire = {
@@ -1521,6 +1731,268 @@
     lines.push("", verdict(results2));
     return lines.join("\n");
   }
+  const CLUSTER_INFO_ENDPOINT = "https://lensfrontend-pa.googleapis.com/v1/gsessionid";
+  const RESULTS_URL = "https://www.google.com/search";
+  const SESSION_LIFETIME_MS = 1800 * 1e3;
+  const SESSION_MARGIN_MS = 60 * 1e3;
+  const COORDINATE_NORMALIZED = 1;
+  const INTERACTION_TAP = 1;
+  const INTERACTION_REGION_SEARCH = 4;
+  function randomBytes(n) {
+    const out = new Uint8Array(n);
+    crypto.getRandomValues(out);
+    return out;
+  }
+  function writeRequestId(w, id, routingInfo) {
+    w.int(F.LensOverlayRequestId.uuid, id.uuid).int(F.LensOverlayRequestId.sequenceId, id.sequenceId).int(F.LensOverlayRequestId.imageSequenceId, id.imageSequenceId).bytes(F.LensOverlayRequestId.analyticsId, id.analyticsId).int(F.LensOverlayRequestId.longContextId, 1).bytes(F.LensOverlayRequestId.routingInfo, routingInfo ?? void 0).int(F.LensOverlayRequestId.timeUsec, BigInt(Date.now()) * 1000n).int(F.LensOverlayRequestId.contextId, id.contextId);
+  }
+  function base64Url(data) {
+    let binary = "";
+    for (const byte of data) binary += String.fromCharCode(byte);
+    return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  }
+  async function post(url, body2, settings2) {
+    const response = await getTransport().post({
+      url,
+      headers: { "Content-Type": "application/x-protobuf", "X-Goog-Api-Key": settings2.apiKey },
+      body: body2,
+      timeoutMs: settings2.timeoutMs
+    });
+    return decode(response.bytes);
+  }
+  async function openSession(settings2) {
+    const body2 = writer().int(F.LensOverlayServerClusterInfoRequest.enableSearchSessionId, 1).int(F.LensOverlayServerClusterInfoRequest.surface, SURFACE_CHROMIUM).int(F.LensOverlayServerClusterInfoRequest.platform, PLATFORM_WEB).sub(
+      F.LensOverlayServerClusterInfoRequest.renderingContext,
+      (r) => r.int(F.RenderingContext.renderingEnvironment, RENDERING_ENV_LENS_OVERLAY)
+    ).finish();
+    const response = await post(CLUSTER_INFO_ENDPOINT, body2, settings2);
+    const ids = {
+      serverSessionId: text(response, F.LensOverlayServerClusterInfoResponse.serverSessionId),
+      searchSessionId: text(response, F.LensOverlayServerClusterInfoResponse.searchSessionId),
+      routingInfo: bytes(response, F.LensOverlayServerClusterInfoResponse.routingInfo),
+      openedAt: Date.now()
+    };
+    if (!ids.serverSessionId || !ids.searchSessionId) {
+      throw new Error("Lens did not open a search session");
+    }
+    return ids;
+  }
+  function parseObjects(raw) {
+    const objects = sub(decode(raw), F.LensOverlayServerResponse.objectsResponse);
+    return subs(objects, F.LensOverlayObjectsResponse.overlayObjects).map((object) => ({
+      id: text(object, F.OverlayObject.id),
+      geometry: parseGeometry(sub(object, F.OverlayObject.geometry))
+    })).filter((object) => object.id);
+  }
+  function writeBox(w, box) {
+    w.float(F.CenterRotatedBox.centerX, box.cx).float(F.CenterRotatedBox.centerY, box.cy).float(F.CenterRotatedBox.width, box.w).float(F.CenterRotatedBox.height, box.h).int(F.CenterRotatedBox.coordinateType, COORDINATE_NORMALIZED);
+  }
+  const WHOLE = { cx: 0.5, cy: 0.5, w: 1, h: 1 };
+  function clampBox(box) {
+    const x0 = Math.max(0, box.cx - box.w / 2);
+    const y0 = Math.max(0, box.cy - box.h / 2);
+    const x1 = Math.min(1, box.cx + box.w / 2);
+    const y1 = Math.min(1, box.cy + box.h / 2);
+    return { cx: (x0 + x1) / 2, cy: (y0 + y1) / 2, w: Math.max(0, x1 - x0), h: Math.max(0, y1 - y0) };
+  }
+  function buildSearchUrl(searchSessionId, vsrid, options = {}) {
+    const mode = options.mode ?? "visual";
+    const query = options.text?.trim() ?? "";
+    const multimodal = Boolean(query) || mode === "ai";
+    const udm = mode === "ai" ? "50" : multimodal ? "24" : "26";
+    const params = new URLSearchParams({
+      q: query,
+      lns_mode: multimodal ? "mu" : "un",
+      lns_fp: "1",
+      lns_surface: "42",
+      gsessionid: searchSessionId,
+      udm,
+      vsrid,
+      source: "chrome.cr.ctxi"
+    });
+    if (options.uiLanguage) params.set("hl", options.uiLanguage);
+    if (options.dark !== void 0) params.set("cs", options.dark ? "1" : "0");
+    return `${RESULTS_URL}?${params.toString()}`;
+  }
+  function textSearchUrl(words, options = {}) {
+    const params = new URLSearchParams({ q: words.trim(), lns_fp: "1", lns_mode: "text", lns_surface: "42" });
+    if (options.uiLanguage) params.set("hl", options.uiLanguage);
+    if (options.dark !== void 0) params.set("cs", options.dark ? "1" : "0");
+    return `${RESULTS_URL}?${params.toString()}`;
+  }
+  class ImageSearch {
+    constructor(image, settings2) {
+      this.image = image;
+      this.settings = settings2;
+    }
+    image;
+    settings;
+    /** The objects Lens detected, normalised to the picture. */
+    objects = [];
+    /** OCR from the same upload; a search asks for no translation. */
+    result = { contentLanguage: "", ocr: [], blocks: [] };
+    ids = null;
+    uuid = randomUuid();
+    contextId = randomUuid();
+    sequence = 0;
+    /**
+     * Every request goes through this chain, one at a time. The sequence numbers
+     * are a counter, and two searches interleaving their requests would number
+     * them 2,3,4,5 in the wrong order - or, on an expired session, both reopen it.
+     */
+    queue = Promise.resolve();
+    static async upload(image, settings2) {
+      const search = new ImageSearch(image, settings2);
+      await search.start();
+      return search;
+    }
+    /** Whether the session behind this upload is still good. */
+    get fresh() {
+      return Boolean(this.ids) && Date.now() - (this.ids?.openedAt ?? 0) < SESSION_LIFETIME_MS - SESSION_MARGIN_MS;
+    }
+    static endpoint(ids) {
+      return `${LENS_ENDPOINT}?gsessionid=${encodeURIComponent(ids.serverSessionId)}`;
+    }
+    nextId(analyticsId) {
+      this.sequence += 1;
+      return {
+        uuid: this.uuid,
+        sequenceId: this.sequence,
+        imageSequenceId: 1,
+        analyticsId,
+        contextId: this.contextId
+      };
+    }
+    /**
+     * Open a session and upload the picture into it.
+     *
+     * Nothing is kept until the upload has succeeded: a session whose upload
+     * failed has no picture in it, and searching it would mint URLs that show
+     * nothing.
+     */
+    async start() {
+      const ids = await openSession(this.settings);
+      const uuid = randomUuid();
+      const contextId = randomUuid();
+      const id = { uuid, sequenceId: 1, imageSequenceId: 1, analyticsId: randomBytes(16), contextId };
+      const routing = ids.routingInfo;
+      const body2 = writer().sub(F.LensOverlayServerRequest.objectsRequest, (objects) => {
+        objects.sub(F.LensOverlayObjectsRequest.requestContext, (ctx) => {
+          ctx.sub(F.LensOverlayRequestContext.requestId, (w) => writeRequestId(w, id, routing));
+          ctx.sub(
+            F.LensOverlayRequestContext.clientContext,
+            (client) => writeClientContext(client, this.settings, false)
+          );
+        });
+        objects.sub(F.LensOverlayObjectsRequest.imageData, (data) => writeImageData(data, this.image));
+      }).finish();
+      const response = await getTransport().post({
+        url: ImageSearch.endpoint(ids),
+        headers: { "Content-Type": "application/x-protobuf", "X-Goog-Api-Key": this.settings.apiKey },
+        body: body2,
+        timeoutMs: this.settings.timeoutMs
+      });
+      const result = parseResponse(response.bytes);
+      this.result = result;
+      this.objects = parseObjects(response.bytes);
+      this.ids = ids;
+      this.uuid = uuid;
+      this.contextId = contextId;
+      this.sequence = 1;
+    }
+    /**
+     * Describe a selection to Lens and return the results URL for it.
+     *
+     * Chrome builds the URL as soon as the interaction is *sent*, but the page
+     * resolves `vsrid` against the interaction, so this waits for the answer:
+     * opening the page first would race the request it names.
+     */
+    search(selection, options = {}) {
+      const run = this.queue.then(() => this.searchNow(selection, options));
+      this.queue = run.catch(() => void 0);
+      return run;
+    }
+    async searchNow(selection, options) {
+      if (!this.fresh) await this.start();
+      const ids = this.ids;
+      if (!ids) throw new Error("Lens did not open a search session");
+      const analytics = randomBytes(16);
+      const interactionId = this.nextId(analytics);
+      const routing = ids.routingInfo;
+      const query = options.text?.trim() ?? "";
+      const body2 = writer().sub(F.LensOverlayServerRequest.interactionRequest, (interaction) => {
+        interaction.sub(F.LensOverlayInteractionRequest.requestContext, (ctx) => {
+          ctx.sub(F.LensOverlayRequestContext.requestId, (w) => writeRequestId(w, interactionId, routing));
+          ctx.sub(
+            F.LensOverlayRequestContext.clientContext,
+            (client) => writeClientContext(client, this.settings, false)
+          );
+        });
+        interaction.sub(F.LensOverlayInteractionRequest.interactionRequestMetadata, (meta) => {
+          if (selection.kind === "object") {
+            meta.int(F.LensOverlayInteractionRequestMetadata.type, INTERACTION_TAP);
+            meta.sub(
+              F.LensOverlayInteractionRequestMetadata.selectionMetadata,
+              (s) => s.sub(
+                F.LensOverlayInteractionRequestMetadata_SelectionMetadata.object,
+                (o) => o.str(F.LensOverlayInteractionRequestMetadata_SelectionMetadata_Object.objectId, selection.id)
+              )
+            );
+          } else {
+            const box = selection.kind === "region" ? clampBox(selection.box) : WHOLE;
+            meta.int(F.LensOverlayInteractionRequestMetadata.type, INTERACTION_REGION_SEARCH);
+            meta.sub(
+              F.LensOverlayInteractionRequestMetadata.selectionMetadata,
+              (s) => s.sub(
+                F.LensOverlayInteractionRequestMetadata_SelectionMetadata.region,
+                (r) => r.sub(F.LensOverlayInteractionRequestMetadata_SelectionMetadata_Region.region, (b) => writeBox(b, box))
+              )
+            );
+          }
+          if (query) {
+            meta.sub(
+              F.LensOverlayInteractionRequestMetadata.queryMetadata,
+              (q) => q.sub(
+                F.LensOverlayInteractionRequestMetadata_QueryMetadata.textQuery,
+                (t) => t.str(F.TextQuery.query, query)
+              )
+            );
+          }
+        });
+        if (selection.kind !== "object") {
+          const box = selection.kind === "region" ? clampBox(selection.box) : WHOLE;
+          const crop = selection.kind === "region" && selection.crop ? selection.crop : null;
+          interaction.sub(F.LensOverlayInteractionRequest.imageCrop, (c) => {
+            c.sub(
+              F.ImageCrop.image,
+              (img) => img.bytes(F.ClientImage.imageContent, crop ? crop.bytes : this.image.imageBytes)
+            );
+            c.sub(F.ImageCrop.zoomedCrop, (z) => {
+              z.sub(F.ZoomedCrop.crop, (b) => writeBox(b, box));
+              z.int(F.ZoomedCrop.parentWidth, this.image.width).int(F.ZoomedCrop.parentHeight, this.image.height).float(F.ZoomedCrop.zoom, 1);
+            });
+          });
+        }
+      }).finish();
+      const response = await getTransport().post({
+        url: ImageSearch.endpoint(ids),
+        headers: { "Content-Type": "application/x-protobuf", "X-Goog-Api-Key": this.settings.apiKey },
+        body: body2,
+        timeoutMs: this.settings.timeoutMs
+      });
+      const error = sub(decode(response.bytes), F.LensOverlayServerResponse.error);
+      const errorType = error ? num(error, F.LensOverlayServerError.errorType) : 0;
+      if (errorType) throw new Error(`Lens returned server error type ${errorType}`);
+      const urlId = this.nextId(analytics);
+      const vsrid = base64Url(requestIdBytes(urlId, routing));
+      return buildSearchUrl(ids.searchSessionId, vsrid, options);
+    }
+  }
+  function requestIdBytes(id, routingInfo) {
+    const w = writer();
+    writeRequestId(w, id, routingInfo);
+    return w.finish();
+  }
   function translationText(result) {
     return result.blocks.map((block) => block.translation.trim()).filter(Boolean).join("\n\n");
   }
@@ -1611,6 +2083,32 @@
       sourceHeight: natural.height,
       release: release2
     };
+  }
+  async function encodeRegion(image, box, settings2) {
+    const W = image.sourceWidth;
+    const H = image.sourceHeight;
+    const sx = Math.max(0, Math.floor((box.cx - box.w / 2) * W));
+    const sy = Math.max(0, Math.floor((box.cy - box.h / 2) * H));
+    const sw = Math.max(1, Math.min(W - sx, Math.ceil(box.w * W)));
+    const sh = Math.max(1, Math.min(H - sy, Math.ceil(box.h * H)));
+    const { width, height } = targetSize(sw, sh, settings2);
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) throw new Error("Could not get a 2d canvas context");
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, width, height);
+    ctx.drawImage(image.source, sx, sy, sw, sh, 0, 0, width, height);
+    const jpeg = await new Promise((resolve2, reject) => {
+      try {
+        canvas.toBlob(resolve2, "image/jpeg", settings2.jpegQuality);
+      } catch (e) {
+        reject(e);
+      }
+    });
+    if (!jpeg) throw new Error("Canvas is tainted");
+    return { bytes: new Uint8Array(await jpeg.arrayBuffer()), width, height };
   }
   function loadWithCors(url) {
     return new Promise((resolve2, reject) => {
@@ -2790,18 +3288,18 @@
   const isCovered = (img) => covers.has(img);
   const COVER_MARK = "data-lens-translate";
   const isCover = (node) => node.hasAttribute(COVER_MARK);
-  const px = (value) => Number.parseFloat(value) || 0;
+  const px$1 = (value) => Number.parseFloat(value) || 0;
   const borderOf = (style) => ({
-    top: px(style.borderTopWidth),
-    right: px(style.borderRightWidth),
-    bottom: px(style.borderBottomWidth),
-    left: px(style.borderLeftWidth)
+    top: px$1(style.borderTopWidth),
+    right: px$1(style.borderRightWidth),
+    bottom: px$1(style.borderBottomWidth),
+    left: px$1(style.borderLeftWidth)
   });
   const paddingOf = (style) => ({
-    top: px(style.paddingTop),
-    right: px(style.paddingRight),
-    bottom: px(style.paddingBottom),
-    left: px(style.paddingLeft)
+    top: px$1(style.paddingTop),
+    right: px$1(style.paddingRight),
+    bottom: px$1(style.paddingBottom),
+    left: px$1(style.paddingLeft)
   });
   function inset(style, box) {
     const border = borderOf(style);
@@ -3016,8 +3514,8 @@
       const raw = readStored(SITES_KEY);
       const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
       if (parsed && typeof parsed === "object") {
-        for (const [host, mode] of Object.entries(parsed)) {
-          if (mode === "off" || mode === "auto") rules[host] = mode;
+        for (const [host2, mode] of Object.entries(parsed)) {
+          if (mode === "off" || mode === "auto") rules[host2] = mode;
         }
       }
     } catch {
@@ -3027,22 +3525,218 @@
   function reloadSites() {
     rules = null;
   }
-  function siteMode(host = hostOf()) {
-    return load()[host] ?? "default";
+  function siteMode(host2 = hostOf()) {
+    return load()[host2] ?? "default";
   }
-  function setSiteMode(mode, host = hostOf()) {
+  function setSiteMode(mode, host2 = hostOf()) {
     const next = { ...load() };
-    if (mode === "default") delete next[host];
-    else next[host] = mode;
+    if (mode === "default") delete next[host2];
+    else next[host2] = mode;
     rules = next;
     writeStored(SITES_KEY, next);
   }
-  const styles = "/* Lives inside a shadow root, so these selectors compete with nothing. The\n   :host is a fixed, click-through, full-viewport layer; everything here is\n   positioned in viewport coordinates. */\n\n:host {\n  font: 14px/1.45 system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;\n  color: #1a1a1a;\n}\n\n#lt-button,\n#lt-gear,\n#lt-more {\n  position: absolute;\n  width: 32px;\n  height: 32px;\n  background: rgba(0, 0, 0, 0.6);\n  border-radius: 50%;\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  opacity: 0;\n  pointer-events: none;\n  cursor: pointer;\n  transition: opacity 0.2s ease-in-out, transform 0.15s ease-in-out, background 0.2s;\n  transform: scale(0.9);\n  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);\n  border: 1px solid rgba(255, 255, 255, 0.2);\n}\n#lt-button:hover,\n#lt-gear:hover,\n#lt-more:hover {\n  background: rgba(0, 0, 0, 0.85);\n  transform: scale(1.05);\n}\n\n/* Appears a beat after the main button, so a passing cursor does not summon\n   two controls at once. */\n#lt-gear,\n#lt-more {\n  width: 26px;\n  height: 26px;\n}\n/* Held down to look at the original: the button says so by dimming. */\n#lt-button.lt-peeking {\n  background: rgba(60, 60, 60, 0.9);\n  box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.55);\n}\n/* Held down to peek, and on a touch screen a long press: the browser must not\n   take either for a scroll or a text selection. */\n#lt-button {\n  touch-action: none;\n  -webkit-user-select: none;\n  user-select: none;\n  -webkit-touch-callout: none;\n}\n#lt-button.lt-busy svg {\n  animation: lt-spin 1s linear infinite;\n}\n#lt-button.lt-active {\n  background: rgba(20, 110, 60, 0.9);\n}\n#lt-button.lt-error {\n  background: rgba(170, 30, 30, 0.9);\n}\n@keyframes lt-spin {\n  to {\n    transform: rotate(360deg);\n  }\n}\n\n/* ----------------------------------------------------------------- menu */\n\n.lt-menu {\n  position: absolute;\n  min-width: 190px;\n  padding: 4px;\n  display: flex;\n  flex-direction: column;\n  background: #fff;\n  color: #1a1a1a;\n  border-radius: 10px;\n  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.35);\n  border: 1px solid rgba(0, 0, 0, 0.12);\n  pointer-events: auto;\n}\n.lt-menu-item {\n  font: inherit;\n  text-align: left;\n  padding: 8px 12px;\n  border: 0;\n  border-radius: 6px;\n  background: transparent;\n  color: inherit;\n  cursor: pointer;\n}\n.lt-menu-item:hover:not(:disabled),\n.lt-menu-item:focus-visible {\n  background: #eaeaea;\n  outline: none;\n}\n.lt-menu-item:disabled {\n  color: #909090;\n  cursor: default;\n}\n@media (prefers-color-scheme: dark) {\n  .lt-menu {\n    background: #1f1f22;\n    color: #ececec;\n    border-color: #35353a;\n  }\n  .lt-menu-item:hover:not(:disabled),\n  .lt-menu-item:focus-visible {\n    background: #3a3a40;\n  }\n  .lt-menu-item:disabled {\n    color: #7c7c84;\n  }\n}\n\n#lt-toast {\n  position: absolute;\n  bottom: 16px;\n  left: 50%;\n  transform: translateX(-50%);\n  background: rgba(0, 0, 0, 0.88);\n  color: #fff;\n  padding: 8px 16px;\n  border-radius: 8px;\n  font-size: 13px;\n  pointer-events: none;\n  opacity: 0;\n  transition: opacity 0.2s;\n  max-width: 70vw;\n}\n#lt-toast.lt-show {\n  opacity: 1;\n}\n\n/* ------------------------------------------------------------- settings */\n\n.lt-panel-backdrop {\n  position: absolute;\n  inset: 0;\n  background: rgba(0, 0, 0, 0.5);\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  pointer-events: auto;\n}\n.lt-panel {\n  background: #fff;\n  width: min(560px, 92vw);\n  max-height: 86vh;\n  display: flex;\n  flex-direction: column;\n  border-radius: 12px;\n  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.4);\n  overflow: hidden;\n}\n.lt-panel-head,\n.lt-panel-foot {\n  display: flex;\n  align-items: center;\n  gap: 8px;\n  padding: 12px 18px;\n  flex: none;\n}\n.lt-panel-head {\n  border-bottom: 1px solid #e6e6e6;\n  justify-content: space-between;\n  font-size: 15px;\n  font-weight: 600;\n}\n.lt-panel-foot {\n  border-top: 1px solid #e6e6e6;\n}\n.lt-spacer {\n  flex: 1;\n}\n.lt-panel-body {\n  padding: 10px 18px 16px;\n  overflow-y: auto;\n}\n\n.lt-row {\n  display: grid;\n  grid-template-columns: 190px minmax(0, 1fr);\n  align-items: center;\n  gap: 2px 14px;\n  padding: 7px 0;\n}\n.lt-label {\n  color: #333;\n}\n.lt-hint {\n  grid-column: 2;\n  color: #808080;\n  font-size: 12px;\n}\n.lt-input {\n  font: inherit;\n  padding: 7px 9px;\n  border: 1px solid #ccc;\n  border-radius: 6px;\n  background: #fff;\n  color: #1a1a1a;\n  min-width: 0;\n  width: 100%;\n  box-sizing: border-box;\n}\n.lt-input[type='checkbox'] {\n  justify-self: start;\n  width: 17px;\n  height: 17px;\n  padding: 0;\n}\n.lt-x {\n  border: 0;\n  background: transparent;\n  font-size: 22px;\n  line-height: 1;\n  cursor: pointer;\n  color: #666;\n  padding: 0 4px;\n}\n.lt-btn {\n  font: inherit;\n  padding: 7px 15px;\n  border-radius: 7px;\n  cursor: pointer;\n  border: 1px solid #ccc;\n  background: #f5f5f5;\n  color: #1a1a1a;\n}\n.lt-btn.lt-primary {\n  background: #1a73e8;\n  border-color: #1a73e8;\n  color: #fff;\n}\n.lt-btn.lt-ghost:hover {\n  background: #eaeaea;\n}\n\n@media (prefers-color-scheme: dark) {\n  .lt-panel {\n    background: #1f1f22;\n    color: #ececec;\n  }\n  .lt-panel-head,\n  .lt-panel-foot {\n    border-color: #35353a;\n  }\n  .lt-label {\n    color: #d6d6d6;\n  }\n  .lt-hint {\n    color: #9a9a9a;\n  }\n  .lt-input {\n    background: #2a2a2e;\n    border-color: #45454c;\n    color: #ececec;\n  }\n  .lt-btn {\n    background: #2e2e33;\n    border-color: #45454c;\n    color: #ececec;\n  }\n  .lt-btn.lt-ghost:hover {\n    background: #3a3a40;\n  }\n  .lt-x {\n    color: #bbb;\n  }\n}\n\n/* Outline slider with its live sample. */\n.lt-slider {\n  display: flex;\n  align-items: center;\n  gap: 10px;\n  min-width: 0;\n}\n.lt-slider input[type='range'] {\n  flex: 1;\n  width: auto;\n  padding: 0;\n  border: 0;\n  background: transparent;\n  accent-color: #1a73e8;\n}\n.lt-readout {\n  min-width: 42px;\n  text-align: right;\n  font-variant-numeric: tabular-nums;\n  color: #666;\n}\n.lt-preview {\n  grid-column: 2;\n  width: 100%;\n  height: auto;\n  border-radius: 6px;\n  border: 1px solid #ddd;\n  margin-top: 6px;\n}\n@media (prefers-color-scheme: dark) {\n  .lt-readout {\n    color: #aaa;\n  }\n  .lt-preview {\n    border-color: #45454c;\n  }\n}\n\n/* Section headings. */\n.lt-group {\n  grid-column: 1 / -1;\n  margin: 16px 0 4px;\n  padding-bottom: 5px;\n  border-bottom: 1px solid #e6e6e6;\n  font-size: 11px;\n  font-weight: 600;\n  letter-spacing: 0.07em;\n  text-transform: uppercase;\n  color: #888;\n}\n.lt-group:first-child {\n  margin-top: 4px;\n}\n@media (prefers-color-scheme: dark) {\n  .lt-group {\n    border-color: #35353a;\n    color: #8c8c96;\n  }\n}\n\n/* Menu commands, for a host that has no menu of its own. */\n.lt-actions {\n  display: flex;\n  flex-wrap: wrap;\n  gap: 8px;\n  padding: 4px 0 0;\n}\n.lt-note {\n  color: #808080;\n  font-size: 12px;\n  padding-top: 8px;\n}\n@media (prefers-color-scheme: dark) {\n  .lt-note {\n    color: #9a9a9a;\n  }\n}\n\n/* The diagnostics report: fixed width, so columns line up as written. */\n.lt-panel-report {\n  max-width: 560px;\n}\n.lt-report {\n  margin: 0;\n  padding: 14px 18px;\n  overflow: auto;\n  white-space: pre-wrap;\n  word-break: break-word;\n  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;\n  font-size: 12px;\n  line-height: 1.5;\n  user-select: text;\n  -webkit-user-select: text;\n}\n";
+  const PATHS = {
+    translate: "m5 8 6 6M4 14l6-6 2-3M2 5h12M7 2h1M22 22l-5-10-5 10M14 18h6",
+    search: "M11 3a8 8 0 1 0 0 16 8 8 0 0 0 0-16zM21 21l-4.3-4.3",
+    sparkles: "M12 3l1.9 5.1a2 2 0 0 0 1.2 1.2L20 11l-4.9 1.7a2 2 0 0 0-1.2 1.2L12 19l-1.9-5.1a2 2 0 0 0-1.2-1.2L4 11l4.9-1.7a2 2 0 0 0 1.2-1.2zM19 3v4M21 5h-4",
+    copy: "M10 8h10a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H10a2 2 0 0 1-2-2V10a2 2 0 0 1 2-2zM4 16a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2",
+    settings: "M20 7h-9M14 17H5M17 14a3 3 0 1 0 0 6 3 3 0 0 0 0-6zM7 4a3 3 0 1 0 0 6 3 3 0 0 0 0-6z",
+    more: "M12 11.5a.5.5 0 1 0 0 1 .5.5 0 0 0 0-1zM19 11.5a.5.5 0 1 0 0 1 .5.5 0 0 0 0-1zM5 11.5a.5.5 0 1 0 0 1 .5.5 0 0 0 0-1z",
+    area: "M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2",
+    objects: "M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z",
+    text: "M4 7V4h16v3M9 20h6M12 4v16",
+    undo: "M3 7v6h6M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13",
+    close: "M18 6 6 18M6 6l12 12",
+    send: "m5 12 7-7 7 7M12 19V5",
+    external: "M15 3h6v6M10 14 21 3M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6",
+    images: "M18 22H4a2 2 0 0 1-2-2V6M8 2h12a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2zM22 13l-3-3-7 7",
+    loader: "M21 12a9 9 0 1 1-6.2-8.6"
+  };
+  function icon(name, size = 18) {
+    return `<svg class="lt-icon lt-icon-${name}" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${PATHS[name]}"/></svg>`;
+  }
+  function positionFraction(component, free) {
+    const value = Number.parseFloat(component ?? "");
+    if (!Number.isFinite(value)) return 0.5;
+    if ((component ?? "").trim().endsWith("%")) return value / 100;
+    return free === 0 ? 0 : value / free;
+  }
+  function fittedRect(box, natural, fit, position) {
+    if (!(natural.width > 0) || !(natural.height > 0) || fit === "fill" || fit === "") return { ...box };
+    const contain = Math.min(box.width / natural.width, box.height / natural.height);
+    const cover = Math.max(box.width / natural.width, box.height / natural.height);
+    const scale = fit === "contain" ? contain : fit === "cover" ? cover : fit === "scale-down" ? Math.min(1, contain) : 1;
+    const width = natural.width * scale;
+    const height = natural.height * scale;
+    const [px2, py] = position.trim().split(/\s+/);
+    const freeX = box.width - width;
+    const freeY = box.height - height;
+    return {
+      left: box.left + freeX * positionFraction(px2, freeX),
+      top: box.top + freeY * positionFraction(py, freeY),
+      width,
+      height
+    };
+  }
+  function insetRect(rect, edges) {
+    return {
+      left: rect.left + edges.left,
+      top: rect.top + edges.top,
+      width: Math.max(0, rect.width - edges.left - edges.right),
+      height: Math.max(0, rect.height - edges.top - edges.bottom)
+    };
+  }
+  const clamp01 = (value) => Math.min(1, Math.max(0, value));
+  const MIN_DRAG_PX = 12;
+  function dragToBox(from, to, picture) {
+    if (!(picture.width > 0) || !(picture.height > 0)) return null;
+    const x0 = clamp01((Math.min(from.x, to.x) - picture.left) / picture.width);
+    const x1 = clamp01((Math.max(from.x, to.x) - picture.left) / picture.width);
+    const y0 = clamp01((Math.min(from.y, to.y) - picture.top) / picture.height);
+    const y1 = clamp01((Math.max(from.y, to.y) - picture.top) / picture.height);
+    const w = x1 - x0;
+    const h = y1 - y0;
+    if (w * picture.width < MIN_DRAG_PX || h * picture.height < MIN_DRAG_PX) return null;
+    return { cx: x0 + w / 2, cy: y0 + h / 2, w, h };
+  }
+  function boxAfterRelease(from, to, picture, chosen) {
+    const dragged = dragToBox(from, to, picture);
+    return dragged ? { box: dragged, changed: true } : { box: chosen, changed: false };
+  }
+  function boxToRect(box, picture) {
+    return {
+      left: (box.cx - box.w / 2) * picture.width,
+      top: (box.cy - box.h / 2) * picture.height,
+      width: box.w * picture.width,
+      height: box.h * picture.height
+    };
+  }
+  function centreOf(geometry, picture) {
+    return { x: geometry.cx * picture.width, y: geometry.cy * picture.height };
+  }
+  function keyboardInset(layoutHeight, visual) {
+    if (!visual || Math.abs(visual.scale - 1) > 0.01) return 0;
+    return Math.max(0, Math.round(layoutHeight - visual.height - visual.offsetTop));
+  }
+  const CHILDLESS = /* @__PURE__ */ new Set([
+    "IMG",
+    "VIDEO",
+    "CANVAS",
+    "IFRAME",
+    "OBJECT",
+    "EMBED",
+    "AUDIO",
+    "INPUT",
+    "TEXTAREA",
+    "SELECT",
+    "PICTURE",
+    "SVG"
+  ]);
+  const canHoldUi = (tagName) => !CHILDLESS.has(tagName.toUpperCase());
+  function pickables(paragraphs) {
+    const out = [];
+    for (const paragraph of paragraphs) {
+      for (const line of paragraph.lines) {
+        const words = line.words.filter((word) => word.text);
+        if (words.length && words.every((word) => word.geometry)) {
+          words.forEach((word, index) => {
+            const last = index === words.length - 1;
+            const spaced = (word.text.codePointAt(word.text.length - 1) ?? 0) < 11904;
+            out.push({
+              text: word.text,
+              separator: last && !word.separator && spaced ? " " : word.separator,
+              geometry: word.geometry
+            });
+          });
+        } else if (line.geometry && line.text) {
+          out.push({ text: line.text, separator: " ", geometry: line.geometry });
+        }
+      }
+    }
+    return out;
+  }
+  function joinPicked(items, picked) {
+    let text2 = "";
+    let previous = -2;
+    items.forEach((item, index) => {
+      if (!picked.has(index)) return;
+      if (text2 && previous !== index - 1 && !/\s$/.test(text2)) text2 += " ";
+      text2 += item.text + item.separator;
+      previous = index;
+    });
+    return text2.replace(/\s+/g, " ").trim();
+  }
+  const objectsStillValid = (source, list) => source.fresh && source.objects === list;
+  const styles = "/* Lives inside a shadow root, so these selectors compete with nothing. The\n   :host is a fixed, click-through, full-viewport layer; everything here is\n   positioned in viewport coordinates.\n\n   The look is shadcn/ui's: zinc neutrals named by role, one radius, hairline\n   borders, a ring on focus. Only the look - there is no framework behind it,\n   because this stylesheet is parsed on every page the script runs on. */\n\n:host {\n  --background: #ffffff;\n  --foreground: #09090b;\n  --muted: #f4f4f5;\n  --muted-foreground: #71717a;\n  --accent: #f4f4f5;\n  --border: #e4e4e7;\n  --input: #d4d4d8;\n  --ring: #a1a1aa;\n  --primary: #18181b;\n  --primary-foreground: #fafafa;\n  --destructive: #dc2626;\n  --success: #059669;\n  --shadow: 0 10px 30px -8px rgba(9, 9, 11, 0.28), 0 2px 6px -2px rgba(9, 9, 11, 0.12);\n  /* 0.5rem, written in pixels: inside a shadow root `rem` is still the page's\n     root font size, and a site that sets that to 10px would shrink every\n     corner and control here with it. */\n  --radius: 8px;\n  /* What the keyboard covers; ui/root.ts keeps it current where it can. */\n  --lt-kb: 0px;\n  /* A hundredth of the viewport, by the best unit this browser has. `svh` is\n     the height with the address bar showing, so a sheet sized by it does not\n     jump when the bar slides away; `dvh` follows the bar. */\n  --lt-svh: 1vh;\n  --lt-dvh: 1vh;\n\n  font: 14px/1.45 system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;\n  color: var(--foreground);\n}\n@supports (height: 1dvh) {\n  :host {\n    --lt-svh: 1svh;\n    --lt-dvh: 1dvh;\n  }\n}\n@media (prefers-color-scheme: dark) {\n  :host {\n    --background: #09090b;\n    --foreground: #fafafa;\n    --muted: #27272a;\n    --muted-foreground: #a1a1aa;\n    --accent: #27272a;\n    --border: #27272a;\n    --input: #3f3f46;\n    --ring: #71717a;\n    --primary: #fafafa;\n    --primary-foreground: #18181b;\n    --destructive: #ef4444;\n    --success: #10b981;\n    --shadow: 0 10px 30px -8px rgba(0, 0, 0, 0.7), 0 2px 6px -2px rgba(0, 0, 0, 0.5);\n  }\n}\n\n*,\n*::before,\n*::after {\n  box-sizing: border-box;\n}\n\n.lt-icon {\n  display: block;\n  flex: none;\n  width: 18px;\n}\n.lt-icon-loader {\n  animation: lt-spin 0.9s linear infinite;\n}\n@keyframes lt-spin {\n  to {\n    transform: rotate(360deg);\n  }\n}\n\n/* ------------------------------------------------------------- controls */\n\n/* Hung from the picture's top right corner by its own right edge, so the row\n   can be any width: main.ts sets `left` to the corner and this pulls it back. */\n#lt-controls {\n  position: absolute;\n  z-index: 1;\n  display: flex;\n  gap: 4px;\n  transform: translateX(-100%);\n  pointer-events: none;\n}\n#lt-button,\n#lt-gear,\n#lt-more {\n  width: 32px;\n  height: 32px;\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  /* These sit on somebody's photograph, not on a surface of ours, so they do\n     not follow the theme: dark glass reads on any picture. */\n  background: rgba(9, 9, 11, 0.72);\n  color: #fafafa;\n  border: 1px solid rgba(255, 255, 255, 0.18);\n  border-radius: var(--radius);\n  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);\n  -webkit-backdrop-filter: blur(6px);\n  backdrop-filter: blur(6px);\n  opacity: 0;\n  transform: scale(0.92);\n  pointer-events: none;\n  cursor: pointer;\n  transition: opacity 0.15s, transform 0.15s, background 0.15s;\n  -webkit-tap-highlight-color: transparent;\n}\n#lt-controls.lt-on #lt-button,\n/* A beat after the main button, so a passing cursor does not summon three. */\n#lt-controls.lt-on.lt-extras #lt-gear,\n#lt-controls.lt-on.lt-extras #lt-more {\n  opacity: 1;\n  transform: none;\n  pointer-events: auto;\n}\n#lt-button:hover,\n#lt-gear:hover,\n#lt-more:hover {\n  background: rgba(9, 9, 11, 0.92);\n}\n/* Held down to peek, and on a touch screen a long press: the browser must not\n   take either for a scroll or a text selection. */\n#lt-button {\n  touch-action: none;\n  -webkit-user-select: none;\n  user-select: none;\n  -webkit-touch-callout: none;\n}\n/* Held down to look at the original: the button says so with a ring. */\n#lt-button.lt-peeking {\n  box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.6);\n}\n#lt-button .lt-icon-loader,\n#lt-button.lt-busy .lt-icon-translate {\n  display: none;\n}\n#lt-button.lt-busy .lt-icon-loader {\n  display: block;\n}\n#lt-button.lt-active {\n  background: var(--success);\n  border-color: transparent;\n}\n#lt-button.lt-error {\n  background: var(--destructive);\n  border-color: transparent;\n}\n\n/* -------------------------------------------------------- buttons, fields */\n\n.lt-btn {\n  display: inline-flex;\n  align-items: center;\n  justify-content: center;\n  gap: 6px;\n  height: 36px;\n  padding: 0 14px;\n  font: inherit;\n  font-weight: 500;\n  white-space: nowrap;\n  text-decoration: none;\n  color: var(--foreground);\n  background: var(--background);\n  border: 1px solid var(--border);\n  border-radius: calc(var(--radius) - 2px);\n  box-shadow: 0 1px 2px rgba(9, 9, 11, 0.05);\n  cursor: pointer;\n  -webkit-tap-highlight-color: transparent;\n}\n.lt-btn:hover {\n  background: var(--accent);\n}\n.lt-btn.lt-primary {\n  color: var(--primary-foreground);\n  background: var(--primary);\n  border-color: transparent;\n}\n.lt-btn.lt-primary:hover {\n  opacity: 0.9;\n}\n.lt-btn.lt-ghost {\n  border-color: transparent;\n  box-shadow: none;\n  background: transparent;\n}\n.lt-btn.lt-ghost:hover {\n  background: var(--accent);\n}\n.lt-btn.lt-square {\n  width: 36px;\n  padding: 0;\n  flex: none;\n}\n.lt-btn:disabled {\n  opacity: 0.5;\n  pointer-events: none;\n}\n.lt-btn:focus-visible,\n.lt-x:focus-visible,\n.lt-dot:focus-visible {\n  outline: 2px solid var(--ring);\n  outline-offset: 2px;\n}\n\n.lt-input {\n  height: 36px;\n  min-width: 0;\n  width: 100%;\n  padding: 0 12px;\n  font: inherit;\n  color: var(--foreground);\n  background: var(--background);\n  border: 1px solid var(--input);\n  border-radius: calc(var(--radius) - 2px);\n  box-shadow: 0 1px 2px rgba(9, 9, 11, 0.05);\n}\n.lt-input::placeholder {\n  color: var(--muted-foreground);\n}\n.lt-input:focus-visible {\n  outline: 2px solid var(--ring);\n  outline-offset: 1px;\n}\n.lt-input[type='checkbox'] {\n  justify-self: start;\n  width: 16px;\n  height: 16px;\n  padding: 0;\n  box-shadow: none;\n  accent-color: var(--primary);\n}\n\n/* ----------------------------------------------------------------- menu */\n\n.lt-menu {\n  position: absolute;\n  z-index: 4;\n  width: 260px;\n  padding: 4px;\n  display: flex;\n  flex-direction: column;\n  color: var(--foreground);\n  background: var(--background);\n  border: 1px solid var(--border);\n  border-radius: var(--radius);\n  box-shadow: var(--shadow);\n  pointer-events: auto;\n}\n.lt-menu-item {\n  display: flex;\n  align-items: center;\n  gap: 10px;\n  width: 100%;\n  min-height: 36px;\n  padding: 6px 10px;\n  font: inherit;\n  text-align: left;\n  color: inherit;\n  background: transparent;\n  border: 0;\n  border-radius: calc(var(--radius) - 4px);\n  cursor: pointer;\n  -webkit-tap-highlight-color: transparent;\n}\n.lt-menu-item .lt-icon {\n  color: var(--muted-foreground);\n}\n/* The item the keyboard is on is highlighted like the one the cursor is on,\n   not ringed: the first item is focused when the menu opens, and a ring there\n   reads as a selection nobody made. */\n.lt-menu-item:hover:not(:disabled),\n.lt-menu-item:focus-visible {\n  background: var(--accent);\n  outline: none;\n}\n.lt-menu-item:disabled {\n  color: var(--muted-foreground);\n  opacity: 0.6;\n  cursor: default;\n}\n.lt-menu-rule {\n  height: 1px;\n  margin: 4px -4px;\n  background: var(--border);\n}\n/* The item and the field under it are one thing to ask. */\n.lt-field-row {\n  display: flex;\n  gap: 6px;\n  padding: 2px 6px 6px 38px;\n}\n\n/* A sheet has to sit on something that takes the press meant to dismiss it. */\n.lt-scrim {\n  position: absolute;\n  inset: 0;\n  z-index: 4;\n  background: rgba(9, 9, 11, 0.5);\n  pointer-events: auto;\n}\n.lt-menu.lt-sheet {\n  left: 0;\n  right: 0;\n  bottom: var(--lt-kb);\n  width: auto;\n  max-width: 560px;\n  margin: 0 auto;\n  max-height: calc(var(--lt-svh) * 100 - var(--lt-kb) - 24px);\n  overflow-y: auto;\n  overscroll-behavior: contain;\n  padding: 8px max(8px, env(safe-area-inset-right, 0px)) calc(8px + env(safe-area-inset-bottom, 0px))\n    max(8px, env(safe-area-inset-left, 0px));\n  border-width: 1px 0 0;\n  border-radius: 14px 14px 0 0;\n}\n/* The handle a sheet is expected to have; it says \"this slides\", nothing more. */\n.lt-menu.lt-sheet::before {\n  content: '';\n  flex: none;\n  align-self: center;\n  width: 40px;\n  height: 4px;\n  margin: 0 0 6px;\n  border-radius: 2px;\n  background: var(--input);\n}\n.lt-sheet .lt-menu-item {\n  min-height: 48px;\n  padding: 8px 12px;\n  gap: 14px;\n  font-size: 16px;\n}\n.lt-sheet .lt-menu-item .lt-icon {\n  width: 20px;\n  height: 20px;\n}\n.lt-sheet .lt-field-row {\n  padding: 2px 8px 8px 46px;\n}\n.lt-sheet .lt-menu-rule {\n  margin: 4px 0;\n}\n\n/* ---------------------------------------------------------------- toast */\n\n#lt-toast {\n  position: absolute;\n  z-index: 6;\n  left: 50%;\n  bottom: calc(16px + var(--lt-kb) + env(safe-area-inset-bottom, 0px));\n  transform: translateX(-50%);\n  display: flex;\n  align-items: center;\n  gap: 10px;\n  max-width: min(520px, calc(100% - 24px));\n  padding: 10px 14px;\n  font-size: 13px;\n  color: var(--foreground);\n  background: var(--background);\n  border: 1px solid var(--border);\n  border-radius: var(--radius);\n  box-shadow: var(--shadow);\n  pointer-events: none;\n  opacity: 0;\n  visibility: hidden;\n  transition: opacity 0.2s, visibility 0.2s;\n}\n#lt-toast.lt-show {\n  opacity: 1;\n  visibility: visible;\n}\n/* A message with a link in it is something to press. */\n#lt-toast.lt-show.lt-has-link {\n  pointer-events: auto;\n  padding: 8px 8px 8px 14px;\n}\n#lt-toast > span {\n  flex: 1;\n  min-width: 0;\n}\n/* While a tool's bar has the bottom of the screen, messages go to the top. */\n:host([data-tool]) #lt-toast {\n  bottom: auto;\n  top: calc(12px + env(safe-area-inset-top, 0px));\n}\n\n/* --------------------------------------------------------------- panels */\n\n.lt-panel-backdrop {\n  position: absolute;\n  inset: 0;\n  z-index: 5;\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  background: rgba(9, 9, 11, 0.5);\n  pointer-events: auto;\n}\n.lt-panel {\n  width: min(560px, 92vw);\n  max-height: calc(var(--lt-dvh) * 86);\n  display: flex;\n  flex-direction: column;\n  color: var(--foreground);\n  background: var(--background);\n  border: 1px solid var(--border);\n  border-radius: calc(var(--radius) + 4px);\n  box-shadow: var(--shadow);\n  overflow: hidden;\n}\n.lt-panel-head,\n.lt-panel-foot {\n  display: flex;\n  align-items: center;\n  gap: 8px;\n  padding: 12px 18px;\n  flex: none;\n}\n.lt-panel-head {\n  border-bottom: 1px solid var(--border);\n  justify-content: space-between;\n  font-size: 15px;\n  font-weight: 600;\n  padding-right: 10px;\n}\n.lt-panel-foot {\n  border-top: 1px solid var(--border);\n}\n.lt-spacer {\n  flex: 1;\n}\n.lt-panel-body {\n  padding: 8px 18px 16px;\n  overflow-y: auto;\n  overscroll-behavior: contain;\n}\n.lt-x {\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  width: 32px;\n  height: 32px;\n  padding: 0;\n  color: var(--muted-foreground);\n  background: transparent;\n  border: 0;\n  border-radius: calc(var(--radius) - 2px);\n  cursor: pointer;\n}\n.lt-x:hover {\n  color: var(--foreground);\n  background: var(--accent);\n}\n\n.lt-row {\n  display: grid;\n  grid-template-columns: 190px minmax(0, 1fr);\n  align-items: center;\n  gap: 2px 14px;\n  padding: 7px 0;\n}\n.lt-label {\n  font-weight: 500;\n}\n.lt-hint {\n  grid-column: 2;\n  color: var(--muted-foreground);\n  font-size: 12px;\n}\n\n/* Outline slider with its live sample. */\n.lt-slider {\n  display: flex;\n  align-items: center;\n  gap: 10px;\n  min-width: 0;\n}\n.lt-slider input[type='range'] {\n  flex: 1;\n  width: auto;\n  height: 24px;\n  padding: 0;\n  border: 0;\n  box-shadow: none;\n  background: transparent;\n  accent-color: var(--primary);\n}\n.lt-readout {\n  min-width: 42px;\n  text-align: right;\n  font-variant-numeric: tabular-nums;\n  color: var(--muted-foreground);\n}\n.lt-preview {\n  grid-column: 2;\n  width: 100%;\n  height: auto;\n  border-radius: calc(var(--radius) - 2px);\n  border: 1px solid var(--border);\n  margin-top: 6px;\n}\n\n/* Section headings. */\n.lt-group {\n  margin: 18px 0 4px;\n  padding-bottom: 6px;\n  border-bottom: 1px solid var(--border);\n  font-size: 12px;\n  font-weight: 600;\n  color: var(--muted-foreground);\n}\n.lt-group:first-child {\n  margin-top: 6px;\n}\n\n/* Menu commands, for a host that has no menu of its own. */\n.lt-actions {\n  display: flex;\n  flex-wrap: wrap;\n  gap: 8px;\n  padding: 6px 0 0;\n}\n.lt-note {\n  color: var(--muted-foreground);\n  font-size: 12px;\n  padding-top: 10px;\n}\n\n/* The diagnostics report: fixed width, so columns line up as written. */\n.lt-report {\n  margin: 0;\n  padding: 14px 18px;\n  overflow: auto;\n  white-space: pre-wrap;\n  word-break: break-word;\n  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;\n  font-size: 12px;\n  line-height: 1.5;\n  color: var(--foreground);\n  background: var(--muted);\n  user-select: text;\n  -webkit-user-select: text;\n}\n\n/* ---------------------------------------------------------------- tools */\n\n/* The layer over a picture while an area, an object or words are being\n   chosen. It scrolls by default: a webtoon page is taller than the screen,\n   and a layer that swallowed every pan would strand the reader halfway down\n   it with only the close button for a way out. Only a gesture that has to be\n   a drag locks the page - see the region layer and the words. */\n.lt-tool {\n  position: absolute;\n  z-index: 2;\n  overflow: hidden;\n  background: rgba(9, 9, 11, 0.2);\n  outline: 2px solid rgba(255, 255, 255, 0.85);\n  outline-offset: -2px;\n  pointer-events: auto;\n  touch-action: pan-x pan-y;\n  -webkit-user-select: none;\n  user-select: none;\n  -webkit-touch-callout: none;\n}\n/* Dragging out a rectangle is the whole of this tool; without `none` the\n   finger scrolls the page instead. */\n.lt-tool-region {\n  cursor: crosshair;\n  touch-action: none;\n}\n/* The chosen area is the one part left undimmed; the shadow is the dimming,\n   clipped by the layer so it stops at the picture's edge. */\n.lt-sel {\n  position: absolute;\n  border: 2px solid #fff;\n  border-radius: 4px;\n  box-shadow: 0 0 0 9999px rgba(9, 9, 11, 0.45);\n  pointer-events: none;\n}\n.lt-sel[hidden] {\n  display: none;\n}\n\n/* A dot is 16px to look at and 44px to hit. */\n.lt-dot {\n  position: absolute;\n  width: 44px;\n  height: 44px;\n  margin: -22px 0 0 -22px;\n  padding: 0;\n  background: transparent;\n  border: 0;\n  border-radius: 50%;\n  cursor: pointer;\n  -webkit-tap-highlight-color: transparent;\n}\n.lt-dot::after {\n  content: '';\n  position: absolute;\n  inset: 14px;\n  border-radius: 50%;\n  background: #fff;\n  box-shadow: 0 0 0 3px rgba(9, 9, 11, 0.55), 0 1px 5px rgba(0, 0, 0, 0.6);\n  transition: transform 0.12s;\n}\n.lt-dot:hover::after,\n.lt-dot:focus-visible::after,\n.lt-dot:active::after {\n  transform: scale(1.3);\n}\n.lt-objbox {\n  position: absolute;\n  border: 2px solid #fff;\n  border-radius: 6px;\n  box-shadow: 0 0 0 1px rgba(9, 9, 11, 0.5);\n  opacity: 0;\n  pointer-events: none;\n  transition: opacity 0.12s;\n}\n.lt-dot:hover + .lt-objbox,\n.lt-dot:focus-visible + .lt-objbox,\n.lt-dot:active + .lt-objbox {\n  opacity: 1;\n}\n\n/* A stroke that starts on a word is a drag across words and must not pan; one\n   that starts between them scrolls. touch-action is read from where the touch\n   lands, intersected up the tree, and settled before any pointer event - so it\n   has to be on the word itself; setting it from a handler is too late. */\n.lt-word {\n  position: absolute;\n  border-radius: 3px;\n  background: rgba(255, 255, 255, 0.28);\n  box-shadow: 0 0 0 1px rgba(9, 9, 11, 0.45);\n  cursor: pointer;\n  touch-action: none;\n}\n.lt-word.lt-on {\n  background: rgba(56, 189, 248, 0.5);\n  box-shadow: 0 0 0 2px #fff, 0 0 0 3px rgba(9, 9, 11, 0.6);\n}\n\n.lt-bar {\n  position: absolute;\n  z-index: 3;\n  left: 50%;\n  bottom: calc(16px + var(--lt-kb) + env(safe-area-inset-bottom, 0px));\n  transform: translateX(-50%);\n  display: flex;\n  flex-wrap: wrap;\n  align-items: center;\n  gap: 8px;\n  width: max-content;\n  max-width: min(720px, calc(100% - 24px));\n  padding: 8px 8px 8px 14px;\n  color: var(--foreground);\n  background: var(--background);\n  border: 1px solid var(--border);\n  border-radius: calc(var(--radius) + 4px);\n  box-shadow: var(--shadow);\n  pointer-events: auto;\n}\n.lt-bar-text {\n  flex: 1 1 180px;\n  min-width: 0;\n  max-height: 2.9em;\n  overflow: hidden;\n  display: flex;\n  align-items: center;\n  gap: 8px;\n}\n.lt-bar .lt-input {\n  flex: 1 1 200px;\n  width: auto;\n}\n.lt-bar-buttons {\n  display: flex;\n  gap: 6px;\n  margin-left: auto;\n}\n\n/* ------------------------------------------------ a thumb, not a cursor */\n\n/* The same question ui/menu.ts asks. Narrow, or touched: either way the\n   targets are 44px, the fields are 16px so iOS does not zoom into them, and\n   whatever opens does so from the bottom edge, where the thumb already is. */\n@media (max-width: 640px), (pointer: coarse) {\n  #lt-button,\n  #lt-gear,\n  #lt-more {\n    width: 44px;\n    height: 44px;\n  }\n  #lt-controls {\n    gap: 6px;\n  }\n  .lt-btn,\n  .lt-input {\n    height: 44px;\n  }\n  .lt-btn.lt-square,\n  .lt-x {\n    width: 44px;\n    height: 44px;\n  }\n  .lt-input {\n    font-size: 16px;\n  }\n  .lt-input[type='checkbox'] {\n    width: 22px;\n    height: 22px;\n  }\n  .lt-slider input[type='range'] {\n    height: 44px;\n  }\n\n  .lt-panel-backdrop {\n    align-items: flex-end;\n  }\n  .lt-panel {\n    width: 100%;\n    max-width: 640px;\n    margin-bottom: var(--lt-kb);\n    max-height: calc(var(--lt-svh) * 100 - var(--lt-kb) - 24px);\n    border-width: 1px 0 0;\n    border-radius: 14px 14px 0 0;\n  }\n  .lt-panel-head,\n  .lt-panel-foot {\n    padding-left: max(14px, env(safe-area-inset-left, 0px));\n    padding-right: max(14px, env(safe-area-inset-right, 0px));\n  }\n  .lt-panel-head {\n    padding-right: max(6px, env(safe-area-inset-right, 0px));\n  }\n  .lt-panel-foot {\n    padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px));\n  }\n  .lt-panel-body {\n    padding-left: max(14px, env(safe-area-inset-left, 0px));\n    padding-right: max(14px, env(safe-area-inset-right, 0px));\n  }\n  /* The label goes above its field: 190px of label leaves a phone no field. */\n  .lt-row {\n    grid-template-columns: minmax(0, 1fr);\n    gap: 6px;\n    padding: 9px 0;\n  }\n  .lt-row.lt-row-check {\n    grid-template-columns: minmax(0, 1fr) auto;\n  }\n  .lt-hint,\n  .lt-preview {\n    grid-column: 1 / -1;\n  }\n\n  .lt-bar {\n    left: max(8px, env(safe-area-inset-left, 0px));\n    right: max(8px, env(safe-area-inset-right, 0px));\n    bottom: calc(8px + var(--lt-kb) + env(safe-area-inset-bottom, 0px));\n    transform: none;\n    width: auto;\n    max-width: none;\n  }\n  .lt-bar .lt-input {\n    flex-basis: 100%;\n  }\n  #lt-toast {\n    left: max(8px, env(safe-area-inset-left, 0px));\n    right: max(8px, env(safe-area-inset-right, 0px));\n    transform: none;\n    max-width: none;\n    font-size: 14px;\n  }\n}\n\n@media (prefers-reduced-motion: reduce) {\n  #lt-button,\n  #lt-gear,\n  #lt-more,\n  #lt-toast,\n  .lt-dot::after,\n  .lt-objbox {\n    transition: none;\n  }\n}\n";
   const HOST_ID = "lens-translate-root";
   let shadow = null;
+  let host = null;
+  const TOP = "2147483647";
+  function fullscreenElement() {
+    const doc = document;
+    let element = doc.fullscreenElement ?? doc.webkitFullscreenElement ?? null;
+    for (; ; ) {
+      const inner = element?.shadowRoot?.fullscreenElement;
+      if (!inner || inner === element) return element;
+      element = inner;
+    }
+  }
+  function placeHost() {
+    if (!host) return;
+    const full = fullscreenElement();
+    const home = full && canHoldUi(full.tagName) ? full.shadowRoot ?? full : document.documentElement;
+    if (host.parentNode !== home) home.appendChild(host);
+  }
+  let overtakes = 0;
+  const MAX_OVERTAKES = 5;
+  function tendHost() {
+    if (!host) return;
+    placeHost();
+    if (overtakes >= MAX_OVERTAKES) return;
+    let sibling = host.nextElementSibling;
+    for (let seen = 0; sibling && seen < 20; seen += 1, sibling = sibling.nextElementSibling) {
+      const style = getComputedStyle(sibling);
+      if (style.zIndex === TOP && style.position !== "static") {
+        overtakes += 1;
+        host.parentNode?.appendChild(host);
+        return;
+      }
+    }
+  }
+  function trackKeyboard(target) {
+    const visual = window.visualViewport;
+    if (!visual || typeof visual.addEventListener !== "function") return;
+    const update = () => {
+      target.style.setProperty("--lt-kb", `${keyboardInset(window.innerHeight, visual)}px`);
+    };
+    visual.addEventListener("resize", update);
+    visual.addEventListener("scroll", update);
+    update();
+  }
+  const CONTAINED = [
+    "click",
+    "dblclick",
+    "auxclick",
+    "contextmenu",
+    "pointerdown",
+    "pointerup",
+    "pointermove",
+    "pointercancel",
+    "mousedown",
+    "mouseup",
+    "touchstart",
+    "touchend",
+    "touchmove",
+    "touchcancel",
+    "wheel"
+  ];
+  function containEvents(target) {
+    const stop = (event) => event.stopPropagation();
+    for (const type of CONTAINED) target.addEventListener(type, stop, { passive: true });
+  }
   function uiRoot() {
     if (shadow) return shadow;
-    const host = document.createElement("div");
+    host = document.createElement("div");
     host.id = HOST_ID;
     host.dataset["version"] = scriptVersion();
     host.setAttribute(
@@ -3050,13 +3744,13 @@
       [
         "all: initial",
         "font: 14px/1.45 system-ui, -apple-system, 'Segoe UI', Roboto, Ubuntu, sans-serif",
-        "color: #1a1a1a",
+        "color: #09090b",
         "position: fixed",
         "top: 0",
         "left: 0",
         "width: 100%",
         "height: 100%",
-        "z-index: 2147483647",
+        `z-index: ${TOP}`,
         "pointer-events: none"
       ].map((rule) => `${rule} !important`).join(";")
     );
@@ -3065,12 +3759,146 @@
     sheet.textContent = `${styles}
 ${OVERLAY_CSS}`;
     shadow.appendChild(sheet);
-    document.documentElement.appendChild(host);
+    containEvents(host);
+    placeHost();
+    trackKeyboard(host);
+    for (const type of ["fullscreenchange", "webkitfullscreenchange"]) {
+      document.addEventListener(type, placeHost);
+    }
     return shadow;
   }
   function isOurs(node) {
     const element = node;
     return Boolean(element?.closest?.(`#${HOST_ID}`)) || element?.getRootNode?.() === shadow;
+  }
+  const COMPACT_QUERY = "(max-width: 640px), (pointer: coarse)";
+  const isCompact = () => window.matchMedia(COMPACT_QUERY).matches;
+  let menu = null;
+  let teardown = null;
+  function closeMenu() {
+    teardown?.();
+    teardown = null;
+    menu?.remove();
+    menu = null;
+  }
+  const isMenuOpen = () => menu !== null;
+  function buildItem(item) {
+    const entry = document.createElement("button");
+    entry.type = "button";
+    entry.className = "lt-menu-item";
+    entry.setAttribute("role", "menuitem");
+    entry.innerHTML = item.icon ? icon(item.icon) : '<span class="lt-icon"></span>';
+    const label = document.createElement("span");
+    label.textContent = item.label;
+    entry.appendChild(label);
+    if (item.disabled) entry.disabled = true;
+    const field = item.field;
+    if (!field) {
+      entry.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        closeMenu();
+        item.run();
+      });
+      return entry;
+    }
+    const group = document.createElement("div");
+    group.className = "lt-menu-ask";
+    const row = document.createElement("div");
+    row.className = "lt-field-row";
+    const input = document.createElement("input");
+    input.type = "text";
+    input.className = "lt-input";
+    input.value = field.value;
+    input.placeholder = field.placeholder;
+    input.setAttribute("aria-label", field.placeholder);
+    input.enterKeyHint = "send";
+    const send = document.createElement("button");
+    send.type = "button";
+    send.className = "lt-btn lt-primary lt-square";
+    send.setAttribute("aria-label", field.sendLabel);
+    send.innerHTML = icon("send");
+    row.append(input, send);
+    group.append(entry, row);
+    const submit = (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const text2 = input.value;
+      closeMenu();
+      field.submit(text2);
+    };
+    entry.addEventListener("click", submit);
+    send.addEventListener("click", submit);
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" && !event.isComposing) submit(event);
+    });
+    return group;
+  }
+  function openMenu(at, items, opener) {
+    closeMenu();
+    const compact = isCompact();
+    const element = document.createElement("div");
+    element.className = compact ? "lt-menu lt-sheet" : "lt-menu";
+    element.setAttribute("role", "menu");
+    for (const item of items) {
+      if (item.divider) {
+        const rule = document.createElement("div");
+        rule.className = "lt-menu-rule";
+        element.appendChild(rule);
+      }
+      element.appendChild(buildItem(item));
+    }
+    for (const type of ["keydown", "keyup", "keypress"]) {
+      element.addEventListener(type, (event) => {
+        if (event.key !== "Escape") event.stopPropagation();
+      });
+    }
+    let outer = element;
+    if (compact) {
+      const scrim = document.createElement("div");
+      scrim.className = "lt-scrim";
+      scrim.appendChild(element);
+      scrim.addEventListener("click", (event) => {
+        if (event.target !== scrim) return;
+        event.preventDefault();
+        event.stopPropagation();
+        closeMenu();
+      });
+      outer = scrim;
+    }
+    uiRoot().appendChild(outer);
+    menu = outer;
+    if (!compact) {
+      const box = element.getBoundingClientRect();
+      const left = Math.max(4, Math.min(at.left, window.innerWidth - box.width - 4));
+      const top = Math.max(4, Math.min(at.top, window.innerHeight - box.height - 4));
+      element.style.left = `${left}px`;
+      element.style.top = `${top}px`;
+    }
+    const away = (event) => {
+      const path = event.composedPath();
+      if (path.includes(element) || opener && path.includes(opener)) return;
+      closeMenu();
+    };
+    const escape = (event) => {
+      if (event.key !== "Escape") return;
+      event.stopPropagation();
+      closeMenu();
+    };
+    const scrolled = (event) => {
+      if (!isOurs(event.target)) closeMenu();
+    };
+    if (!compact) document.addEventListener("pointerdown", away, true);
+    document.addEventListener("keydown", escape, true);
+    if (!compact) window.addEventListener("scroll", scrolled, true);
+    window.addEventListener("blur", closeMenu);
+    teardown = () => {
+      document.removeEventListener("pointerdown", away, true);
+      document.removeEventListener("keydown", escape, true);
+      window.removeEventListener("scroll", scrolled, true);
+      window.removeEventListener("blur", closeMenu);
+    };
+    element.querySelector(".lt-menu-item:not(:disabled)")?.focus({ preventScroll: true });
   }
   let panel$1 = null;
   function drawOutlinePreview(canvas, scale) {
@@ -3183,16 +4011,16 @@ ${OVERLAY_CSS}`;
       select.value = String(settings2[field.key]);
       input = select;
     } else {
-      const control = document.createElement("input");
-      control.type = field.type;
-      if (field.step) control.step = field.step;
+      const control2 = document.createElement("input");
+      control2.type = field.type;
+      if (field.step) control2.step = field.step;
       if (field.type === "checkbox") {
-        control.checked = Boolean(settings2[field.key]);
+        control2.checked = Boolean(settings2[field.key]);
         row.classList.add("lt-row-check");
       } else {
-        control.value = field.key === "cacheBytes" ? String(Math.round(settings2.cacheBytes / (1024 * 1024) * 10) / 10) : String(settings2[field.key]);
+        control2.value = field.key === "cacheBytes" ? String(Math.round(settings2.cacheBytes / (1024 * 1024) * 10) / 10) : String(settings2[field.key]);
       }
-      input = control;
+      input = control2;
     }
     input.className = "lt-input";
     input.dataset["key"] = field.key;
@@ -3205,8 +4033,8 @@ ${OVERLAY_CSS}`;
     }
     return row;
   }
-  function buildActions() {
-    const commands2 = panelCommands();
+  function buildActions(pro) {
+    const commands2 = panelCommands().filter((command) => pro || command.essential);
     if (!commands2.length) return null;
     const fragment = document.createDocumentFragment();
     const heading = document.createElement("div");
@@ -3218,7 +4046,7 @@ ${OVERLAY_CSS}`;
     for (const command of commands2) {
       const button2 = document.createElement("button");
       button2.type = "button";
-      button2.className = "lt-btn lt-ghost";
+      button2.className = "lt-btn";
       button2.textContent = command.label;
       button2.addEventListener("click", () => {
         closeSettings();
@@ -3261,7 +4089,7 @@ ${OVERLAY_CSS}`;
     <div class="lt-panel" role="dialog" aria-label="Lens Translate settings">
       <header class="lt-panel-head">
         <strong>Lens Translate</strong>
-        <button class="lt-x" type="button" aria-label="Close">&times;</button>
+        <button class="lt-x" type="button" aria-label="Close" data-act="cancel">${icon("close")}</button>
       </header>
       <div class="lt-panel-body"></div>
       <footer class="lt-panel-foot">
@@ -3273,24 +4101,34 @@ ${OVERLAY_CSS}`;
     </div>`;
     panel$1 = backdrop;
     const body2 = backdrop.querySelector(".lt-panel-body");
-    if (body2) {
+    const fill = (draft) => {
+      if (!body2) return;
+      body2.textContent = "";
+      const pro = draft.uiMode === "pro";
       for (const group of GROUPS) {
-        const fields = FIELDS.filter((field) => field.group === group);
+        const fields = FIELDS.filter((field) => field.group === group && (pro || field.essential));
         if (!fields.length) continue;
         const heading = document.createElement("div");
         heading.className = "lt-group";
         heading.textContent = group;
         body2.appendChild(heading);
-        for (const field of fields) body2.appendChild(buildField(field, settings2));
+        for (const field of fields) body2.appendChild(buildField(field, draft));
       }
-      const actions = buildActions();
+      const actions = buildActions(pro);
       if (actions) body2.appendChild(actions);
-    }
+      if (!pro) {
+        const note = document.createElement("div");
+        note.className = "lt-note";
+        note.textContent = 'Switch Interface to "pro" for layout, legibility, caching and the rest.';
+        body2.appendChild(note);
+      }
+      body2.querySelector('[data-key="uiMode"]')?.addEventListener("change", () => fill({ ...draft, ...collect(backdrop) }));
+    };
+    fill(settings2);
     backdrop.addEventListener("click", (event) => {
       const target = event.target;
       if (target === backdrop) return closeSettings();
-      if (target.classList.contains("lt-x")) return closeSettings();
-      const action = target.dataset["act"];
+      const action = target.closest("[data-act]")?.dataset["act"];
       if (action === "cancel") return closeSettings();
       if (action === "save") {
         const saved = saveSettings(collect(backdrop));
@@ -3317,65 +4155,7 @@ ${OVERLAY_CSS}`;
     };
     document.addEventListener("keydown", onKey, true);
     uiRoot().appendChild(backdrop);
-    backdrop.querySelector(".lt-input")?.focus();
-  }
-  let menu = null;
-  let teardown = null;
-  function closeMenu() {
-    teardown?.();
-    teardown = null;
-    menu?.remove();
-    menu = null;
-  }
-  const isMenuOpen = () => menu !== null;
-  function openMenu(at, items, opener) {
-    closeMenu();
-    const element = document.createElement("div");
-    element.className = "lt-menu";
-    element.setAttribute("role", "menu");
-    for (const item of items) {
-      const entry = document.createElement("button");
-      entry.type = "button";
-      entry.className = "lt-menu-item";
-      entry.setAttribute("role", "menuitem");
-      entry.textContent = item.label;
-      if (item.disabled) entry.disabled = true;
-      entry.addEventListener("click", (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        closeMenu();
-        item.run();
-      });
-      element.appendChild(entry);
-    }
-    uiRoot().appendChild(element);
-    menu = element;
-    const box = element.getBoundingClientRect();
-    const left = Math.max(4, Math.min(at.left, window.innerWidth - box.width - 4));
-    const top = Math.max(4, Math.min(at.top, window.innerHeight - box.height - 4));
-    element.style.left = `${left}px`;
-    element.style.top = `${top}px`;
-    const away = (event) => {
-      const path = event.composedPath();
-      if (path.includes(element) || opener && path.includes(opener)) return;
-      closeMenu();
-    };
-    const escape = (event) => {
-      if (event.key !== "Escape") return;
-      event.stopPropagation();
-      closeMenu();
-    };
-    document.addEventListener("pointerdown", away, true);
-    document.addEventListener("keydown", escape, true);
-    window.addEventListener("scroll", closeMenu, true);
-    window.addEventListener("blur", closeMenu);
-    teardown = () => {
-      document.removeEventListener("pointerdown", away, true);
-      document.removeEventListener("keydown", escape, true);
-      window.removeEventListener("scroll", closeMenu, true);
-      window.removeEventListener("blur", closeMenu);
-    };
-    element.querySelector(".lt-menu-item:not(:disabled)")?.focus();
+    if (!isCompact()) backdrop.querySelector(".lt-input")?.focus();
   }
   let panel = null;
   let body = null;
@@ -3399,7 +4179,7 @@ ${OVERLAY_CSS}`;
     <div class="lt-panel lt-panel-report" role="dialog" aria-label="Lens Translate diagnostics">
       <header class="lt-panel-head">
         <strong>Diagnostics</strong>
-        <button class="lt-x" type="button" aria-label="Close">&times;</button>
+        <button class="lt-x" type="button" aria-label="Close" data-act="close">${icon("close")}</button>
       </header>
       <pre class="lt-report"></pre>
       <footer class="lt-panel-foot">
@@ -3413,8 +4193,9 @@ ${OVERLAY_CSS}`;
     body = backdrop.querySelector(".lt-report");
     if (body) body.textContent = text2;
     backdrop.addEventListener("click", (event) => {
-      const target = event.target;
-      if (target === backdrop || target.classList.contains("lt-x")) return closeReport();
+      if (event.target === backdrop) return closeReport();
+      const target = event.target.closest("[data-act]");
+      if (!target) return void 0;
       const action = target.dataset["act"];
       if (action === "close") return closeReport();
       if (action === "settings") {
@@ -3443,39 +4224,432 @@ ${OVERLAY_CSS}`;
     });
     uiRoot().appendChild(backdrop);
   }
-  const ICON = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="white" width="20" height="20"><path d="M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M12,4A8,8 0 0,1 20,12H18A6,6 0 0,0 12,6V4M12,8A4,4 0 0,1 16,12A4,4 0 0,1 12,16A4,4 0 0,1 8,12A4,4 0 0,1 12,8Z"/></svg>`;
-  const MORE = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="white" width="15" height="15"><path d="M6,10A2,2 0 0,0 4,12A2,2 0 0,0 6,14A2,2 0 0,0 8,12A2,2 0 0,0 6,10M12,10A2,2 0 0,0 10,12A2,2 0 0,0 12,14A2,2 0 0,0 14,12A2,2 0 0,0 12,10M18,10A2,2 0 0,0 16,12A2,2 0 0,0 18,14A2,2 0 0,0 20,12A2,2 0 0,0 18,10Z"/></svg>`;
-  const GEAR = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="white" width="15" height="15"><path d="M12,15.5A3.5,3.5 0 0,1 8.5,12A3.5,3.5 0 0,1 12,8.5A3.5,3.5 0 0,1 15.5,12A3.5,3.5 0 0,1 12,15.5M19.43,12.97C19.47,12.65 19.5,12.33 19.5,12C19.5,11.67 19.47,11.34 19.43,11L21.54,9.37C21.73,9.22 21.78,8.95 21.66,8.73L19.66,5.27C19.54,5.05 19.27,4.96 19.05,5.05L16.56,6.05C16.04,5.66 15.5,5.32 14.87,5.07L14.5,2.42C14.46,2.18 14.25,2 14,2H10C9.75,2 9.54,2.18 9.5,2.42L9.13,5.07C8.5,5.32 7.96,5.66 7.44,6.05L4.95,5.05C4.73,4.96 4.46,5.05 4.34,5.27L2.34,8.73C2.21,8.95 2.27,9.22 2.46,9.37L4.57,11C4.53,11.34 4.5,11.67 4.5,12C4.5,12.33 4.53,12.65 4.57,12.97L2.46,14.63C2.27,14.78 2.21,15.05 2.34,15.27L4.34,18.73C4.46,18.95 4.73,19.03 4.95,18.95L7.44,17.94C7.96,18.34 8.5,18.68 9.13,18.93L9.5,21.58C9.54,21.82 9.75,22 10,22H14C14.25,22 14.46,21.82 14.5,21.58L14.87,18.93C15.5,18.67 16.04,18.34 16.56,17.94L19.05,18.95C19.27,19.03 19.54,18.95 19.66,18.73L21.66,15.27C21.78,15.05 21.73,14.78 21.54,14.63L19.43,12.97Z"/></svg>`;
+  let active$1 = null;
+  function closeTool() {
+    active$1?.close();
+    active$1 = null;
+  }
+  function repositionTool() {
+    active$1?.reposition();
+  }
+  function openFrame(options, kind, onLayout) {
+    closeTool();
+    const first = options.rect();
+    if (!first) return null;
+    const root2 = uiRoot();
+    const layer = document.createElement("div");
+    layer.className = `lt-tool lt-tool-${kind}`;
+    const bar = document.createElement("div");
+    bar.className = "lt-bar";
+    bar.setAttribute("role", "toolbar");
+    let current = first;
+    const place2 = (rect) => {
+      current = rect;
+      layer.style.left = `${rect.left}px`;
+      layer.style.top = `${rect.top}px`;
+      layer.style.width = `${rect.width}px`;
+      layer.style.height = `${rect.height}px`;
+    };
+    place2(first);
+    const escape = (event) => {
+      if (event.key !== "Escape") return;
+      event.stopPropagation();
+      closeTool();
+    };
+    document.addEventListener("keydown", escape, true);
+    for (const type of ["keydown", "keyup", "keypress"]) {
+      bar.addEventListener(type, (event) => {
+        if (event.key !== "Escape") event.stopPropagation();
+      });
+    }
+    root2.append(layer, bar);
+    root2.host.setAttribute("data-tool", kind);
+    active$1 = {
+      close: () => {
+        document.removeEventListener("keydown", escape, true);
+        root2.host.removeAttribute("data-tool");
+        layer.remove();
+        bar.remove();
+      },
+      reposition: () => {
+        refresh2();
+      }
+    };
+    const mine = active$1;
+    const refresh2 = () => {
+      if (active$1 !== mine) return false;
+      const rect = options.rect();
+      if (!rect) {
+        closeTool();
+        return false;
+      }
+      place2(rect);
+      onLayout();
+      return true;
+    };
+    let typed = "";
+    const setBar = (content) => {
+      bar.textContent = "";
+      const text2 = document.createElement("div");
+      text2.className = "lt-bar-text";
+      if (content.busy) text2.innerHTML = icon("loader", 16);
+      text2.append(content.text);
+      bar.appendChild(text2);
+      let input = null;
+      if (content.input) {
+        input = document.createElement("input");
+        input.type = "text";
+        input.className = "lt-input";
+        input.placeholder = content.input.placeholder;
+        input.setAttribute("aria-label", content.input.placeholder);
+        input.value = typed;
+        const field = input;
+        field.addEventListener("input", () => {
+          typed = field.value;
+        });
+        bar.appendChild(input);
+      }
+      const row = document.createElement("div");
+      row.className = "lt-bar-buttons";
+      for (const button2 of content.buttons ?? []) {
+        const element = document.createElement("button");
+        element.type = "button";
+        element.className = button2.primary ? "lt-btn lt-primary" : "lt-btn";
+        element.innerHTML = button2.icon ? icon(button2.icon, 16) : "";
+        element.append(button2.label);
+        element.disabled = button2.disabled === true;
+        element.addEventListener("click", () => button2.run());
+        row.appendChild(element);
+      }
+      const close = document.createElement("button");
+      close.type = "button";
+      close.className = "lt-btn lt-ghost lt-square";
+      close.setAttribute("aria-label", "Close");
+      close.innerHTML = icon("close", 16);
+      close.addEventListener("click", closeTool);
+      row.appendChild(close);
+      bar.appendChild(row);
+      return input;
+    };
+    return { layer, size: () => current, refresh: refresh2, setBar };
+  }
+  function openRegionTool(options) {
+    let box = null;
+    const selection = document.createElement("div");
+    selection.className = "lt-sel";
+    selection.hidden = true;
+    const draw = () => {
+      if (!frame || !box) return;
+      const rect = boxToRect(box, frame.size());
+      selection.style.left = `${rect.left}px`;
+      selection.style.top = `${rect.top}px`;
+      selection.style.width = `${rect.width}px`;
+      selection.style.height = `${rect.height}px`;
+    };
+    const frame = openFrame(options, "region", draw);
+    if (!frame) return false;
+    frame.layer.appendChild(selection);
+    const idle = () => {
+      frame.setBar({ text: "Drag over the part of the picture to search" });
+    };
+    const chosen = () => {
+      const chosenBox = box;
+      if (!chosenBox) return;
+      const input = frame.setBar({
+        text: "Search this area",
+        input: { placeholder: "Add a question (optional)" },
+        buttons: [
+          {
+            label: "Search",
+            icon: "search",
+            primary: true,
+            run: () => send("visual")
+          },
+          { label: "Ask AI", icon: "sparkles", run: () => send("ai") }
+        ]
+      });
+      const send = (mode) => {
+        const text2 = input?.value.trim() ?? "";
+        closeTool();
+        options.onSearch(chosenBox, mode, text2);
+      };
+      input?.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" && !event.isComposing) send("visual");
+      });
+    };
+    idle();
+    let start = null;
+    let before = null;
+    const pictureOnScreen = () => frame.size();
+    frame.layer.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0) return;
+      if (!frame.refresh()) return;
+      event.preventDefault();
+      start = { x: event.clientX, y: event.clientY };
+      before = box;
+      try {
+        frame.layer.setPointerCapture(event.pointerId);
+      } catch {
+      }
+    });
+    frame.layer.addEventListener("pointermove", (event) => {
+      if (!start) return;
+      const dragged = dragToBox(start, { x: event.clientX, y: event.clientY }, pictureOnScreen());
+      if (!dragged) return;
+      box = dragged;
+      selection.hidden = false;
+      draw();
+    });
+    const finish = (event) => {
+      if (!start) return;
+      const released = boxAfterRelease(start, { x: event.clientX, y: event.clientY }, pictureOnScreen(), before);
+      start = null;
+      box = released.box;
+      if (!box) return;
+      selection.hidden = false;
+      draw();
+      if (released.changed) chosen();
+    };
+    frame.layer.addEventListener("pointerup", finish);
+    frame.layer.addEventListener("pointercancel", () => {
+      if (!start) return;
+      start = null;
+      box = before;
+      selection.hidden = !box;
+      draw();
+    });
+    return true;
+  }
+  function openObjectsTool(options) {
+    const dots = [];
+    const layout = () => {
+      if (!frame) return;
+      const size = frame.size();
+      for (const { object, dot, outline } of dots) {
+        if (!object.geometry) continue;
+        const centre = centreOf(object.geometry, size);
+        dot.style.left = `${centre.x}px`;
+        dot.style.top = `${centre.y}px`;
+        const rect = boxToRect(object.geometry, size);
+        outline.style.left = `${rect.left}px`;
+        outline.style.top = `${rect.top}px`;
+        outline.style.width = `${rect.width}px`;
+        outline.style.height = `${rect.height}px`;
+      }
+    };
+    const frame = openFrame(options, "objects", layout);
+    if (!frame) return false;
+    const mine = active$1;
+    const clear = () => {
+      for (const { dot, outline } of dots) {
+        dot.remove();
+        outline.remove();
+      }
+      dots.length = 0;
+    };
+    const show = (text2) => {
+      clear();
+      frame.setBar({ text: text2, busy: true });
+      void options.load().then((source) => {
+        if (active$1 !== mine) return;
+        if (!source) return closeTool();
+        const list = source.objects;
+        const found = list.filter((object) => object.geometry);
+        if (!found.length) {
+          frame.setBar({ text: "Lens found no separate objects in this picture" });
+          return void 0;
+        }
+        found.forEach((object, index) => {
+          const outline = document.createElement("div");
+          outline.className = "lt-objbox";
+          const dot = document.createElement("button");
+          dot.type = "button";
+          dot.className = "lt-dot";
+          dot.setAttribute("aria-label", `Search object ${index + 1}`);
+          dot.addEventListener("click", () => {
+            if (!objectsStillValid(source, list)) {
+              show("Looking for objects again...");
+              return;
+            }
+            closeTool();
+            options.onPick(source, object.id);
+          });
+          frame.layer.append(dot, outline);
+          dots.push({ object, dot, outline });
+        });
+        layout();
+        frame.setBar({ text: `Tap a dot to search that object (${found.length} found)` });
+        return void 0;
+      });
+    };
+    show("Looking for objects...");
+    return true;
+  }
+  function openTextTool(options) {
+    let items = pickables([]);
+    const picked = /* @__PURE__ */ new Set();
+    const words = [];
+    const layout = () => {
+      if (!frame) return;
+      const size = frame.size();
+      items.forEach((item, index) => {
+        const element = words[index];
+        if (!element) return;
+        const rect = boxToRect(item.geometry, size);
+        element.style.left = `${rect.left}px`;
+        element.style.top = `${rect.top}px`;
+        element.style.width = `${rect.width}px`;
+        element.style.height = `${rect.height}px`;
+        element.style.transform = item.geometry.angle ? `rotate(${item.geometry.angle}deg)` : "";
+      });
+    };
+    const frame = openFrame(options, "text", layout);
+    if (!frame) return false;
+    frame.setBar({ text: "Reading the text...", busy: true });
+    const mine = active$1;
+    const bar = () => {
+      const text2 = joinPicked(items, picked);
+      frame.setBar({
+        text: picked.size ? text2 : "Tap or drag across words to pick them",
+        buttons: [
+          {
+            label: picked.size === items.length ? "None" : "All",
+            run: () => {
+              const all2 = picked.size !== items.length;
+              items.forEach((_, index) => set(index, all2));
+              bar();
+            }
+          },
+          { label: "Copy", icon: "copy", disabled: !picked.size, run: () => options.onCopy(text2) },
+          {
+            label: "Search",
+            icon: "search",
+            primary: true,
+            disabled: !picked.size,
+            run: () => {
+              closeTool();
+              options.onSearch(text2);
+            }
+          }
+        ]
+      });
+    };
+    const set = (index, on) => {
+      if (on) picked.add(index);
+      else picked.delete(index);
+      words[index]?.classList.toggle("lt-on", on);
+    };
+    const wordAt = (x, y) => {
+      const hit = uiRoot().elementFromPoint(x, y);
+      return hit ? words.indexOf(hit) : -1;
+    };
+    let painting = null;
+    frame.layer.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0) return;
+      const index = wordAt(event.clientX, event.clientY);
+      if (index < 0) return;
+      event.preventDefault();
+      painting = !picked.has(index);
+      set(index, painting);
+      try {
+        frame.layer.setPointerCapture(event.pointerId);
+      } catch {
+      }
+    });
+    frame.layer.addEventListener("pointermove", (event) => {
+      if (painting === null) return;
+      const index = wordAt(event.clientX, event.clientY);
+      if (index >= 0) set(index, painting);
+    });
+    for (const type of ["pointerup", "pointercancel"]) {
+      frame.layer.addEventListener(type, () => {
+        if (painting === null) return;
+        painting = null;
+        bar();
+      });
+    }
+    void options.paragraphs.then((paragraphs) => {
+      if (active$1 !== mine) return;
+      if (!paragraphs) return closeTool();
+      items = pickables(paragraphs);
+      if (!items.length) {
+        frame.setBar({ text: "Lens found no text in this picture" });
+        return void 0;
+      }
+      for (const item of items) {
+        const element = document.createElement("div");
+        element.className = "lt-word";
+        element.title = item.text;
+        frame.layer.appendChild(element);
+        words.push(element);
+      }
+      layout();
+      bar();
+      return void 0;
+    });
+    return true;
+  }
   let settings = getSettings();
   let site = siteMode();
   const active = () => settings.enabled && site !== "off";
   setTransport(gmTransport);
   ignoreElements((element) => element.id === HOST_ID || isCover(element));
   const root = uiRoot();
-  const button = document.createElement("div");
-  button.id = "lt-button";
-  button.innerHTML = ICON;
-  button.title = "Translate the text in this image (click again to undo)";
-  root.appendChild(button);
-  const gear = document.createElement("div");
-  gear.id = "lt-gear";
-  gear.innerHTML = GEAR;
-  gear.title = "Lens Translate settings";
-  root.appendChild(gear);
-  const more = document.createElement("div");
-  more.id = "lt-more";
-  more.innerHTML = MORE;
-  more.title = "Copy text, undo, and more";
-  root.appendChild(more);
+  const controls = document.createElement("div");
+  controls.id = "lt-controls";
+  root.appendChild(controls);
+  function control(id, label, content) {
+    const element = document.createElement("div");
+    element.id = id;
+    element.innerHTML = content;
+    element.title = label;
+    element.setAttribute("role", "button");
+    element.setAttribute("aria-label", label);
+    return element;
+  }
+  const button = control(
+    "lt-button",
+    "Translate the text in this image (click again to undo)",
+    icon("translate") + icon("loader")
+  );
+  const gear = control("lt-gear", "Lens Translate settings", icon("settings", 16));
+  const more = control("lt-more", "Search, ask, copy and more", icon("more", 16));
+  controls.append(more, gear, button);
   const toastEl = document.createElement("div");
   toastEl.id = "lt-toast";
+  toastEl.setAttribute("role", "status");
   root.appendChild(toastEl);
   let toastTimer;
-  function toast(message, ms = 3200) {
-    toastEl.textContent = message;
+  function hideToast() {
+    window.clearTimeout(toastTimer);
+    toastEl.classList.remove("lt-show");
+  }
+  function toast(message, ms = 3200, link) {
+    toastEl.textContent = "";
+    const text2 = document.createElement("span");
+    text2.textContent = message;
+    toastEl.appendChild(text2);
+    if (link) {
+      const anchor = document.createElement("a");
+      anchor.className = "lt-btn lt-primary";
+      anchor.href = link.href;
+      anchor.target = "_blank";
+      anchor.rel = "noopener noreferrer";
+      anchor.innerHTML = icon("external", 16);
+      anchor.append(link.label);
+      anchor.addEventListener("click", hideToast);
+      const close = document.createElement("button");
+      close.type = "button";
+      close.className = "lt-btn lt-ghost lt-square";
+      close.setAttribute("aria-label", "Dismiss");
+      close.innerHTML = icon("close", 16);
+      close.addEventListener("click", hideToast);
+      toastEl.append(anchor, close);
+    }
+    toastEl.classList.toggle("lt-has-link", Boolean(link));
     toastEl.classList.add("lt-show");
     window.clearTimeout(toastTimer);
-    toastTimer = window.setTimeout(() => toastEl.classList.remove("lt-show"), ms);
+    if (ms > 0) toastTimer = window.setTimeout(hideToast, ms);
   }
   const busy = /* @__PURE__ */ new WeakSet();
   const showing = /* @__PURE__ */ new Map();
@@ -3491,8 +4665,10 @@ ${OVERLAY_CSS}`;
   const SWEEP_MS = 3e3;
   function sweep() {
     if (document.hidden) return;
+    tendHost();
     sweepCovers();
     sweepOverlays();
+    repositionTool();
     for (const img of [...showing.keys()]) {
       if (!img.isConnected || !isTranslated(img)) showing.delete(img);
     }
@@ -3559,8 +4735,8 @@ ${OVERLAY_CSS}`;
           }
         }
         if (!result) {
-          const upload = await encodeForUpload(prepared.source, settings);
-          result = await callLens(upload, settings);
+          const upload2 = await encodeForUpload(prepared.source, settings);
+          result = await callLens(upload2, settings);
           if (target.url) putCached(key, result, settings, size);
           void putStored(hash, result, settings);
         }
@@ -3735,45 +4911,30 @@ ${OVERLAY_CSS}`;
   let hideTimer;
   let gearTimer;
   const GEAR_DELAY_MS = 550;
-  function showGear(target, anchor) {
-    const rect = anchor ?? target.element.getBoundingClientRect();
-    gear.style.top = `${rect.top + 8}px`;
-    gear.style.left = `${rect.left + rect.width - 69}px`;
-    more.style.top = `${rect.top + 8}px`;
-    more.style.left = `${rect.left + rect.width - 101}px`;
-    for (const control of [gear, more]) {
-      control.style.opacity = "1";
-      control.style.transform = "scale(1)";
-      control.style.pointerEvents = "auto";
-    }
+  let extrasShown = false;
+  function showGear() {
+    extrasShown = true;
+    controls.classList.add("lt-extras");
   }
   function hideGear() {
     window.clearTimeout(gearTimer);
-    for (const control of [gear, more]) {
-      control.style.opacity = "0";
-      control.style.transform = "scale(0.9)";
-      control.style.pointerEvents = "none";
-    }
+    extrasShown = false;
+    controls.classList.remove("lt-extras");
   }
   function showButton(target, anchor) {
     if (!settings.showButton || site === "off") return;
     const img = target.element;
     currentTarget = target;
     const rect = anchor ?? img.getBoundingClientRect();
-    button.style.top = `${rect.top + 5}px`;
-    button.style.left = `${rect.left + rect.width - 37}px`;
-    button.style.opacity = "1";
-    button.style.transform = "scale(1)";
-    button.style.pointerEvents = "auto";
+    controls.style.top = `${rect.top + 6}px`;
+    controls.style.left = `${rect.left + rect.width - 6}px`;
+    controls.classList.add("lt-on");
     button.classList.toggle("lt-active", isTranslated(img));
     window.clearTimeout(gearTimer);
-    if (gear.style.opacity === "1") showGear(target);
-    else gearTimer = window.setTimeout(() => showGear(target), GEAR_DELAY_MS);
+    if (!extrasShown) gearTimer = window.setTimeout(showGear, GEAR_DELAY_MS);
   }
   function hideButton() {
-    button.style.opacity = "0";
-    button.style.transform = "scale(0.9)";
-    button.style.pointerEvents = "none";
+    controls.classList.remove("lt-on");
     hideGear();
     currentTarget = null;
   }
@@ -3843,7 +5004,7 @@ ${OVERLAY_CSS}`;
       }
       emptyRetries = 0;
       showButton(found.target, found);
-      showGear(found.target, found);
+      showGear();
     });
   }
   function onImageLoad(event) {
@@ -3904,9 +5065,9 @@ ${OVERLAY_CSS}`;
     },
     true
   );
-  for (const control of [button, gear, more]) {
-    control.addEventListener("mouseover", () => window.clearTimeout(hideTimer));
-    control.addEventListener("mouseout", () => {
+  for (const control2 of [button, gear, more]) {
+    control2.addEventListener("mouseover", () => window.clearTimeout(hideTimer));
+    control2.addEventListener("mouseout", () => {
       if (pinned) return;
       hideTimer = window.setTimeout(hideButton, 300);
     });
@@ -3919,6 +5080,10 @@ ${OVERLAY_CSS}`;
       await translate(classify(target.element) ?? target);
     }
   }
+  function showSettings() {
+    hideToast();
+    openSettings(onSaved);
+  }
   function onSaved(saved) {
     settings = saved;
     applyButtonMode();
@@ -3930,7 +5095,7 @@ ${OVERLAY_CSS}`;
     (event) => {
       event.preventDefault();
       event.stopPropagation();
-      openSettings(onSaved);
+      showSettings();
     },
     true
   );
@@ -3986,13 +5151,22 @@ ${OVERLAY_CSS}`;
       updatePinned();
       return;
     }
-    if (currentTarget?.element.isConnected) {
-      showButton(currentTarget);
-      if (gear.style.opacity === "1") showGear(currentTarget);
-    } else if (currentTarget) hideButton();
+    if (currentTarget?.element.isConnected) showButton(currentTarget);
+    else if (currentTarget) hideButton();
   }
-  window.addEventListener("resize", reposition);
-  window.addEventListener("scroll", reposition, true);
+  function moved() {
+    repositionTool();
+    reposition();
+  }
+  window.addEventListener("resize", moved);
+  window.addEventListener("scroll", moved, true);
+  for (const type of ["fullscreenchange", "webkitfullscreenchange"]) {
+    document.addEventListener(type, () => {
+      emptyRetries = 0;
+      if (watching) scheduleRefresh();
+      moved();
+    });
+  }
   function subject() {
     const current = currentTarget?.element;
     if (current && results.has(current)) return current;
@@ -4016,22 +5190,290 @@ ${OVERLAY_CSS}`;
       await copyText(text2) ? `Copied ${what} (${plural(text2.length, "character")})` : "The browser would not let the script use the clipboard"
     );
   }
+  const MAX_UPLOADS = 4;
+  const uploads = /* @__PURE__ */ new Map();
+  function stillShows(target) {
+    if (!target.url) return target.element.isConnected;
+    const now = classify(target.element);
+    return Boolean(now?.url) && cacheKey(now?.url ?? "", settings) === cacheKey(target.url, settings);
+  }
+  const CHANGED = "The picture changed while it was open; try again on the new one";
+  async function upload(target) {
+    if (!stillShows(target)) throw new Error(CHANGED);
+    const acquired = await acquireSource(target);
+    try {
+      const image = await encodeForUpload(acquired.source, settings);
+      return await ImageSearch.upload(image, settings);
+    } finally {
+      acquired.release();
+    }
+  }
+  function sessionFor(target) {
+    if (!target.url) return upload(target);
+    const key = cacheKey(target.url, settings);
+    const held = uploads.get(key);
+    if (held && (!held.search || held.search.fresh)) {
+      uploads.delete(key);
+      uploads.set(key, held);
+      return held.promise;
+    }
+    const entry = { promise: upload(target) };
+    uploads.set(key, entry);
+    entry.promise.then(
+      (search) => {
+        entry.search = search;
+      },
+      () => {
+        if (uploads.get(key) === entry) uploads.delete(key);
+      }
+    );
+    for (const oldest of uploads.keys()) {
+      if (uploads.size <= MAX_UPLOADS) break;
+      uploads.delete(oldest);
+    }
+    return entry.promise;
+  }
+  const onTouch = () => window.matchMedia(TOUCH_QUERY).matches;
+  const prefersDark = () => window.matchMedia("(prefers-color-scheme: dark)").matches;
+  const pageOptions = () => ({
+    uiLanguage: settings.targetLang,
+    dark: prefersDark()
+  });
+  function deliver(tab, url) {
+    if (tab.go(url)) toast("Results opened in a new tab", 9e3, { href: url, label: "Open again" });
+    else toast("The results are ready", 0, { href: url, label: "Open results" });
+  }
+  function searchPicture(target, pick, mode, text2, held) {
+    if (!stillShows(target)) {
+      closeTool();
+      toast(CHANGED);
+      return;
+    }
+    const tab = prepareTab(!onTouch());
+    setWorking(1);
+    button.classList.remove("lt-error");
+    toast(mode === "ai" ? "Asking Lens..." : "Searching with Lens...", 12e4);
+    void (async () => {
+      const search = held ?? await sessionFor(target);
+      let selection = pick;
+      if (pick.kind === "region") {
+        if (!stillShows(target)) throw new Error(CHANGED);
+        const acquired = await acquireSource(target);
+        try {
+          const crop = await encodeRegion(
+            { source: acquired.source, sourceWidth: acquired.width, sourceHeight: acquired.height },
+            pick.box,
+            settings
+          );
+          selection = { kind: "region", box: pick.box, crop };
+        } finally {
+          acquired.release();
+        }
+      }
+      return search.search(selection, { mode, text: text2, ...pageOptions() });
+    })().then(
+      (url) => deliver(tab, url),
+      (error) => {
+        tab.cancel();
+        lastFailure = error.message;
+        button.classList.add("lt-error");
+        toast(lensSaid(error), 5e3);
+        window.setTimeout(() => button.classList.remove("lt-error"), 3e3);
+      }
+    ).finally(() => setWorking(-1));
+  }
+  function openNow(url) {
+    deliver(prepareTab(true), url);
+  }
+  function naturalSize(target) {
+    const element = target.element;
+    if (target.kind === "img") {
+      const { naturalWidth, naturalHeight } = element;
+      return Promise.resolve(naturalWidth && naturalHeight ? { width: naturalWidth, height: naturalHeight } : null);
+    }
+    if (target.kind === "video") {
+      const { videoWidth, videoHeight } = element;
+      return Promise.resolve(videoWidth && videoHeight ? { width: videoWidth, height: videoHeight } : null);
+    }
+    if (target.kind === "canvas") {
+      const { width, height } = element;
+      return Promise.resolve(width && height ? { width, height } : null);
+    }
+    return new Promise((resolve2) => {
+      const probe2 = new Image();
+      probe2.onload = () => resolve2({ width: probe2.naturalWidth, height: probe2.naturalHeight });
+      probe2.onerror = () => resolve2(null);
+      probe2.src = target.url;
+    });
+  }
+  const px = (value) => Number.parseFloat(value) || 0;
+  function pictureRect(target, natural) {
+    const element = target.element;
+    if (!element.isConnected) return null;
+    const bounds = element.getBoundingClientRect();
+    if (!(bounds.width > 0 && bounds.height > 0)) return null;
+    const style = getComputedStyle(element);
+    const border = {
+      top: px(style.borderTopWidth),
+      right: px(style.borderRightWidth),
+      bottom: px(style.borderBottomWidth),
+      left: px(style.borderLeftWidth)
+    };
+    const outer = { left: bounds.left, top: bounds.top, width: bounds.width, height: bounds.height };
+    if (target.kind === "background") {
+      const spec = target.background;
+      if (!spec) return outer;
+      const padding = {
+        top: px(style.paddingTop),
+        right: px(style.paddingRight),
+        bottom: px(style.paddingBottom),
+        left: px(style.paddingLeft)
+      };
+      const area = spec.origin === "border-box" ? outer : spec.origin === "padding-box" ? insetRect(outer, border) : insetRect(insetRect(outer, border), padding);
+      const painted = paintRect(spec, area, natural);
+      return painted ? { left: area.left + painted.x, top: area.top + painted.y, width: painted.width, height: painted.height } : outer;
+    }
+    const content = insetRect(insetRect(outer, border), {
+      top: px(style.paddingTop),
+      right: px(style.paddingRight),
+      bottom: px(style.paddingBottom),
+      left: px(style.paddingLeft)
+    });
+    return fittedRect(content, natural, style.objectFit, style.objectPosition);
+  }
+  async function frameOf(target) {
+    const natural = await naturalSize(target);
+    if (!natural || !pictureRect(target, natural)) {
+      toast("This picture cannot be measured yet");
+      return null;
+    }
+    return () => pictureRect(target, natural);
+  }
+  function failed(error) {
+    lastFailure = error.message;
+    toast(lensSaid(error), 5e3);
+    return null;
+  }
+  const lensSaid = (error) => error.message === CHANGED ? CHANGED : `Lens: ${error.message}`;
+  async function selectArea(target) {
+    const rect = await frameOf(target);
+    if (!rect) return;
+    openRegionTool({
+      rect,
+      onSearch: (box, mode, text2) => searchPicture(target, { kind: "region", box }, mode, text2)
+    });
+  }
+  async function showObjects(target) {
+    const rect = await frameOf(target);
+    if (!rect) return;
+    openObjectsTool({
+      rect,
+      load: () => sessionFor(target).then((search) => search, failed),
+      onPick: (search, id) => searchPicture(target, { kind: "object", id }, "visual", "", search)
+    });
+  }
+  function readText(target) {
+    const held = results.get(target.element);
+    if (held?.ocr.length) return Promise.resolve(held.ocr);
+    return sessionFor(target).then((search) => search.result.ocr);
+  }
+  async function pickText(target) {
+    const rect = await frameOf(target);
+    if (!rect) return;
+    openTextTool({
+      rect,
+      paragraphs: readText(target).then((paragraphs) => paragraphs, failed),
+      onSearch: (text2) => openNow(textSearchUrl(text2, pageOptions())),
+      onCopy: (text2) => void copied(text2, "the selected text")
+    });
+  }
+  async function copied(text2, what) {
+    toast(
+      await copyText(text2) ? `Copied ${what} (${plural(text2.length, "character")})` : "The browser would not let the script use the clipboard"
+    );
+  }
+  async function copyAny(target) {
+    const result = results.get(target.element);
+    const translated = result ? translationText(result) : "";
+    if (translated) return copied(translated, "the translation");
+    let text2 = result ? ocrText(result) : "";
+    if (!text2) {
+      toast("Reading the text...", 12e4);
+      try {
+        text2 = (await readText(target)).map((paragraph) => paragraph.lines.map((line) => line.text.trim()).filter(Boolean).join("\n")).filter(Boolean).join("\n\n");
+      } catch (error) {
+        failed(error);
+        return void 0;
+      }
+    }
+    if (!text2) {
+      toast("Lens found no text in this image");
+      return void 0;
+    }
+    return copied(text2, "the text");
+  }
   function openActions() {
     const target = currentTarget;
     if (!target) return;
+    closeTool();
+    hideToast();
     const translated = isTranslated(target.element);
     const words = results.has(target.element);
-    const rect = more.getBoundingClientRect();
-    openMenu({ top: rect.bottom + 6, left: rect.right - 220 }, [
+    const pro = settings.uiMode === "pro";
+    const items = [
       {
-        label: translated ? "Show the original (undo)" : "Translate this image",
+        label: translated ? "Show the original" : "Translate this image",
+        icon: translated ? "undo" : "translate",
         run: () => void translate(target)
       },
-      { label: "Copy translation", run: () => void copyFrom("translation", target.element), disabled: !words },
-      { label: "Copy original text", run: () => void copyFrom("original", target.element), disabled: !words },
-      { label: "Translate everything in view", run: () => void translateVisible() },
-      { label: "Settings", run: () => openSettings(onSaved) }
-    ], more);
+      {
+        label: "Search this image",
+        icon: "search",
+        run: () => searchPicture(target, { kind: "image" }, "visual", "")
+      },
+      {
+        label: "Ask AI about it",
+        icon: "sparkles",
+        run: () => {
+        },
+        field: {
+          value: settings.aiPrompt,
+          placeholder: "Ask about this picture (optional)",
+          sendLabel: "Ask",
+          submit: (text2) => searchPicture(target, { kind: "image" }, "ai", text2.trim())
+        }
+      }
+    ];
+    if (pro) {
+      items.push(
+        { label: "Select an area", icon: "area", divider: true, run: () => void selectArea(target) },
+        { label: "Detected objects", icon: "objects", run: () => void showObjects(target) },
+        { label: "Search selected text", icon: "text", run: () => void pickText(target) },
+        {
+          label: "Copy translation",
+          icon: "copy",
+          divider: true,
+          run: () => void copyFrom("translation", target.element),
+          disabled: !words
+        },
+        {
+          label: "Copy original text",
+          icon: "copy",
+          run: () => void copyFrom("original", target.element),
+          disabled: !words
+        },
+        { label: "Translate everything in view", icon: "images", run: () => void translateVisible() }
+      );
+    } else {
+      items.push({
+        label: translated ? "Copy translation" : "Copy text",
+        icon: "copy",
+        run: () => void copyAny(target)
+      });
+    }
+    items.push({ label: "Settings", icon: "settings", divider: true, run: () => showSettings() });
+    const rect = more.getBoundingClientRect();
+    openMenu({ top: rect.bottom + 6, left: rect.right - 260 }, items, more);
   }
   const peek = (element, peeking) => peekCover(element, peeking) || peekOverlay(element, peeking);
   const HOLD_MS = 350;
@@ -4114,7 +5556,7 @@ ${OVERLAY_CSS}`;
     menuLabel: "Lens Translate: settings",
     // The panel is where these are drawn, so it does not offer to open itself.
     label: null,
-    run: () => openSettings(onSaved)
+    run: () => showSettings()
   });
   registerCommand({
     menuLabel: "Lens Translate: clear cache",
@@ -4134,6 +5576,7 @@ ${OVERLAY_CSS}`;
   registerCommand({
     menuLabel: "Lens Translate: undo all on this page",
     label: "Undo all on this page",
+    essential: true,
     run: () => {
       showing.clear();
       const restored = uncoverAll() + clearAllOverlays();
@@ -4166,14 +5609,15 @@ ${OVERLAY_CSS}`;
     }
     const started = syncWatchers();
     if (next === "auto" && !started) refresh();
-    const host = hostOf();
+    const host2 = hostOf();
     toast(
-      next === "off" ? `Lens Translate is off on ${host}` : next === "auto" ? `Images on ${host} will be translated as they come into view` : `${host} is back to the default`
+      next === "off" ? `Lens Translate is off on ${host2}` : next === "auto" ? `Images on ${host2} will be translated as they come into view` : `${host2} is back to the default`
     );
   }
   registerCommand({
     menuLabel: "Lens Translate: toggle on/off for this site",
     label: "Toggle for this site",
+    essential: true,
     run: () => chooseSite(site === "off" ? "default" : "off")
   });
   registerCommand({
@@ -4184,6 +5628,7 @@ ${OVERLAY_CSS}`;
   registerCommand({
     menuLabel: "Lens Translate: diagnostics",
     label: "Run diagnostics",
+    essential: true,
     run: openDiagnostics
   });
   registerCommand({
@@ -4211,7 +5656,7 @@ ${OVERLAY_CSS}`;
   function checkDebugHash() {
     if (window.location.hash === DEBUG_HASH) openDiagnostics();
   }
-  onReportSettings(() => openSettings(onSaved));
+  onReportSettings(() => showSettings());
   window.addEventListener("hashchange", checkDebugHash);
   applyButtonMode();
   checkDebugHash();

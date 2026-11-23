@@ -71,6 +71,9 @@ src/
     watch.ts            notices that a covered element is no longer that picture
     overlay.ts          the alternative DOM-lines renderer
   ui/                   shadow root, settings panel, menu, styles
+    geometry.ts         pure: object-fit rect, drag -> region, keyboard inset
+    tools.ts            the layer over a picture: area, objects, words
+    icons.ts            stroke icons as path data
 ```
 
 ## Things that are the way they are for a reason
@@ -540,6 +543,52 @@ upgrade, which would otherwise hang every caller waiting on the database.
 
 Downscaling is deterministic within a browser but not promised across versions.
 The worst an upgrade can do is miss and ask Lens again.
+
+### Searching, and the UI around it
+
+`lens/search.ts` is the engine half; `main.ts` keeps one `ImageSearch` per
+picture (keyed like the response cache, four at most, never for a canvas or a
+video) so a second search of the same picture is one request. `uiMode` decides
+only what is *shown*: `simple` is translate / search / ask / copy and six
+settings, `pro` adds the tools in `ui/tools.ts` and every field. A field or
+command marked `essential` is in both.
+
+- **A tab is asked for in the press and told where to go later.** The address
+  exists only after Lens answers, and a browser grants a tab only before the
+  first `await`. `gm.ts`'s `prepareTab` is called on the first line of the
+  handler and `go(url)` when the address arrives. With `GM_openInTab` nothing
+  happens until `go` - the host needs no gesture. Without it a blank tab is
+  pre-opened only where there is a mouse; on touch `go` answers false and the
+  toast carries a real `<a target=_blank>`, which is the one path known to work
+  on every phone host. That link is shown after a successful open as well: an
+  opener can report success and open nothing.
+- **`GM_openInTab(url, false)`, never an option bag.** Both signatures read the
+  second argument as "in the background", and an object is truthy.
+- **A sheet closes on the scrim's `click`, not on `pointerdown`.** Closed on the
+  press, the scrim is gone when the finger lifts and the click lands on the
+  page - on a reader, the page turns. Nothing closes on `resize` either: an
+  address bar sliding away fires one.
+- **`rem` in a shadow root is still the page's.** `--radius` is `8px`, not
+  `0.5rem`; a site with `html { font-size: 10px }` shrank every control.
+- **The keyboard is measured, not styled around.** Android Chrome shrinks only
+  the visual viewport, so a bottom sheet sits under the keyboard its own field
+  summons. `ui/root.ts` writes `--lt-kb` from `visualViewport`; sheets add it to
+  `bottom` and take it off a `max-height` in `svh`.
+- **Fullscreen renders one subtree.** The host moves into the fullscreen
+  element (into its shadow root, if it has one) on `fullscreenchange` and back
+  out after; an element that cannot show children (`<video>`) leaves it where
+  it was. `tendHost`, on the slow sweep, re-appends the host when a later
+  sibling ties its z-index - at most five times, in case the rival does the same.
+- **Layers over a picture use the picture's rectangle, not the element's.**
+  `pictureRect` in `main.ts` takes off border and padding and applies
+  `object-fit`/`object-position` (or `paintRect` for a background), because
+  everything Lens reports is a fraction of the picture.
+- **A region search must send the crop** (`encodeRegion`); with only the box
+  Lens answers about the whole picture.
+
+A trap in the browser test: an emulated touch drag lifted mid-flight starts a
+fling, and Chrome swallows the next tap as the one that stops it. Come to rest
+before `touchEnd` or the tap after a drag "does nothing".
 
 ### Deliberate departures from Chromium
 

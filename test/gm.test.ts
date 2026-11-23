@@ -16,6 +16,7 @@ const NO_HOST = {
   GM_getValue: undefined,
   GM_setValue: undefined,
   GM_info: undefined,
+  GM_openInTab: undefined,
   GM_registerMenuCommand: undefined,
   GM_setClipboard: undefined,
   GM_xmlhttpRequest: undefined,
@@ -201,7 +202,7 @@ interface Sent {
 }
 
 /** A GM_xmlhttpRequest that records what it was asked and answers from a script. */
-function fakeRequest(answers: Array<{ status: number; body?: number[] }>): {
+function fakeRequest(answers: Array<{ status: number; body?: number[]; headers?: string }>): {
   sent: Sent[];
   request: (options: Record<string, unknown>) => void;
 } {
@@ -217,7 +218,7 @@ function fakeRequest(answers: Array<{ status: number; body?: number[] }>): {
           status: answer?.status ?? 200,
           response: body,
           responseText: '',
-          responseHeaders: 'Content-Type: image/png\r\n',
+          responseHeaders: answer?.headers ?? 'Content-Type: image/png\r\n',
         })
       );
     },
@@ -249,6 +250,55 @@ describe('fetching an image', () => {
     expect(sent[0]?.headers).toEqual({});
   });
 
+  test('a redirect the host did not follow is followed by hand', async () => {
+    const page = Array.from(new TextEncoder().encode('<html><center>302 Found</center></html>'));
+    const { sent, request } = fakeRequest([
+      { status: 302, body: page, headers: 'Location: /real.png\r\nContent-Type: text/html\r\n' },
+      { status: 200 },
+    ]);
+    const gm = await loadWith({ GM_xmlhttpRequest: request });
+    const response = await gm.getBinary('https://cdn.example/a.png', 1000);
+    expect(sent.map((s) => s.url)).toEqual(['https://cdn.example/a.png', 'https://cdn.example/real.png']);
+    expect(Array.from(response.bytes)).toEqual([1, 2, 3]);
+    expect('location' in response).toBe(false);
+  });
+
+  test('a redirect page reported as a 200 with no headers is not taken for the picture', async () => {
+    const page = Array.from(new TextEncoder().encode('  <html>302 Found</html>'));
+    const { request } = fakeRequest([{ status: 200, body: page, headers: '' }]);
+    const gm = await loadWith({ GM_xmlhttpRequest: request });
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async () => {
+      throw new TypeError('Failed to fetch');
+    }) as unknown as typeof fetch;
+    try {
+      await expect(gm.getBinary('https://cdn.example/a.png', 1000)).rejects.toThrow('a web page, not a picture');
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
+  test('a page with nowhere to go is retried as a fetch, which follows redirects', async () => {
+    const page = Array.from(new TextEncoder().encode('<html>302 Found</html>'));
+    const { request } = fakeRequest([{ status: 200, body: page, headers: '' }]);
+    const gm = await loadWith({ GM_xmlhttpRequest: request });
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      new Response(new Uint8Array([7, 8]), { headers: { 'content-type': 'image/jpeg' } })) as unknown as typeof fetch;
+    try {
+      const response = await gm.getBinary('https://cdn.example/a.png', 1000);
+      expect(Array.from(response.bytes)).toEqual([7, 8]);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
+  test('a redirect loop ends', async () => {
+    const { request } = fakeRequest([{ status: 302, body: [], headers: 'Location: /again\r\n' }]);
+    const gm = await loadWith({ GM_xmlhttpRequest: request });
+    await expect(gm.getBinary('https://cdn.example/a.png', 1000)).rejects.toThrow('more than 5 times');
+  });
+
   test('the Lens POST is not given cookies or a Referer', async () => {
     const { sent, request } = fakeRequest([{ status: 200 }]);
     const gm = await loadWith({ GM_xmlhttpRequest: request });
@@ -260,7 +310,7 @@ describe('fetching an image', () => {
     });
     expect(sent[0]?.method).toBe('POST');
     expect(sent[0]?.headers).toEqual({ 'Content-Type': 'application/x-protobuf' });
-    expect(sent[0]?.anonymous).toBeUndefined();
+    expect(sent[0]?.anonymous).toBe(true);
   });
 });
 
@@ -300,5 +350,129 @@ describe('the body encoding ladder', () => {
       })
     ).rejects.toThrow(/HTTP 403/);
     expect(sent).toHaveLength(1);
+  });
+});
+
+describe('opening a tab for results that arrive later', () => {
+  interface FakeTab {
+    closed: boolean;
+    opener: unknown;
+    navigated: string[];
+    close(): void;
+    location: { replace(url: string): void };
+  }
+
+  // The other files' tests run in this process, and one of them decides where
+  // to install IndexedDB by whether there is a window.
+  afterEach(() => {
+    Reflect.deleteProperty(globalThis, 'window');
+  });
+
+  /** A page whose window.open is a spy handing back a controllable tab. */
+  function pageWindow(blocked = false): { opened: string[]; tab: FakeTab } {
+    const tab: FakeTab = {
+      closed: false,
+      opener: {},
+      navigated: [],
+      close() {
+        tab.closed = true;
+      },
+      // No document, as a tab that has gone cross-origin has none to give:
+      // this is the path that falls back to assigning the location.
+      location: { replace: (url: string) => void tab.navigated.push(url) },
+    };
+    const opened: string[] = [];
+    Object.assign(globalThis, {
+      window: {
+        open: (url: string) => {
+          opened.push(url);
+          return blocked ? null : tab;
+        },
+      },
+    });
+    return { opened, tab };
+  }
+
+  test('a host with GM_openInTab is used, in the foreground, and only once the address is known', async () => {
+    const page = pageWindow();
+    const calls: unknown[][] = [];
+    const gm = await loadWith({
+      GM_openInTab: (...args: unknown[]) => {
+        calls.push(args);
+        return { closed: false };
+      },
+    });
+
+    expect(gm.opensTabsItself()).toBe(true);
+    const tab = gm.prepareTab(true);
+    // Nothing is opened ahead of time: the host needs no gesture to spend.
+    expect(calls).toHaveLength(0);
+    expect(page.opened).toHaveLength(0);
+
+    expect(tab.go('https://www.google.com/search?q=1')).toBe(true);
+    // false is "not in the background" under both signatures; an option bag
+    // would be truthy, which Greasemonkey reads as the opposite.
+    expect(calls).toEqual([['https://www.google.com/search?q=1', false]]);
+    expect(page.opened).toHaveLength(0);
+  });
+
+  test('the GM4 spelling serves when it is the only one', async () => {
+    pageWindow();
+    const calls: unknown[][] = [];
+    const gm = await loadWith({ GM: { openInTab: (...args: unknown[]) => void calls.push(args) } });
+    // Nothing returned is not a refusal: some hosts return nothing at all.
+    expect(gm.prepareTab(false).go('https://example.com/r')).toBe(true);
+    expect(calls).toEqual([['https://example.com/r', false]]);
+  });
+
+  test('a host opener that refuses or throws answers false, so the caller shows a link', async () => {
+    const page = pageWindow();
+    const refused = await loadWith({ GM_openInTab: () => null });
+    expect(refused.prepareTab(true).go('https://example.com/r')).toBe(false);
+    const broken = await loadWith({
+      GM_openInTab: () => {
+        throw new Error('not implemented');
+      },
+    });
+    expect(broken.prepareTab(true).go('https://example.com/r')).toBe(false);
+    // And neither reached for window.open after the gesture was spent.
+    expect(page.opened).toHaveLength(0);
+  });
+
+  test('with no host opener a blank tab is opened at once and navigated later', async () => {
+    const page = pageWindow();
+    const gm = await loadWith({});
+    expect(gm.opensTabsItself()).toBe(false);
+
+    const tab = gm.prepareTab(true);
+    // Synchronously, inside what would be the click handler.
+    expect(page.opened).toEqual(['about:blank']);
+    expect(page.tab.opener).toBeNull();
+
+    expect(tab.go('https://www.google.com/search?q=2')).toBe(true);
+    expect(page.tab.navigated).toEqual(['https://www.google.com/search?q=2']);
+  });
+
+  test('without preopen nothing is opened and go answers false', async () => {
+    const page = pageWindow();
+    const gm = await loadWith({});
+    expect(gm.prepareTab(false).go('https://example.com/r')).toBe(false);
+    expect(page.opened).toHaveLength(0);
+  });
+
+  test('a blocked popup answers false', async () => {
+    pageWindow(true);
+    const gm = await loadWith({});
+    expect(gm.prepareTab(true).go('https://example.com/r')).toBe(false);
+  });
+
+  test('cancel closes the waiting tab, and a closed tab answers false', async () => {
+    const page = pageWindow();
+    const gm = await loadWith({});
+    const tab = gm.prepareTab(true);
+    tab.cancel();
+    expect(page.tab.closed).toBe(true);
+    expect(tab.go('https://example.com/r')).toBe(false);
+    expect(page.tab.navigated).toHaveLength(0);
   });
 });

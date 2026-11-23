@@ -1,49 +1,132 @@
 /* Lives inside a shadow root, so these selectors compete with nothing. The
    :host is a fixed, click-through, full-viewport layer; everything here is
-   positioned in viewport coordinates. */
+   positioned in viewport coordinates.
+
+   The look is shadcn/ui's: zinc neutrals named by role, one radius, hairline
+   borders, a ring on focus. Only the look - there is no framework behind it,
+   because this stylesheet is parsed on every page the script runs on. */
 
 :host {
-  font: 14px/1.45 system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
-  color: #1a1a1a;
+  --background: #ffffff;
+  --foreground: #09090b;
+  --muted: #f4f4f5;
+  --muted-foreground: #71717a;
+  --accent: #f4f4f5;
+  --border: #e4e4e7;
+  --input: #d4d4d8;
+  --ring: #a1a1aa;
+  --primary: #18181b;
+  --primary-foreground: #fafafa;
+  --destructive: #dc2626;
+  --success: #059669;
+  --shadow: 0 10px 30px -8px rgba(9, 9, 11, 0.28), 0 2px 6px -2px rgba(9, 9, 11, 0.12);
+  /* 0.5rem, written in pixels: inside a shadow root `rem` is still the page's
+     root font size, and a site that sets that to 10px would shrink every
+     corner and control here with it. */
+  --radius: 8px;
+  /* What the keyboard covers; ui/root.ts keeps it current where it can. */
+  --lt-kb: 0px;
+  /* A hundredth of the viewport, by the best unit this browser has. `svh` is
+     the height with the address bar showing, so a sheet sized by it does not
+     jump when the bar slides away; `dvh` follows the bar. */
+  --lt-svh: 1vh;
+  --lt-dvh: 1vh;
+
+  font: 14px/1.45 system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+  color: var(--foreground);
+}
+@supports (height: 1dvh) {
+  :host {
+    --lt-svh: 1svh;
+    --lt-dvh: 1dvh;
+  }
+}
+@media (prefers-color-scheme: dark) {
+  :host {
+    --background: #09090b;
+    --foreground: #fafafa;
+    --muted: #27272a;
+    --muted-foreground: #a1a1aa;
+    --accent: #27272a;
+    --border: #27272a;
+    --input: #3f3f46;
+    --ring: #71717a;
+    --primary: #fafafa;
+    --primary-foreground: #18181b;
+    --destructive: #ef4444;
+    --success: #10b981;
+    --shadow: 0 10px 30px -8px rgba(0, 0, 0, 0.7), 0 2px 6px -2px rgba(0, 0, 0, 0.5);
+  }
 }
 
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+.lt-icon {
+  display: block;
+  flex: none;
+  width: 18px;
+}
+.lt-icon-loader {
+  animation: lt-spin 0.9s linear infinite;
+}
+@keyframes lt-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ------------------------------------------------------------- controls */
+
+/* Hung from the picture's top right corner by its own right edge, so the row
+   can be any width: main.ts sets `left` to the corner and this pulls it back. */
+#lt-controls {
+  position: absolute;
+  z-index: 1;
+  display: flex;
+  gap: 4px;
+  transform: translateX(-100%);
+  pointer-events: none;
+}
 #lt-button,
 #lt-gear,
 #lt-more {
-  position: absolute;
   width: 32px;
   height: 32px;
-  background: rgba(0, 0, 0, 0.6);
-  border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
+  /* These sit on somebody's photograph, not on a surface of ours, so they do
+     not follow the theme: dark glass reads on any picture. */
+  background: rgba(9, 9, 11, 0.72);
+  color: #fafafa;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: var(--radius);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
   opacity: 0;
+  transform: scale(0.92);
   pointer-events: none;
   cursor: pointer;
-  transition: opacity 0.2s ease-in-out, transform 0.15s ease-in-out, background 0.2s;
-  transform: scale(0.9);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
-  border: 1px solid rgba(255, 255, 255, 0.2);
+  transition: opacity 0.15s, transform 0.15s, background 0.15s;
+  -webkit-tap-highlight-color: transparent;
+}
+#lt-controls.lt-on #lt-button,
+/* A beat after the main button, so a passing cursor does not summon three. */
+#lt-controls.lt-on.lt-extras #lt-gear,
+#lt-controls.lt-on.lt-extras #lt-more {
+  opacity: 1;
+  transform: none;
+  pointer-events: auto;
 }
 #lt-button:hover,
 #lt-gear:hover,
 #lt-more:hover {
-  background: rgba(0, 0, 0, 0.85);
-  transform: scale(1.05);
-}
-
-/* Appears a beat after the main button, so a passing cursor does not summon
-   two controls at once. */
-#lt-gear,
-#lt-more {
-  width: 26px;
-  height: 26px;
-}
-/* Held down to look at the original: the button says so by dimming. */
-#lt-button.lt-peeking {
-  background: rgba(60, 60, 60, 0.9);
-  box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.55);
+  background: rgba(9, 9, 11, 0.92);
 }
 /* Held down to peek, and on a touch screen a long press: the browser must not
    take either for a scroll or a text selection. */
@@ -53,108 +136,286 @@
   user-select: none;
   -webkit-touch-callout: none;
 }
-#lt-button.lt-busy svg {
-  animation: lt-spin 1s linear infinite;
+/* Held down to look at the original: the button says so with a ring. */
+#lt-button.lt-peeking {
+  box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.6);
+}
+#lt-button .lt-icon-loader,
+#lt-button.lt-busy .lt-icon-translate {
+  display: none;
+}
+#lt-button.lt-busy .lt-icon-loader {
+  display: block;
 }
 #lt-button.lt-active {
-  background: rgba(20, 110, 60, 0.9);
+  background: var(--success);
+  border-color: transparent;
 }
 #lt-button.lt-error {
-  background: rgba(170, 30, 30, 0.9);
+  background: var(--destructive);
+  border-color: transparent;
 }
-@keyframes lt-spin {
-  to {
-    transform: rotate(360deg);
-  }
+
+/* -------------------------------------------------------- buttons, fields */
+
+.lt-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 36px;
+  padding: 0 14px;
+  font: inherit;
+  font-weight: 500;
+  white-space: nowrap;
+  text-decoration: none;
+  color: var(--foreground);
+  background: var(--background);
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) - 2px);
+  box-shadow: 0 1px 2px rgba(9, 9, 11, 0.05);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.lt-btn:hover {
+  background: var(--accent);
+}
+.lt-btn.lt-primary {
+  color: var(--primary-foreground);
+  background: var(--primary);
+  border-color: transparent;
+}
+.lt-btn.lt-primary:hover {
+  opacity: 0.9;
+}
+.lt-btn.lt-ghost {
+  border-color: transparent;
+  box-shadow: none;
+  background: transparent;
+}
+.lt-btn.lt-ghost:hover {
+  background: var(--accent);
+}
+.lt-btn.lt-square {
+  width: 36px;
+  padding: 0;
+  flex: none;
+}
+.lt-btn:disabled {
+  opacity: 0.5;
+  pointer-events: none;
+}
+.lt-btn:focus-visible,
+.lt-x:focus-visible,
+.lt-dot:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.lt-input {
+  height: 36px;
+  min-width: 0;
+  width: 100%;
+  padding: 0 12px;
+  font: inherit;
+  color: var(--foreground);
+  background: var(--background);
+  border: 1px solid var(--input);
+  border-radius: calc(var(--radius) - 2px);
+  box-shadow: 0 1px 2px rgba(9, 9, 11, 0.05);
+}
+.lt-input::placeholder {
+  color: var(--muted-foreground);
+}
+.lt-input:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+.lt-input[type='checkbox'] {
+  justify-self: start;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  box-shadow: none;
+  accent-color: var(--primary);
 }
 
 /* ----------------------------------------------------------------- menu */
 
 .lt-menu {
   position: absolute;
-  min-width: 190px;
+  z-index: 4;
+  width: 260px;
   padding: 4px;
   display: flex;
   flex-direction: column;
-  background: #fff;
-  color: #1a1a1a;
-  border-radius: 10px;
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
-  border: 1px solid rgba(0, 0, 0, 0.12);
+  color: var(--foreground);
+  background: var(--background);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
   pointer-events: auto;
 }
 .lt-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 36px;
+  padding: 6px 10px;
   font: inherit;
   text-align: left;
-  padding: 8px 12px;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
   color: inherit;
+  background: transparent;
+  border: 0;
+  border-radius: calc(var(--radius) - 4px);
   cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
 }
+.lt-menu-item .lt-icon {
+  color: var(--muted-foreground);
+}
+/* The item the keyboard is on is highlighted like the one the cursor is on,
+   not ringed: the first item is focused when the menu opens, and a ring there
+   reads as a selection nobody made. */
 .lt-menu-item:hover:not(:disabled),
 .lt-menu-item:focus-visible {
-  background: #eaeaea;
+  background: var(--accent);
   outline: none;
 }
 .lt-menu-item:disabled {
-  color: #909090;
+  color: var(--muted-foreground);
+  opacity: 0.6;
   cursor: default;
 }
-@media (prefers-color-scheme: dark) {
-  .lt-menu {
-    background: #1f1f22;
-    color: #ececec;
-    border-color: #35353a;
-  }
-  .lt-menu-item:hover:not(:disabled),
-  .lt-menu-item:focus-visible {
-    background: #3a3a40;
-  }
-  .lt-menu-item:disabled {
-    color: #7c7c84;
-  }
+.lt-menu-rule {
+  height: 1px;
+  margin: 4px -4px;
+  background: var(--border);
 }
+/* The item and the field under it are one thing to ask. */
+.lt-field-row {
+  display: flex;
+  gap: 6px;
+  padding: 2px 6px 6px 38px;
+}
+
+/* A sheet has to sit on something that takes the press meant to dismiss it. */
+.lt-scrim {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  background: rgba(9, 9, 11, 0.5);
+  pointer-events: auto;
+}
+.lt-menu.lt-sheet {
+  left: 0;
+  right: 0;
+  bottom: var(--lt-kb);
+  width: auto;
+  max-width: 560px;
+  margin: 0 auto;
+  max-height: calc(var(--lt-svh) * 100 - var(--lt-kb) - 24px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 8px max(8px, env(safe-area-inset-right, 0px)) calc(8px + env(safe-area-inset-bottom, 0px))
+    max(8px, env(safe-area-inset-left, 0px));
+  border-width: 1px 0 0;
+  border-radius: 14px 14px 0 0;
+}
+/* The handle a sheet is expected to have; it says "this slides", nothing more. */
+.lt-menu.lt-sheet::before {
+  content: '';
+  flex: none;
+  align-self: center;
+  width: 40px;
+  height: 4px;
+  margin: 0 0 6px;
+  border-radius: 2px;
+  background: var(--input);
+}
+.lt-sheet .lt-menu-item {
+  min-height: 48px;
+  padding: 8px 12px;
+  gap: 14px;
+  font-size: 16px;
+}
+.lt-sheet .lt-menu-item .lt-icon {
+  width: 20px;
+  height: 20px;
+}
+.lt-sheet .lt-field-row {
+  padding: 2px 8px 8px 46px;
+}
+.lt-sheet .lt-menu-rule {
+  margin: 4px 0;
+}
+
+/* ---------------------------------------------------------------- toast */
 
 #lt-toast {
   position: absolute;
-  bottom: 16px;
+  z-index: 6;
   left: 50%;
+  bottom: calc(16px + var(--lt-kb) + env(safe-area-inset-bottom, 0px));
   transform: translateX(-50%);
-  background: rgba(0, 0, 0, 0.88);
-  color: #fff;
-  padding: 8px 16px;
-  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: min(520px, calc(100% - 24px));
+  padding: 10px 14px;
   font-size: 13px;
+  color: var(--foreground);
+  background: var(--background);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
   pointer-events: none;
   opacity: 0;
-  transition: opacity 0.2s;
-  max-width: 70vw;
+  visibility: hidden;
+  transition: opacity 0.2s, visibility 0.2s;
 }
 #lt-toast.lt-show {
   opacity: 1;
+  visibility: visible;
+}
+/* A message with a link in it is something to press. */
+#lt-toast.lt-show.lt-has-link {
+  pointer-events: auto;
+  padding: 8px 8px 8px 14px;
+}
+#lt-toast > span {
+  flex: 1;
+  min-width: 0;
+}
+/* While a tool's bar has the bottom of the screen, messages go to the top. */
+:host([data-tool]) #lt-toast {
+  bottom: auto;
+  top: calc(12px + env(safe-area-inset-top, 0px));
 }
 
-/* ------------------------------------------------------------- settings */
+/* --------------------------------------------------------------- panels */
 
 .lt-panel-backdrop {
   position: absolute;
   inset: 0;
-  background: rgba(0, 0, 0, 0.5);
+  z-index: 5;
   display: flex;
   align-items: center;
   justify-content: center;
+  background: rgba(9, 9, 11, 0.5);
   pointer-events: auto;
 }
 .lt-panel {
-  background: #fff;
   width: min(560px, 92vw);
-  max-height: 86vh;
+  max-height: calc(var(--lt-dvh) * 86);
   display: flex;
   flex-direction: column;
-  border-radius: 12px;
-  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.4);
+  color: var(--foreground);
+  background: var(--background);
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) + 4px);
+  box-shadow: var(--shadow);
   overflow: hidden;
 }
 .lt-panel-head,
@@ -166,20 +427,39 @@
   flex: none;
 }
 .lt-panel-head {
-  border-bottom: 1px solid #e6e6e6;
+  border-bottom: 1px solid var(--border);
   justify-content: space-between;
   font-size: 15px;
   font-weight: 600;
+  padding-right: 10px;
 }
 .lt-panel-foot {
-  border-top: 1px solid #e6e6e6;
+  border-top: 1px solid var(--border);
 }
 .lt-spacer {
   flex: 1;
 }
 .lt-panel-body {
-  padding: 10px 18px 16px;
+  padding: 8px 18px 16px;
   overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.lt-x {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  color: var(--muted-foreground);
+  background: transparent;
+  border: 0;
+  border-radius: calc(var(--radius) - 2px);
+  cursor: pointer;
+}
+.lt-x:hover {
+  color: var(--foreground);
+  background: var(--accent);
 }
 
 .lt-row {
@@ -190,88 +470,12 @@
   padding: 7px 0;
 }
 .lt-label {
-  color: #333;
+  font-weight: 500;
 }
 .lt-hint {
   grid-column: 2;
-  color: #808080;
+  color: var(--muted-foreground);
   font-size: 12px;
-}
-.lt-input {
-  font: inherit;
-  padding: 7px 9px;
-  border: 1px solid #ccc;
-  border-radius: 6px;
-  background: #fff;
-  color: #1a1a1a;
-  min-width: 0;
-  width: 100%;
-  box-sizing: border-box;
-}
-.lt-input[type='checkbox'] {
-  justify-self: start;
-  width: 17px;
-  height: 17px;
-  padding: 0;
-}
-.lt-x {
-  border: 0;
-  background: transparent;
-  font-size: 22px;
-  line-height: 1;
-  cursor: pointer;
-  color: #666;
-  padding: 0 4px;
-}
-.lt-btn {
-  font: inherit;
-  padding: 7px 15px;
-  border-radius: 7px;
-  cursor: pointer;
-  border: 1px solid #ccc;
-  background: #f5f5f5;
-  color: #1a1a1a;
-}
-.lt-btn.lt-primary {
-  background: #1a73e8;
-  border-color: #1a73e8;
-  color: #fff;
-}
-.lt-btn.lt-ghost:hover {
-  background: #eaeaea;
-}
-
-@media (prefers-color-scheme: dark) {
-  .lt-panel {
-    background: #1f1f22;
-    color: #ececec;
-  }
-  .lt-panel-head,
-  .lt-panel-foot {
-    border-color: #35353a;
-  }
-  .lt-label {
-    color: #d6d6d6;
-  }
-  .lt-hint {
-    color: #9a9a9a;
-  }
-  .lt-input {
-    background: #2a2a2e;
-    border-color: #45454c;
-    color: #ececec;
-  }
-  .lt-btn {
-    background: #2e2e33;
-    border-color: #45454c;
-    color: #ececec;
-  }
-  .lt-btn.lt-ghost:hover {
-    background: #3a3a40;
-  }
-  .lt-x {
-    color: #bbb;
-  }
 }
 
 /* Outline slider with its live sample. */
@@ -284,54 +488,39 @@
 .lt-slider input[type='range'] {
   flex: 1;
   width: auto;
+  height: 24px;
   padding: 0;
   border: 0;
+  box-shadow: none;
   background: transparent;
-  accent-color: #1a73e8;
+  accent-color: var(--primary);
 }
 .lt-readout {
   min-width: 42px;
   text-align: right;
   font-variant-numeric: tabular-nums;
-  color: #666;
+  color: var(--muted-foreground);
 }
 .lt-preview {
   grid-column: 2;
   width: 100%;
   height: auto;
-  border-radius: 6px;
-  border: 1px solid #ddd;
+  border-radius: calc(var(--radius) - 2px);
+  border: 1px solid var(--border);
   margin-top: 6px;
-}
-@media (prefers-color-scheme: dark) {
-  .lt-readout {
-    color: #aaa;
-  }
-  .lt-preview {
-    border-color: #45454c;
-  }
 }
 
 /* Section headings. */
 .lt-group {
-  grid-column: 1 / -1;
-  margin: 16px 0 4px;
-  padding-bottom: 5px;
-  border-bottom: 1px solid #e6e6e6;
-  font-size: 11px;
+  margin: 18px 0 4px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
   font-weight: 600;
-  letter-spacing: 0.07em;
-  text-transform: uppercase;
-  color: #888;
+  color: var(--muted-foreground);
 }
 .lt-group:first-child {
-  margin-top: 4px;
-}
-@media (prefers-color-scheme: dark) {
-  .lt-group {
-    border-color: #35353a;
-    color: #8c8c96;
-  }
+  margin-top: 6px;
 }
 
 /* Menu commands, for a host that has no menu of its own. */
@@ -339,23 +528,15 @@
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  padding: 4px 0 0;
+  padding: 6px 0 0;
 }
 .lt-note {
-  color: #808080;
+  color: var(--muted-foreground);
   font-size: 12px;
-  padding-top: 8px;
-}
-@media (prefers-color-scheme: dark) {
-  .lt-note {
-    color: #9a9a9a;
-  }
+  padding-top: 10px;
 }
 
 /* The diagnostics report: fixed width, so columns line up as written. */
-.lt-panel-report {
-  max-width: 560px;
-}
 .lt-report {
   margin: 0;
   padding: 14px 18px;
@@ -365,6 +546,251 @@
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 12px;
   line-height: 1.5;
+  color: var(--foreground);
+  background: var(--muted);
   user-select: text;
   -webkit-user-select: text;
+}
+
+/* ---------------------------------------------------------------- tools */
+
+/* The layer over a picture while an area, an object or words are being
+   chosen. It scrolls by default: a webtoon page is taller than the screen,
+   and a layer that swallowed every pan would strand the reader halfway down
+   it with only the close button for a way out. Only a gesture that has to be
+   a drag locks the page - see the region layer and the words. */
+.lt-tool {
+  position: absolute;
+  z-index: 2;
+  overflow: hidden;
+  background: rgba(9, 9, 11, 0.2);
+  outline: 2px solid rgba(255, 255, 255, 0.85);
+  outline-offset: -2px;
+  pointer-events: auto;
+  touch-action: pan-x pan-y;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+/* Dragging out a rectangle is the whole of this tool; without `none` the
+   finger scrolls the page instead. */
+.lt-tool-region {
+  cursor: crosshair;
+  touch-action: none;
+}
+/* The chosen area is the one part left undimmed; the shadow is the dimming,
+   clipped by the layer so it stops at the picture's edge. */
+.lt-sel {
+  position: absolute;
+  border: 2px solid #fff;
+  border-radius: 4px;
+  box-shadow: 0 0 0 9999px rgba(9, 9, 11, 0.45);
+  pointer-events: none;
+}
+.lt-sel[hidden] {
+  display: none;
+}
+
+/* A dot is 16px to look at and 44px to hit. */
+.lt-dot {
+  position: absolute;
+  width: 44px;
+  height: 44px;
+  margin: -22px 0 0 -22px;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-radius: 50%;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.lt-dot::after {
+  content: '';
+  position: absolute;
+  inset: 14px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 0 0 3px rgba(9, 9, 11, 0.55), 0 1px 5px rgba(0, 0, 0, 0.6);
+  transition: transform 0.12s;
+}
+.lt-dot:hover::after,
+.lt-dot:focus-visible::after,
+.lt-dot:active::after {
+  transform: scale(1.3);
+}
+.lt-objbox {
+  position: absolute;
+  border: 2px solid #fff;
+  border-radius: 6px;
+  box-shadow: 0 0 0 1px rgba(9, 9, 11, 0.5);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s;
+}
+.lt-dot:hover + .lt-objbox,
+.lt-dot:focus-visible + .lt-objbox,
+.lt-dot:active + .lt-objbox {
+  opacity: 1;
+}
+
+/* A stroke that starts on a word is a drag across words and must not pan; one
+   that starts between them scrolls. touch-action is read from where the touch
+   lands, intersected up the tree, and settled before any pointer event - so it
+   has to be on the word itself; setting it from a handler is too late. */
+.lt-word {
+  position: absolute;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.28);
+  box-shadow: 0 0 0 1px rgba(9, 9, 11, 0.45);
+  cursor: pointer;
+  touch-action: none;
+}
+.lt-word.lt-on {
+  background: rgba(56, 189, 248, 0.5);
+  box-shadow: 0 0 0 2px #fff, 0 0 0 3px rgba(9, 9, 11, 0.6);
+}
+
+.lt-bar {
+  position: absolute;
+  z-index: 3;
+  left: 50%;
+  bottom: calc(16px + var(--lt-kb) + env(safe-area-inset-bottom, 0px));
+  transform: translateX(-50%);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  width: max-content;
+  max-width: min(720px, calc(100% - 24px));
+  padding: 8px 8px 8px 14px;
+  color: var(--foreground);
+  background: var(--background);
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) + 4px);
+  box-shadow: var(--shadow);
+  pointer-events: auto;
+}
+.lt-bar-text {
+  flex: 1 1 180px;
+  min-width: 0;
+  max-height: 2.9em;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.lt-bar .lt-input {
+  flex: 1 1 200px;
+  width: auto;
+}
+.lt-bar-buttons {
+  display: flex;
+  gap: 6px;
+  margin-left: auto;
+}
+
+/* ------------------------------------------------ a thumb, not a cursor */
+
+/* The same question ui/menu.ts asks. Narrow, or touched: either way the
+   targets are 44px, the fields are 16px so iOS does not zoom into them, and
+   whatever opens does so from the bottom edge, where the thumb already is. */
+@media (max-width: 640px), (pointer: coarse) {
+  #lt-button,
+  #lt-gear,
+  #lt-more {
+    width: 44px;
+    height: 44px;
+  }
+  #lt-controls {
+    gap: 6px;
+  }
+  .lt-btn,
+  .lt-input {
+    height: 44px;
+  }
+  .lt-btn.lt-square,
+  .lt-x {
+    width: 44px;
+    height: 44px;
+  }
+  .lt-input {
+    font-size: 16px;
+  }
+  .lt-input[type='checkbox'] {
+    width: 22px;
+    height: 22px;
+  }
+  .lt-slider input[type='range'] {
+    height: 44px;
+  }
+
+  .lt-panel-backdrop {
+    align-items: flex-end;
+  }
+  .lt-panel {
+    width: 100%;
+    max-width: 640px;
+    margin-bottom: var(--lt-kb);
+    max-height: calc(var(--lt-svh) * 100 - var(--lt-kb) - 24px);
+    border-width: 1px 0 0;
+    border-radius: 14px 14px 0 0;
+  }
+  .lt-panel-head,
+  .lt-panel-foot {
+    padding-left: max(14px, env(safe-area-inset-left, 0px));
+    padding-right: max(14px, env(safe-area-inset-right, 0px));
+  }
+  .lt-panel-head {
+    padding-right: max(6px, env(safe-area-inset-right, 0px));
+  }
+  .lt-panel-foot {
+    padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+  }
+  .lt-panel-body {
+    padding-left: max(14px, env(safe-area-inset-left, 0px));
+    padding-right: max(14px, env(safe-area-inset-right, 0px));
+  }
+  /* The label goes above its field: 190px of label leaves a phone no field. */
+  .lt-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 6px;
+    padding: 9px 0;
+  }
+  .lt-row.lt-row-check {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .lt-hint,
+  .lt-preview {
+    grid-column: 1 / -1;
+  }
+
+  .lt-bar {
+    left: max(8px, env(safe-area-inset-left, 0px));
+    right: max(8px, env(safe-area-inset-right, 0px));
+    bottom: calc(8px + var(--lt-kb) + env(safe-area-inset-bottom, 0px));
+    transform: none;
+    width: auto;
+    max-width: none;
+  }
+  .lt-bar .lt-input {
+    flex-basis: 100%;
+  }
+  #lt-toast {
+    left: max(8px, env(safe-area-inset-left, 0px));
+    right: max(8px, env(safe-area-inset-right, 0px));
+    transform: none;
+    max-width: none;
+    font-size: 14px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #lt-button,
+  #lt-gear,
+  #lt-more,
+  #lt-toast,
+  .lt-dot::after,
+  .lt-objbox {
+    transition: none;
+  }
 }

@@ -2,6 +2,7 @@ import {
   GM,
   GM_getValue,
   GM_info,
+  GM_openInTab,
   GM_registerMenuCommand,
   GM_setClipboard,
   GM_setValue,
@@ -183,6 +184,142 @@ export async function copyText(text: string): Promise<boolean> {
   }
 }
 
+// --- Opening a tab ----------------------------------------------------------
+
+/**
+ * A tab that is asked for now and told where to go later.
+ *
+ * A search's address exists only after Lens has answered, and by then the tap
+ * that asked for it is spent: a browser lets a page open a tab during a user
+ * gesture, before the first await, and calls anything later a popup. So the
+ * two halves are separate. `prepareTab` runs inside the tap handler,
+ * synchronously, and `go` runs when the address is known.
+ *
+ * Which half does the work depends on the host:
+ *
+ * - One with `GM_openInTab` opens tabs from its own privileged side, where no
+ *   gesture is needed, so nothing happens until `go`.
+ * - One without it has only `window.open`. With `preopen` the tab is opened
+ *   blank at once and navigated afterwards. Without, nothing is opened and
+ *   `go` answers false - which is the caller's cue to show the address as a
+ *   real link for the user to tap, the one way that is known to work
+ *   everywhere, a shadow root on a phone included.
+ *
+ * `preopen` is the caller's to decide because it is not free: on a phone the
+ * blank tab takes the screen for the length of an upload, and `window.open`
+ * on AdGuard for Android has never been seen to work at all. `go` answering
+ * false is always a possibility and the link is always the fallback.
+ */
+export interface PendingTab {
+  /** Send the tab to its address. False when no tab could be opened for it. */
+  go(url: string): boolean;
+  /** The address never came: close whatever was opened on its account. */
+  cancel(): void;
+}
+
+/**
+ * The host's own opener, under either name.
+ *
+ * The second argument is `false` and not an option bag on purpose. The legacy
+ * signature and the GM4 one both read it as "open in the background", and an
+ * object is truthy - so `{ active: true }` asks Greasemonkey for the opposite
+ * of what it says. `false` means the foreground to every host.
+ */
+function hostOpener(): ((url: string) => unknown) | null {
+  if (typeof GM_openInTab === 'function') return (url) => GM_openInTab(url, false);
+  if (typeof GM?.openInTab === 'function') return (url) => GM.openInTab(url, false);
+  return null;
+}
+
+/** Whether results can be opened with no gesture to spend, by the host itself. */
+export const opensTabsItself = (): boolean => hostOpener() !== null;
+
+function openWindow(url: string): Window | null {
+  try {
+    // Not `noopener` in the feature string: that makes the call return null
+    // whether or not it worked, and whether it worked is the whole question.
+    const tab = window.open(url, '_blank');
+    if (tab) {
+      try {
+        tab.opener = null;
+      } catch {
+        // Already navigated cross-origin; the address is Google's either way.
+      }
+    }
+    return tab ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Navigate a tab this page opened, without naming this page as where from.
+ *
+ * Assigning the tab's location makes this page the source of the navigation,
+ * so its origin goes out as the `Referer`. A link inside the blank tab makes
+ * the blank tab the source, and `noreferrer` on it sends none at all.
+ */
+function navigate(tab: Window, url: string): void {
+  try {
+    const link = tab.document.createElement('a');
+    link.href = url;
+    link.rel = 'noreferrer';
+    tab.document.body.appendChild(link);
+    link.click();
+  } catch {
+    tab.location.replace(url);
+  }
+}
+
+export function prepareTab(preopen: boolean): PendingTab {
+  const viaHost = hostOpener();
+  if (viaHost) {
+    return {
+      go(url) {
+        try {
+          const tab = viaHost(url) as { closed?: boolean } | null | false | undefined;
+          // Hosts return a tab control, a window, a promise or nothing at all.
+          // Only an explicit refusal is read as one.
+          return tab !== null && tab !== false && tab?.closed !== true;
+        } catch {
+          // A host that lists the function and cannot run it.
+          return false;
+        }
+      },
+      cancel() {},
+    };
+  }
+
+  const tab = preopen ? openWindow('about:blank') : null;
+  if (tab) {
+    try {
+      // A blank page for the length of an upload reads as something broken.
+      tab.document.title = 'Lens';
+      tab.document.body.textContent = 'Searching with Lens...';
+    } catch {
+      // Cosmetic.
+    }
+  }
+  return {
+    go(url) {
+      if (!tab || tab.closed) return false;
+      try {
+        navigate(tab, url);
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    cancel() {
+      try {
+        tab?.close();
+      } catch {
+        // Not ours to close any more.
+      }
+    },
+  };
+}
+
 // --- Commands ---------------------------------------------------------------
 
 export interface Command {
@@ -190,11 +327,14 @@ export interface Command {
   menuLabel: string;
   /** What our own panel shows, or null for one the panel makes redundant. */
   label: string | null;
+  /** Worth showing even in the panel's short form, where most are left out. */
+  essential?: boolean;
   run(): void;
 }
 
 export interface PanelCommand {
   label: string;
+  essential: boolean;
   run(): void;
 }
 
@@ -217,7 +357,9 @@ export function registerCommand(command: Command): void {
 export function panelCommands(): PanelCommand[] {
   const out: PanelCommand[] = [];
   for (const command of commands) {
-    if (command.label !== null) out.push({ label: command.label, run: command.run });
+    if (command.label !== null) {
+      out.push({ label: command.label, essential: command.essential === true, run: command.run });
+    }
   }
   return out;
 }
@@ -284,6 +426,14 @@ function contentTypeOf(headers: string | undefined): string {
   return match?.[1]?.trim() ?? '';
 }
 
+function locationOf(headers: string | undefined): string {
+  const match = /^location:\s*(.+)$/im.exec(headers ?? '');
+  return match?.[1]?.trim() ?? '';
+}
+
+/** A response, plus the one header a redirect needs. Never leaves this file. */
+type HostResponse = BinaryResponse & { location?: string };
+
 /**
  * A timeout, marked so the retry below can tell it apart.
  *
@@ -324,7 +474,7 @@ interface Attempt {
   timeoutMs: number;
 }
 
-function sendViaGm(attempt: Attempt): Promise<BinaryResponse> {
+function sendViaGm(attempt: Attempt): Promise<HostResponse> {
   return new Promise((resolve, reject) => {
     if (!request) {
       reject(new Error(`${hostName()} has no GM_xmlhttpRequest`));
@@ -339,10 +489,12 @@ function sendViaGm(attempt: Attempt): Promise<BinaryResponse> {
           reject(new Error(`${hostName()} returned a response this script cannot read`));
           return;
         }
+        const location = locationOf(response.responseHeaders);
         resolve({
           status: response.status,
           bytes,
           contentType: contentTypeOf(response.responseHeaders),
+          ...(location ? { location } : {}),
         });
       })();
     };
@@ -462,12 +614,12 @@ function ladder(hasBody: boolean, remember: boolean): Rung[] {
 /** The status a mangled body produces, and the only one worth another rung. */
 const BAD_REQUEST = 400;
 
-async function climb(attempt: Attempt, remember: boolean): Promise<BinaryResponse> {
+async function climb(attempt: Attempt, remember: boolean): Promise<HostResponse> {
   const failures: string[] = [];
 
   for (const rung of ladder(attempt.body !== null, remember)) {
     const next = { ...attempt, encoding: rung.encoding };
-    let response: BinaryResponse;
+    let response: HostResponse;
     try {
       response = rung.transport === 'fetch' ? await sendViaFetch(next) : await sendViaGm(next);
     } catch (error) {
@@ -495,15 +647,77 @@ async function climb(attempt: Attempt, remember: boolean): Promise<BinaryRespons
   throw new Error(failures.join('; ') || 'the request was never sent');
 }
 
+/**
+ * A POST to Lens. It carries no cookies: the API key is the whole of its
+ * authentication, and a host left to its default (Tampermonkey's sends them)
+ * would hand Google the user's session with every picture.
+ */
 export function postBinary(options: BinaryRequest): Promise<BinaryResponse> {
-  return climb({ ...options, method: 'POST', encoding: 'typed' }, true);
+  return climb({ ...options, method: 'POST', encoding: 'typed', withCookies: false }, true);
 }
 
-export function getBinary(
+/** Enough hops for a CDN's chain; more than that is a loop. */
+const MAX_REDIRECTS = 5;
+
+/** An HTML page where a picture was asked for: an error or a redirect page. */
+function isWebPage(response: BinaryResponse): boolean {
+  // An SVG starts with '<' too, and says what it is.
+  if (/^image\//i.test(response.contentType)) return false;
+  if (/text\/html/i.test(response.contentType)) return true;
+  for (const byte of response.bytes) {
+    if (byte === 0x20 || byte === 0x09 || byte === 0x0a || byte === 0x0d) continue;
+    return byte === 0x3c; // '<'
+  }
+  return false;
+}
+
+/**
+ * Fetch an image the way the page's own <img> would.
+ *
+ * AdGuard's GM_xmlhttpRequest does not follow redirects: an nginx "302 Found"
+ * page arrives as a successful response, sometimes with no headers at all, and
+ * it used to be handed on as if it were the picture. So a 3xx with a Location
+ * is followed here, by hand; and a web page with nowhere to go gets one try as
+ * an ordinary fetch, which does follow redirects (it works where the host
+ * sends CORS headers) - and otherwise an error that says what came back,
+ * rather than "could not decode the image" three steps later.
+ */
+export async function getBinary(
   url: string,
   timeoutMs: number,
   options: GetOptions = {}
 ): Promise<BinaryResponse> {
+  let current = url;
+  for (let hop = 0; hop <= MAX_REDIRECTS; hop += 1) {
+    const response = await getOnce(current, timeoutMs, options);
+    const redirected = response.status >= 300 && response.status < 400;
+    if ((redirected || isWebPage(response)) && response.location) {
+      current = new URL(response.location, current).href;
+      continue;
+    }
+    if (redirected || isWebPage(response)) {
+      try {
+        const page = await sendViaFetch({
+          method: 'GET',
+          url: current,
+          headers: {},
+          body: null,
+          encoding: 'typed',
+          timeoutMs,
+        });
+        if (page.status < 400 && !isWebPage(page)) return page;
+      } catch {
+        // CORS or the network; the error below is the more useful one.
+      }
+      throw new Error(`the image host answered with a web page, not a picture (HTTP ${response.status})`);
+    }
+    const { location: _location, ...plain } = response;
+    return plain;
+  }
+  throw new Error(`the image host redirected more than ${MAX_REDIRECTS} times`);
+}
+
+function getOnce(url: string, timeoutMs: number, options: GetOptions): Promise<HostResponse> {
   return climb(
     {
       method: 'GET',
@@ -560,6 +774,7 @@ export function hostFacts(): string[] {
       has('getValue', GM_getValue ?? GM?.getValue),
       has('setValue', GM_setValue ?? GM?.setValue),
       has('registerMenuCommand', GM_registerMenuCommand),
+      has('openInTab', GM_openInTab ?? GM?.openInTab),
     ].join(', '),
   ];
 }

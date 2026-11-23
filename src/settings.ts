@@ -44,6 +44,8 @@ export const DEFAULTS: Settings = {
   fitToBox: true,
   lineSpacing: 1.25,
   textAlign: 'auto',
+  uiMode: 'simple',
+  aiPrompt: 'What is in this picture?',
 };
 
 type FieldKind = 'text' | 'number' | 'checkbox' | 'select' | 'range';
@@ -54,6 +56,11 @@ export interface Field<K extends keyof Settings = keyof Settings> {
   type: FieldKind;
   /** Section heading this field is filed under in the panel. */
   group: string;
+  /**
+   * Shown in the simple interface too. Everything else is still in force
+   * there, at whatever it was last set to - only out of the way.
+   */
+  essential?: boolean;
   hint?: string;
   step?: string;
   min?: string;
@@ -64,6 +71,7 @@ export interface Field<K extends keyof Settings = keyof Settings> {
 }
 
 export const GROUPS = [
+  'Interface',
   'Languages',
   'Layout',
   'Erasing the original',
@@ -73,7 +81,22 @@ export const GROUPS = [
 ] as const;
 
 export const FIELDS: ReadonlyArray<Field> = [
-  { key: 'enabled', group: 'Behaviour', label: 'Translation enabled', type: 'checkbox' },
+  {
+    key: 'uiMode', group: 'Interface', essential: true,
+    label: 'Interface',
+    type: 'select',
+    options: [
+      ['simple', 'simple - translate, search, ask, copy'],
+      ['pro', 'pro - areas, objects, text picking, every setting'],
+    ],
+  },
+  {
+    key: 'aiPrompt', group: 'Interface',
+    label: 'Default AI question',
+    type: 'text',
+    hint: 'what the "Ask AI" field starts with; blank sends the picture alone',
+  },
+  { key: 'enabled', group: 'Behaviour', essential: true, label: 'Translation enabled', type: 'checkbox' },
   {
     key: 'renderMode', group: 'Behaviour',
     label: 'Render as',
@@ -83,9 +106,9 @@ export const FIELDS: ReadonlyArray<Field> = [
       ['overlay', 'overlay - crisp text, can drift on dynamic pages'],
     ],
   },
-  { key: 'targetLang', group: 'Languages', label: 'Translate to', type: 'select', options: languageOptions() },
+  { key: 'targetLang', group: 'Languages', essential: true, label: 'Translate to', type: 'select', options: languageOptions() },
   {
-    key: 'sourceLang', group: 'Languages',
+    key: 'sourceLang', group: 'Languages', essential: true,
     label: 'Translate from',
     type: 'select',
     options: languageOptions('Detect automatically'),
@@ -119,7 +142,7 @@ export const FIELDS: ReadonlyArray<Field> = [
     ],
   },
   {
-    key: 'mangaMode', group: 'Layout',
+    key: 'mangaMode', group: 'Layout', essential: true,
     label: 'Manga mode',
     type: 'checkbox',
     hint: 'always reflow vertical text, widen the layout area, bigger minimum size',
@@ -162,7 +185,7 @@ export const FIELDS: ReadonlyArray<Field> = [
     hint: 'thickens the outline behind translated text; 0 removes it',
   },
   { key: 'fontFamily', group: 'Layout', label: 'Font family', type: 'text', hint: 'blank = the page font' },
-  { key: 'showButton', group: 'Behaviour', label: 'Show the hover button', type: 'checkbox' },
+  { key: 'showButton', group: 'Behaviour', label: 'Show the button over images', type: 'checkbox' },
   {
     key: 'hotkey', group: 'Behaviour',
     label: 'Modifier + click',
@@ -238,7 +261,7 @@ export const FIELDS: ReadonlyArray<Field> = [
     hint: 'remembers what Lens said, so re-translating costs nothing; 0 disables',
   },
   {
-    key: 'buttonMode', group: 'Behaviour',
+    key: 'buttonMode', group: 'Behaviour', essential: true,
     label: 'When to show it',
     type: 'select',
     options: [
@@ -311,6 +334,7 @@ export function coerce(field: Field, raw: string | boolean): Settings[keyof Sett
     const value = Number(raw);
     return (value >= 1 && value <= 3 ? value : DEFAULTS.supersample) as Settings[keyof Settings];
   }
+  if (field.key === 'uiMode') return (raw === 'pro' ? 'pro' : 'simple') as Settings[keyof Settings];
   if (field.type === 'checkbox') return Boolean(raw) as Settings[keyof Settings];
   if (field.type === 'number' || field.type === 'range') {
     const value = Number(raw);

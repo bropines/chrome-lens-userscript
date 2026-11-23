@@ -1,3 +1,4 @@
+import { icon } from './icons.js';
 import { uiRoot } from './root.js';
 
 /**
@@ -41,7 +42,7 @@ export function openReport(text: string): void {
     <div class="lt-panel lt-panel-report" role="dialog" aria-label="Lens Translate diagnostics">
       <header class="lt-panel-head">
         <strong>Diagnostics</strong>
-        <button class="lt-x" type="button" aria-label="Close">&times;</button>
+        <button class="lt-x" type="button" aria-label="Close" data-act="close">${icon('close')}</button>
       </header>
       <pre class="lt-report"></pre>
       <footer class="lt-panel-foot">
@@ -56,8 +57,10 @@ export function openReport(text: string): void {
   if (body) body.textContent = text;
 
   backdrop.addEventListener('click', (event) => {
-    const target = event.target as HTMLElement;
-    if (target === backdrop || target.classList.contains('lt-x')) return closeReport();
+    if (event.target === backdrop) return closeReport();
+    // An icon inside a button is what the click lands on, not the button.
+    const target = (event.target as HTMLElement).closest<HTMLElement>('[data-act]');
+    if (!target) return undefined;
 
     const action = target.dataset['act'];
     if (action === 'close') return closeReport();

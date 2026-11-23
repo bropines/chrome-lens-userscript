@@ -10,7 +10,7 @@ import {
   clampBox,
   textSearchUrl,
 } from '../src/lens/search.js';
-import { setTransport } from '../src/transport.js';
+import { getTransport as getTransportForTest, setTransport } from '../src/transport.js';
 import type { BinaryRequest, Transport } from '../src/transport.js';
 import type { Bytes, LensOptions } from '../src/types.js';
 
@@ -200,6 +200,41 @@ describe('ImageSearch', () => {
     expect(text(object, F.LensOverlayInteractionRequestMetadata_SelectionMetadata_Object.objectId)).toBe('DetectedObject-1');
     // Each search is one more step on the same sequence.
     expect(num(requestIdOf(sent[3]!.body, 'interaction'), F.LensOverlayRequestId.sequenceId)).toBe(4);
+  });
+
+  test('two searches at once are numbered one after the other', async () => {
+    const sent = fakeLens();
+    const search = await ImageSearch.upload(image, settings);
+    const [a, b] = await Promise.all([search.search({ kind: 'image' }), search.search({ kind: 'object', id: 'x' })]);
+    expect([2, 3].map((i) => num(requestIdOf(sent[i]!.body, 'interaction'), F.LensOverlayRequestId.sequenceId))).toEqual([2, 4]);
+    expect([a, b].map((u) => num(vsridOf(u), F.LensOverlayRequestId.sequenceId))).toEqual([3, 5]);
+  });
+
+  test('a failed upload does not leave a session to search in', async () => {
+    let failUpload = false;
+    const sent = fakeLens();
+    const search = await ImageSearch.upload(image, settings);
+    const inner = getTransportForTest();
+    setTransport({
+      ...inner,
+      async post(request) {
+        if (failUpload && sub(decode(request.body), F.LensOverlayServerRequest.objectsRequest)) throw new Error('network');
+        return inner.post(request);
+      },
+    });
+    const realNow = Date.now;
+    try {
+      Date.now = () => realNow() + 31 * 60 * 1000;
+      failUpload = true;
+      await expect(search.search({ kind: 'image' })).rejects.toThrow('network');
+      failUpload = false;
+      const url = await search.search({ kind: 'image' });
+      // The second try opened a session again rather than searching the empty one.
+      expect(sent.filter((s) => s.url.endsWith('/gsessionid')).length).toBe(3);
+      expect(num(vsridOf(url), F.LensOverlayRequestId.sequenceId)).toBe(3);
+    } finally {
+      Date.now = realNow;
+    }
   });
 
   test('a server error on the interaction is an error, not a URL', async () => {

@@ -2,6 +2,8 @@ import { panelCommands } from '../gm.js';
 import { FIELDS, GROUPS, coerce, getSettings, resetSettings, saveSettings } from '../settings.js';
 import type { Field } from '../settings.js';
 import type { Settings } from '../types.js';
+import { icon } from './icons.js';
+import { isCompact } from './menu.js';
 import { uiRoot } from './root.js';
 
 type SavedHandler = (settings: Settings) => void;
@@ -182,8 +184,8 @@ function buildField(field: Field, settings: Settings): HTMLLabelElement {
  * undoing a page would otherwise be unreachable there. Hosts that do have one
  * get them in both places, which costs nothing and saves a trip to the toolbar.
  */
-function buildActions(): DocumentFragment | null {
-  const commands = panelCommands();
+function buildActions(pro: boolean): DocumentFragment | null {
+  const commands = panelCommands().filter((command) => pro || command.essential);
   if (!commands.length) return null;
 
   const fragment = document.createDocumentFragment();
@@ -197,7 +199,7 @@ function buildActions(): DocumentFragment | null {
   for (const command of commands) {
     const button = document.createElement('button');
     button.type = 'button';
-    button.className = 'lt-btn lt-ghost';
+    button.className = 'lt-btn';
     button.textContent = command.label;
     button.addEventListener('click', () => {
       // Undoing a page is invisible from behind the panel, and toggling the
@@ -249,7 +251,7 @@ export function openSettings(onSaved?: SavedHandler): void {
     <div class="lt-panel" role="dialog" aria-label="Lens Translate settings">
       <header class="lt-panel-head">
         <strong>Lens Translate</strong>
-        <button class="lt-x" type="button" aria-label="Close">&times;</button>
+        <button class="lt-x" type="button" aria-label="Close" data-act="cancel">${icon('close')}</button>
       </header>
       <div class="lt-panel-body"></div>
       <footer class="lt-panel-foot">
@@ -262,27 +264,50 @@ export function openSettings(onSaved?: SavedHandler): void {
   panel = backdrop;
 
   const body = backdrop.querySelector<HTMLDivElement>('.lt-panel-body');
-  if (body) {
+
+  /**
+   * Draw the fields for a set of values, the short list or the whole one.
+   *
+   * The simple interface shows a handful and leaves the rest alone: `collect`
+   * only reads inputs that exist, so a setting that is not on screen is not
+   * touched by Save. Switching the interface redraws at once, from what is in
+   * the form rather than what was last saved, so nothing typed is lost to
+   * having looked at the other list.
+   */
+  const fill = (draft: Settings): void => {
+    if (!body) return;
+    body.textContent = '';
+    const pro = draft.uiMode === 'pro';
     for (const group of GROUPS) {
-      const fields = FIELDS.filter((field) => field.group === group);
+      const fields = FIELDS.filter((field) => field.group === group && (pro || field.essential));
       if (!fields.length) continue;
       const heading = document.createElement('div');
       heading.className = 'lt-group';
       heading.textContent = group;
       body.appendChild(heading);
-      for (const field of fields) body.appendChild(buildField(field, settings));
+      for (const field of fields) body.appendChild(buildField(field, draft));
     }
-    const actions = buildActions();
+    const actions = buildActions(pro);
     if (actions) body.appendChild(actions);
-  }
+    if (!pro) {
+      const note = document.createElement('div');
+      note.className = 'lt-note';
+      note.textContent = 'Switch Interface to "pro" for layout, legibility, caching and the rest.';
+      body.appendChild(note);
+    }
+    body
+      .querySelector<HTMLSelectElement>('[data-key="uiMode"]')
+      ?.addEventListener('change', () => fill({ ...draft, ...collect(backdrop) }));
+  };
+  fill(settings);
 
   backdrop.addEventListener('click', (event) => {
     const target = event.target as HTMLElement;
     // Clicking the backdrop closes; clicking inside the card must not.
     if (target === backdrop) return closeSettings();
-    if (target.classList.contains('lt-x')) return closeSettings();
 
-    const action = target.dataset['act'];
+    // An icon inside a button is what the click lands on, not the button.
+    const action = target.closest<HTMLElement>('[data-act]')?.dataset['act'];
     if (action === 'cancel') return closeSettings();
     if (action === 'save') {
       const saved = saveSettings(collect(backdrop));
@@ -311,5 +336,6 @@ export function openSettings(onSaved?: SavedHandler): void {
   document.addEventListener('keydown', onKey, true);
 
   uiRoot().appendChild(backdrop);
-  backdrop.querySelector<HTMLElement>('.lt-input')?.focus();
+  // Focus is where a phone's keyboard goes, and nobody asked for it yet.
+  if (!isCompact()) backdrop.querySelector<HTMLElement>('.lt-input')?.focus();
 }

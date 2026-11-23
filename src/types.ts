@@ -117,6 +117,7 @@ export type VerticalTextMode = 'auto' | 'keep' | 'horizontal';
 export type HotkeyModifier = 'alt' | 'ctrl' | 'shift' | 'none';
 export type ButtonMode = 'auto' | 'hover' | 'pinned';
 export type PeekKey = 'off' | 'backquote' | 'shift' | 'control';
+export type UiMode = 'simple' | 'pro';
 
 /**
  * What is asked of Lens, and what is sent to ask it.
@@ -278,6 +279,16 @@ export interface AppSettings {
   /** Smallest rendered box, in CSS pixels, that counts as a picture. */
   minImageSize: number;
   renderMode: RenderMode;
+  /**
+   * How much of the script is put in front of the person using it.
+   *   'simple' - translate, search, ask, copy; a handful of settings.
+   *   'pro'    - also a region, Lens's detected objects, picking words out of
+   *              the recognised text, and every setting there is.
+   * Nothing is switched off by 'simple'; it only decides what is shown.
+   */
+  uiMode: UiMode;
+  /** The question the "ask AI" field starts out with. May be empty. */
+  aiPrompt: string;
 }
 
 export interface Settings extends EngineOptions, AppSettings {}

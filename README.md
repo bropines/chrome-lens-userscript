@@ -40,6 +40,28 @@ Alt+click an image, or use the button that appears when you hover one. Click aga
 | **Translate as you read** on one site | *Toggle auto-translate here* - every picture that scrolls into view is translated by itself, once: one that had no text is not asked about again, and one you undid stays undone |
 | Clear the cache, undo a whole page, switch everything off, run diagnostics | the menu, or **Actions** in the panel |
 
+### Search with the picture
+
+The menu (the `...` button) does more than translate. **Simple** mode, the default, keeps it to what anyone needs:
+
+| | what happens |
+|---|---|
+| **Search this image** | Google's Lens results open in a new tab: visual matches, exact matches, an AI overview, and a *Products* / *Shopping* tab where there is something to buy |
+| **Ask AI about it** | Google AI Mode opens with the picture attached and your question - prefilled, so one tap is enough |
+| Copy text | what Lens read, or the translation |
+
+**Pro** mode (*Interface* in settings) adds the precise tools, and shows every setting:
+
+| | what happens |
+|---|---|
+| **Select an area** | drag a box over the picture - finger, mouse or pen - then search it or ask AI about just that part. The crop is sent at full resolution, so small things stay legible |
+| **Detected objects** | the things Lens found are marked on the picture; tap one to search for it |
+| **Search selected text** | pick words Lens read and search them on Google - no picture is sent |
+
+Results always open in your own browser, signed in as you are. On a phone, where a new tab may only be opened by a tap, the button turns into an **Open results** link when they are ready. Searching sends the picture to Google, as translating does, and nothing else from the page.
+
+How the picture and the results page find each other is written up in [docs/lens-capabilities.md](docs/lens-capabilities.md), with what Lens can do that this script does not (yet).
+
 The per-site choice is per hostname (`www.` is the same site as the bare name) and is kept in the userscript manager's own storage, not the site's.
 
 Backgrounds work too, with a catch: a CSS `background-image` is only offered when it is painted once. A texture tiled behind the page, a sprite, an icon on a button are all `background-image` and none has text to translate, so a repeating background counts only when its size always fills the box (`cover`, or an explicit size at least as big), and one smaller than **Ignore images under** is ignored. The translation is laid where the browser painted the picture - honouring `background-size`, `-position`, `-origin` and `-clip` - and a layout it cannot follow (tiled, fixed to the viewport, clipped to text) is refused rather than guessed at. The `overlay` renderer cannot follow a background and says so.

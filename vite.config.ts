@@ -53,6 +53,11 @@ export default defineConfig({
           // For "copy translation" and "copy original text".
           'GM_setClipboard',
           'GM.setClipboard',
+          // Where a search's results open. A host's own opener needs no user
+          // gesture, which matters because the address is only known after
+          // Lens has answered; without it the results are offered as a link.
+          'GM_openInTab',
+          'GM.openInTab',
           'GM_registerMenuCommand',
           'GM_info',
           'unsafeWindow',

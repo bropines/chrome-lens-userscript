@@ -1,10 +1,13 @@
-import { copyText, gmTransport, preloadStored, registerCommand } from './gm.js';
+import { copyText, gmTransport, preloadStored, prepareTab, registerCommand } from './gm.js';
 import { setTransport } from './transport.js';
 import { diagnose } from './diagnose.js';
 
 import { callLens } from './lens/client.js';
+import { ImageSearch, textSearchUrl } from './lens/search.js';
+import type { Selection } from './lens/search.js';
 import { ocrText, translationText } from './lens/text.js';
-import { acquireSource, encodeForUpload, fingerprint } from './image.js';
+import { acquireSource, encodeForUpload, encodeRegion, fingerprint } from './image.js';
+import { paintRect } from './render/background.js';
 import { clearStored, getStored, putStored, storedStats } from './store.js';
 import { classify, collect, ignoreElements, isBigEnough, targetFromEvent } from './detect.js';
 import type { Target } from './detect.js';
@@ -44,13 +47,14 @@ import {
 } from './cache.js';
 import { openSettings } from './ui/settings-panel.js';
 import { closeMenu, isMenuOpen, openMenu } from './ui/menu.js';
+import type { MenuItem } from './ui/menu.js';
 import { onReportSettings, openReport } from './ui/report.js';
-import { HOST_ID, isOurs, uiRoot } from './ui/root.js';
-import type { LensResult, PeekKey, Settings } from './types.js';
-
-const ICON = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="white" width="20" height="20"><path d="M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M12,4A8,8 0 0,1 20,12H18A6,6 0 0,0 12,6V4M12,8A4,4 0 0,1 16,12A4,4 0 0,1 12,16A4,4 0 0,1 8,12A4,4 0 0,1 12,8Z"/></svg>`;
-const MORE = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="white" width="15" height="15"><path d="M6,10A2,2 0 0,0 4,12A2,2 0 0,0 6,14A2,2 0 0,0 8,12A2,2 0 0,0 6,10M12,10A2,2 0 0,0 10,12A2,2 0 0,0 12,14A2,2 0 0,0 14,12A2,2 0 0,0 12,10M18,10A2,2 0 0,0 16,12A2,2 0 0,0 18,14A2,2 0 0,0 20,12A2,2 0 0,0 18,10Z"/></svg>`;
-const GEAR = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="white" width="15" height="15"><path d="M12,15.5A3.5,3.5 0 0,1 8.5,12A3.5,3.5 0 0,1 12,8.5A3.5,3.5 0 0,1 15.5,12A3.5,3.5 0 0,1 12,15.5M19.43,12.97C19.47,12.65 19.5,12.33 19.5,12C19.5,11.67 19.47,11.34 19.43,11L21.54,9.37C21.73,9.22 21.78,8.95 21.66,8.73L19.66,5.27C19.54,5.05 19.27,4.96 19.05,5.05L16.56,6.05C16.04,5.66 15.5,5.32 14.87,5.07L14.5,2.42C14.46,2.18 14.25,2 14,2H10C9.75,2 9.54,2.18 9.5,2.42L9.13,5.07C8.5,5.32 7.96,5.66 7.44,6.05L4.95,5.05C4.73,4.96 4.46,5.05 4.34,5.27L2.34,8.73C2.21,8.95 2.27,9.22 2.46,9.37L4.57,11C4.53,11.34 4.5,11.67 4.5,12C4.5,12.33 4.53,12.65 4.57,12.97L2.46,14.63C2.27,14.78 2.21,15.05 2.34,15.27L4.34,18.73C4.46,18.95 4.73,19.03 4.95,18.95L7.44,17.94C7.96,18.34 8.5,18.68 9.13,18.93L9.5,21.58C9.54,21.82 9.75,22 10,22H14C14.25,22 14.46,21.82 14.5,21.58L14.87,18.93C15.5,18.67 16.04,18.34 16.56,17.94L19.05,18.95C19.27,19.03 19.54,18.95 19.66,18.73L21.66,15.27C21.78,15.05 21.73,14.78 21.54,14.63L19.43,12.97Z"/></svg>`;
+import { HOST_ID, isOurs, tendHost, uiRoot } from './ui/root.js';
+import { fittedRect, insetRect } from './ui/geometry.js';
+import type { Rect, Size } from './ui/geometry.js';
+import { icon } from './ui/icons.js';
+import { closeTool, openObjectsTool, openRegionTool, openTextTool, repositionTool } from './ui/tools.js';
+import type { LensResult, NormalizedBox, OcrParagraph, PeekKey, Settings } from './types.js';
 
 let settings: Settings = getSettings();
 
@@ -79,34 +83,96 @@ ignoreElements((element) => element.id === HOST_ID || isCover(element));
 
 const root = uiRoot();
 
-const button = document.createElement('div');
-button.id = 'lt-button';
-button.innerHTML = ICON;
-button.title = 'Translate the text in this image (click again to undo)';
-root.appendChild(button);
+/**
+ * The three controls over a picture, as one row hung from its top right corner.
+ *
+ * One container, so the row is placed once and its own layout does the rest:
+ * the controls are 32px under a mouse and 44px under a finger, and three
+ * `left` offsets written out as numbers were only ever right for one of those.
+ * They stay `div`s rather than buttons on purpose - a button takes focus when
+ * pressed, and a reader that listens for keys loses them to it.
+ */
+const controls = document.createElement('div');
+controls.id = 'lt-controls';
+root.appendChild(controls);
 
-const gear = document.createElement('div');
-gear.id = 'lt-gear';
-gear.innerHTML = GEAR;
-gear.title = 'Lens Translate settings';
-root.appendChild(gear);
+function control(id: string, label: string, content: string): HTMLDivElement {
+  const element = document.createElement('div');
+  element.id = id;
+  element.innerHTML = content;
+  element.title = label;
+  element.setAttribute('role', 'button');
+  element.setAttribute('aria-label', label);
+  return element;
+}
 
-const more = document.createElement('div');
-more.id = 'lt-more';
-more.innerHTML = MORE;
-more.title = 'Copy text, undo, and more';
-root.appendChild(more);
+// The spinner is a second icon rather than the first one turning: letters
+// going round do not read as "working".
+const button = control(
+  'lt-button',
+  'Translate the text in this image (click again to undo)',
+  icon('translate') + icon('loader')
+);
+const gear = control('lt-gear', 'Lens Translate settings', icon('settings', 16));
+const more = control('lt-more', 'Search, ask, copy and more', icon('more', 16));
+// In reading order, so the main one ends up in the corner.
+controls.append(more, gear, button);
 
 const toastEl = document.createElement('div');
 toastEl.id = 'lt-toast';
+toastEl.setAttribute('role', 'status');
 root.appendChild(toastEl);
 
+/** A place to go, offered inside a message. */
+interface ToastLink {
+  href: string;
+  label: string;
+}
+
 let toastTimer: number | undefined;
-function toast(message: string, ms = 3200): void {
-  toastEl.textContent = message;
+
+function hideToast(): void {
+  window.clearTimeout(toastTimer);
+  toastEl.classList.remove('lt-show');
+}
+
+/**
+ * Say something along the bottom of the screen.
+ *
+ * With a link it is also the way to a search's results. That link is a real
+ * anchor the person presses themselves, which is the one way of opening a tab
+ * that no popup blocker, phone browser or userscript host gets in the way of -
+ * so it is offered even when a tab was opened for them, in case it was not.
+ * `ms` of 0 leaves the message up until it is dismissed.
+ */
+function toast(message: string, ms = 3200, link?: ToastLink): void {
+  toastEl.textContent = '';
+  const text = document.createElement('span');
+  text.textContent = message;
+  toastEl.appendChild(text);
+  if (link) {
+    const anchor = document.createElement('a');
+    anchor.className = 'lt-btn lt-primary';
+    anchor.href = link.href;
+    anchor.target = '_blank';
+    // No opener for Google to reach back through, and no Referer naming the
+    // page the picture was on.
+    anchor.rel = 'noopener noreferrer';
+    anchor.innerHTML = icon('external', 16);
+    anchor.append(link.label);
+    anchor.addEventListener('click', hideToast);
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.className = 'lt-btn lt-ghost lt-square';
+    close.setAttribute('aria-label', 'Dismiss');
+    close.innerHTML = icon('close', 16);
+    close.addEventListener('click', hideToast);
+    toastEl.append(anchor, close);
+  }
+  toastEl.classList.toggle('lt-has-link', Boolean(link));
   toastEl.classList.add('lt-show');
   window.clearTimeout(toastTimer);
-  toastTimer = window.setTimeout(() => toastEl.classList.remove('lt-show'), ms);
+  if (ms > 0) toastTimer = window.setTimeout(hideToast, ms);
 }
 
 const busy = new WeakSet<HTMLElement>();
@@ -153,8 +219,12 @@ const SWEEP_MS = 3000;
 
 function sweep(): void {
   if (document.hidden) return;
+  tendHost();
   sweepCovers();
   sweepOverlays();
+  // A layout shift moves a picture without a scroll or a resize, and a tool
+  // layer left where it was points at the wrong part of the page.
+  repositionTool();
   for (const img of [...showing.keys()]) {
     if (!img.isConnected || !isTranslated(img)) showing.delete(img);
   }
@@ -544,26 +614,17 @@ interface Anchor {
  * The two small controls beside the main one: settings, and the menu of things
  * that belong to this picture. They arrive together, a beat after the button.
  */
-function showGear(target: Target, anchor?: Anchor): void {
-  const rect = anchor ?? target.element.getBoundingClientRect();
-  gear.style.top = `${rect.top + 8}px`;
-  gear.style.left = `${rect.left + rect.width - 69}px`;
-  more.style.top = `${rect.top + 8}px`;
-  more.style.left = `${rect.left + rect.width - 101}px`;
-  for (const control of [gear, more]) {
-    control.style.opacity = '1';
-    control.style.transform = 'scale(1)';
-    control.style.pointerEvents = 'auto';
-  }
+let extrasShown = false;
+
+function showGear(): void {
+  extrasShown = true;
+  controls.classList.add('lt-extras');
 }
 
 function hideGear(): void {
   window.clearTimeout(gearTimer);
-  for (const control of [gear, more]) {
-    control.style.opacity = '0';
-    control.style.transform = 'scale(0.9)';
-    control.style.pointerEvents = 'none';
-  }
+  extrasShown = false;
+  controls.classList.remove('lt-extras');
 }
 
 function showButton(target: Target, anchor?: Anchor): void {
@@ -571,23 +632,19 @@ function showButton(target: Target, anchor?: Anchor): void {
   const img = target.element;
   currentTarget = target;
   // Viewport coordinates: the shadow host is fixed and covers the viewport.
+  // The row hangs from this point by its right edge, whatever its width.
   const rect = anchor ?? img.getBoundingClientRect();
-  button.style.top = `${rect.top + 5}px`;
-  button.style.left = `${rect.left + rect.width - 37}px`;
-  button.style.opacity = '1';
-  button.style.transform = 'scale(1)';
-  button.style.pointerEvents = 'auto';
+  controls.style.top = `${rect.top + 6}px`;
+  controls.style.left = `${rect.left + rect.width - 6}px`;
+  controls.classList.add('lt-on');
   button.classList.toggle('lt-active', isTranslated(img));
 
   window.clearTimeout(gearTimer);
-  if (gear.style.opacity === '1') showGear(target);
-  else gearTimer = window.setTimeout(() => showGear(target), GEAR_DELAY_MS);
+  if (!extrasShown) gearTimer = window.setTimeout(showGear, GEAR_DELAY_MS);
 }
 
 function hideButton(): void {
-  button.style.opacity = '0';
-  button.style.transform = 'scale(0.9)';
-  button.style.pointerEvents = 'none';
+  controls.classList.remove('lt-on');
   hideGear();
   currentTarget = null;
 }
@@ -714,7 +771,7 @@ function updatePinned(): void {
     showButton(found.target, found);
     // No cursor to linger, so the delay before the settings button would only
     // ever be a delay.
-    showGear(found.target, found);
+    showGear();
   });
 }
 
@@ -834,6 +891,17 @@ async function redrawShowing(): Promise<void> {
   }
 }
 
+/**
+ * Open the panel, with nothing of ours left lying over it.
+ *
+ * A message sits above everything, so one still on screen covers the panel's
+ * own Save button on a phone, where both are at the bottom.
+ */
+function showSettings(): void {
+  hideToast();
+  openSettings(onSaved);
+}
+
 function onSaved(saved: Settings): void {
   settings = saved;
   applyButtonMode();
@@ -846,7 +914,7 @@ gear.addEventListener(
   (event) => {
     event.preventDefault();
     event.stopPropagation();
-    openSettings(onSaved);
+    showSettings();
   },
   true
 );
@@ -921,14 +989,30 @@ function reposition(): void {
     updatePinned();
     return;
   }
-  if (currentTarget?.element.isConnected) {
-    showButton(currentTarget);
-    if (gear.style.opacity === '1') showGear(currentTarget);
-  } else if (currentTarget) hideButton();
+  if (currentTarget?.element.isConnected) showButton(currentTarget);
+  else if (currentTarget) hideButton();
 }
 
-window.addEventListener('resize', reposition);
-window.addEventListener('scroll', reposition, true);
+function moved(): void {
+  // A layer drawn over a picture has to follow it. Followed, never closed: a
+  // phone's address bar sliding away is a resize nobody asked for.
+  repositionTool();
+  reposition();
+}
+
+window.addEventListener('resize', moved);
+window.addEventListener('scroll', moved, true);
+// Entering or leaving fullscreen moves the host (see ui/root.ts) and changes
+// every rectangle on the page. The resize that usually comes with it is not
+// promised, and does not come at all when the element already filled the
+// viewport.
+for (const type of ['fullscreenchange', 'webkitfullscreenchange']) {
+  document.addEventListener(type, () => {
+    emptyRetries = 0;
+    if (watching) scheduleRefresh();
+    moved();
+  });
+}
 
 
 // --- Copying, menus and peeking ---------------------------------------------
@@ -961,23 +1045,446 @@ async function copyFrom(kind: 'translation' | 'original', element = subject()): 
   );
 }
 
-/** What the menu next to the button offers for the picture it is on. */
+
+// --- Searching with a picture -----------------------------------------------
+
+/**
+ * Uploads that are still good, by the same key the translation cache uses.
+ *
+ * An upload is two requests and a search after it is one, so the second thing
+ * asked about a picture - another area, an object, a question - should not pay
+ * for the first again. Kept as promises so two actions started together share
+ * one upload instead of racing to make two.
+ *
+ * Only a picture with an address is kept. A canvas or a video has none, and
+ * what it shows now is not what it showed a moment ago, so each search of one
+ * uploads what is there. The list is short because every entry holds its
+ * JPEG: Lens wants the bytes again when a session is reopened.
+ */
+interface Upload {
+  promise: Promise<ImageSearch>;
+  /** Set once it arrives, so a stale session can be seen without awaiting. */
+  search?: ImageSearch;
+}
+
+const MAX_UPLOADS = 4;
+const uploads = new Map<string, Upload>();
+
+/**
+ * Whether the element still shows the picture the target was made from.
+ *
+ * A virtualised feed reuses an element for the next post by giving it a new
+ * address, and it can do that while a tool is open over it. The upload and the
+ * crop read the element as it is *now*, so without asking this they would
+ * search a different picture under the old one's name - and the upload would
+ * be cached under the old address for the next search to find. Compared by the
+ * cache key, so a rendition swap of the same photo is not a change. A canvas
+ * or a video has no address to compare and is taken as it stands.
+ */
+function stillShows(target: Target): boolean {
+  if (!target.url) return target.element.isConnected;
+  const now = classify(target.element);
+  return Boolean(now?.url) && cacheKey(now?.url ?? '', settings) === cacheKey(target.url, settings);
+}
+
+const CHANGED = 'The picture changed while it was open; try again on the new one';
+
+async function upload(target: Target): Promise<ImageSearch> {
+  if (!stillShows(target)) throw new Error(CHANGED);
+  const acquired = await acquireSource(target);
+  try {
+    const image = await encodeForUpload(acquired.source, settings);
+    return await ImageSearch.upload(image, settings);
+  } finally {
+    acquired.release();
+  }
+}
+
+function sessionFor(target: Target): Promise<ImageSearch> {
+  if (!target.url) return upload(target);
+  const key = cacheKey(target.url, settings);
+  const held = uploads.get(key);
+  // An expired session would be reopened by the search itself, but the objects
+  // it found are named by the old upload; start again so the two agree.
+  if (held && (!held.search || held.search.fresh)) {
+    // Moved to the end: the Map's order is the order of last use.
+    uploads.delete(key);
+    uploads.set(key, held);
+    return held.promise;
+  }
+  const entry: Upload = { promise: upload(target) };
+  uploads.set(key, entry);
+  entry.promise.then(
+    (search) => {
+      entry.search = search;
+    },
+    () => {
+      // A failure is not an answer worth keeping; the next press tries again.
+      if (uploads.get(key) === entry) uploads.delete(key);
+    }
+  );
+  for (const oldest of uploads.keys()) {
+    if (uploads.size <= MAX_UPLOADS) break;
+    uploads.delete(oldest);
+  }
+  return entry.promise;
+}
+
+/** A pointer that cannot hover or cannot aim: a phone, in practice. */
+const onTouch = (): boolean => window.matchMedia(TOUCH_QUERY).matches;
+
+const prefersDark = (): boolean => window.matchMedia('(prefers-color-scheme: dark)').matches;
+
+/** How the results page is asked to look: in the reader's language and theme. */
+const pageOptions = (): { uiLanguage: string; dark: boolean } => ({
+  uiLanguage: settings.targetLang,
+  dark: prefersDark(),
+});
+
+/**
+ * Hand over a results address: in a tab if one could be had, as a link if not.
+ *
+ * The link is there both times. A host's opener can report success and open
+ * nothing, and a tab opened behind the current one is easy to miss on a phone.
+ */
+function deliver(tab: ReturnType<typeof prepareTab>, url: string): void {
+  if (tab.go(url)) toast('Results opened in a new tab', 9000, { href: url, label: 'Open again' });
+  else toast('The results are ready', 0, { href: url, label: 'Open results' });
+}
+
+/** What to search for; a region's pixels are cut out when the time comes. */
+type Pick = { kind: 'image' } | { kind: 'region'; box: NormalizedBox } | { kind: 'object'; id: string };
+
+/**
+ * Search with a picture and open the results.
+ *
+ * Not `async`, and it must be called straight from the press that asked: the
+ * tab is requested on the first line, before anything is awaited, because that
+ * is the only moment a browser will grant one.
+ *
+ * A blank tab is only opened ahead of time where there is a mouse. On a phone
+ * it would take the whole screen for the length of an upload, `window.open`
+ * has not been seen to work from every host there, and the link in the toast
+ * does - so a phone whose host cannot open tabs itself gets the link, one
+ * extra press, and nothing that can strand it on an empty page.
+ */
+function searchPicture(
+  target: Target,
+  pick: Pick,
+  mode: 'visual' | 'ai',
+  text: string,
+  held?: ImageSearch
+): void {
+  // Before the tab is asked for, so a picture swapped under the tool costs a
+  // message rather than an empty tab.
+  if (!stillShows(target)) {
+    closeTool();
+    toast(CHANGED);
+    return;
+  }
+  const tab = prepareTab(!onTouch());
+  setWorking(1);
+  button.classList.remove('lt-error');
+  toast(mode === 'ai' ? 'Asking Lens...' : 'Searching with Lens...', 120_000);
+
+  void (async (): Promise<string> => {
+    // An object id belongs to the upload that found it; that upload is passed
+    // in and nothing else will do (see ObjectSource in ui/tools.ts).
+    const search = held ?? (await sessionFor(target));
+    let selection: Selection = pick;
+    if (pick.kind === 'region') {
+      // The crop itself has to go, not just its box: without it Lens is shown
+      // the whole picture again and answers about that.
+      if (!stillShows(target)) throw new Error(CHANGED);
+      const acquired = await acquireSource(target);
+      try {
+        const crop = await encodeRegion(
+          { source: acquired.source, sourceWidth: acquired.width, sourceHeight: acquired.height },
+          pick.box,
+          settings
+        );
+        selection = { kind: 'region', box: pick.box, crop };
+      } finally {
+        acquired.release();
+      }
+    }
+    return search.search(selection, { mode, text, ...pageOptions() });
+  })()
+    .then(
+      (url) => deliver(tab, url),
+      (error: Error) => {
+        tab.cancel();
+        lastFailure = error.message;
+        button.classList.add('lt-error');
+        toast(lensSaid(error), 5000);
+        window.setTimeout(() => button.classList.remove('lt-error'), 3000);
+      }
+    )
+    .finally(() => setWorking(-1));
+}
+
+/**
+ * Open an address that is already known.
+ *
+ * Here the press is still being handled, so asking for a tab outright is
+ * allowed on any device - and if it is refused all the same, the link.
+ */
+function openNow(url: string): void {
+  deliver(prepareTab(true), url);
+}
+
+/** The picture's own size in pixels, which is what its proportions are read from. */
+function naturalSize(target: Target): Promise<Size | null> {
+  const element = target.element;
+  if (target.kind === 'img') {
+    const { naturalWidth, naturalHeight } = element as HTMLImageElement;
+    return Promise.resolve(naturalWidth && naturalHeight ? { width: naturalWidth, height: naturalHeight } : null);
+  }
+  if (target.kind === 'video') {
+    const { videoWidth, videoHeight } = element as HTMLVideoElement;
+    return Promise.resolve(videoWidth && videoHeight ? { width: videoWidth, height: videoHeight } : null);
+  }
+  if (target.kind === 'canvas') {
+    const { width, height } = element as HTMLCanvasElement;
+    return Promise.resolve(width && height ? { width, height } : null);
+  }
+  // A background's size is nowhere in the page; the picture has to be asked.
+  // It is in the HTTP cache already, having been painted.
+  return new Promise((resolve) => {
+    const probe = new Image();
+    probe.onload = () => resolve({ width: probe.naturalWidth, height: probe.naturalHeight });
+    probe.onerror = () => resolve(null);
+    probe.src = target.url;
+  });
+}
+
+const px = (value: string): number => Number.parseFloat(value) || 0;
+
+/**
+ * Where the picture itself is on screen, which is rarely the element's box.
+ *
+ * A replaced element draws into its content box and `object-fit` decides how;
+ * a background is wherever its size and position put the one painted copy.
+ * Everything Lens says about a picture is a fraction of the picture, so a
+ * layer laid over the element's box instead would put every dot and every
+ * word a border, a padding or a letterbox away from where it belongs.
+ */
+function pictureRect(target: Target, natural: Size): Rect | null {
+  const element = target.element;
+  if (!element.isConnected) return null;
+  const bounds = element.getBoundingClientRect();
+  if (!(bounds.width > 0 && bounds.height > 0)) return null;
+  const style = getComputedStyle(element);
+  const border = {
+    top: px(style.borderTopWidth),
+    right: px(style.borderRightWidth),
+    bottom: px(style.borderBottomWidth),
+    left: px(style.borderLeftWidth),
+  };
+  const outer: Rect = { left: bounds.left, top: bounds.top, width: bounds.width, height: bounds.height };
+
+  if (target.kind === 'background') {
+    const spec = target.background;
+    if (!spec) return outer;
+    const padding = {
+      top: px(style.paddingTop),
+      right: px(style.paddingRight),
+      bottom: px(style.paddingBottom),
+      left: px(style.paddingLeft),
+    };
+    const area =
+      spec.origin === 'border-box'
+        ? outer
+        : spec.origin === 'padding-box'
+          ? insetRect(outer, border)
+          : insetRect(insetRect(outer, border), padding);
+    const painted = paintRect(spec, area, natural);
+    return painted
+      ? { left: area.left + painted.x, top: area.top + painted.y, width: painted.width, height: painted.height }
+      : outer;
+  }
+
+  const content = insetRect(insetRect(outer, border), {
+    top: px(style.paddingTop),
+    right: px(style.paddingRight),
+    bottom: px(style.paddingBottom),
+    left: px(style.paddingLeft),
+  });
+  return fittedRect(content, natural, style.objectFit, style.objectPosition);
+}
+
+/** A way to ask where the picture is, or null when it cannot be measured. */
+async function frameOf(target: Target): Promise<(() => Rect | null) | null> {
+  const natural = await naturalSize(target);
+  if (!natural || !pictureRect(target, natural)) {
+    toast('This picture cannot be measured yet');
+    return null;
+  }
+  return () => pictureRect(target, natural);
+}
+
+/** Report a failure in a tool that was waiting on Lens, and answer null. */
+function failed(error: Error): null {
+  lastFailure = error.message;
+  toast(lensSaid(error), 5000);
+  return null;
+}
+
+/** A failure as a message; a picture that changed is ours to say, not Lens's. */
+const lensSaid = (error: Error): string => (error.message === CHANGED ? CHANGED : `Lens: ${error.message}`);
+
+async function selectArea(target: Target): Promise<void> {
+  const rect = await frameOf(target);
+  if (!rect) return;
+  openRegionTool({
+    rect,
+    onSearch: (box, mode, text) => searchPicture(target, { kind: 'region', box }, mode, text),
+  });
+}
+
+async function showObjects(target: Target): Promise<void> {
+  const rect = await frameOf(target);
+  if (!rect) return;
+  openObjectsTool({
+    rect,
+    load: () => sessionFor(target).then((search) => search, failed),
+    onPick: (search, id) => searchPicture(target, { kind: 'object', id }, 'visual', '', search),
+  });
+}
+
+/**
+ * What the picture says, from wherever it is already known.
+ *
+ * A translation carries the recognised text with it; a picture that was never
+ * translated is read by the upload a search would have made anyway, so having
+ * looked at its words makes the search that follows cheaper.
+ */
+function readText(target: Target): Promise<OcrParagraph[]> {
+  const held = results.get(target.element);
+  if (held?.ocr.length) return Promise.resolve(held.ocr);
+  return sessionFor(target).then((search) => search.result.ocr);
+}
+
+async function pickText(target: Target): Promise<void> {
+  const rect = await frameOf(target);
+  if (!rect) return;
+  openTextTool({
+    rect,
+    paragraphs: readText(target).then((paragraphs) => paragraphs, failed),
+    onSearch: (text) => openNow(textSearchUrl(text, pageOptions())),
+    onCopy: (text) => void copied(text, 'the selected text'),
+  });
+}
+
+async function copied(text: string, what: string): Promise<void> {
+  toast(
+    (await copyText(text))
+      ? `Copied ${what} (${plural(text.length, 'character')})`
+      : 'The browser would not let the script use the clipboard'
+  );
+}
+
+/**
+ * Copy whatever there is to copy: the translation if there is one, otherwise
+ * what the picture says. One button, for someone who should not have to know
+ * that those are two different things until they want the other one.
+ */
+async function copyAny(target: Target): Promise<void> {
+  const result = results.get(target.element);
+  const translated = result ? translationText(result) : '';
+  if (translated) return copied(translated, 'the translation');
+  let text = result ? ocrText(result) : '';
+  if (!text) {
+    toast('Reading the text...', 120_000);
+    try {
+      text = (await readText(target))
+        .map((paragraph) => paragraph.lines.map((line) => line.text.trim()).filter(Boolean).join('\n'))
+        .filter(Boolean)
+        .join('\n\n');
+    } catch (error) {
+      failed(error as Error);
+      return undefined;
+    }
+  }
+  if (!text) {
+    toast('Lens found no text in this image');
+    return undefined;
+  }
+  return copied(text, 'the text');
+}
+
+/**
+ * What the menu next to the button offers for the picture it is on.
+ *
+ * Two lengths of the same list. The short one is four things anyone can use
+ * without being told what Lens is; the long one adds the ways of pointing at
+ * part of a picture, and splits "copy" into its two halves. Nothing in the
+ * short list behaves differently for being in it.
+ */
 function openActions(): void {
   const target = currentTarget;
   if (!target) return;
+  closeTool();
+  hideToast();
   const translated = isTranslated(target.element);
   const words = results.has(target.element);
-  const rect = more.getBoundingClientRect();
-  openMenu({ top: rect.bottom + 6, left: rect.right - 220 }, [
+  const pro = settings.uiMode === 'pro';
+
+  const items: MenuItem[] = [
     {
-      label: translated ? 'Show the original (undo)' : 'Translate this image',
+      label: translated ? 'Show the original' : 'Translate this image',
+      icon: translated ? 'undo' : 'translate',
       run: () => void translate(target),
     },
-    { label: 'Copy translation', run: () => void copyFrom('translation', target.element), disabled: !words },
-    { label: 'Copy original text', run: () => void copyFrom('original', target.element), disabled: !words },
-    { label: 'Translate everything in view', run: () => void translateVisible() },
-    { label: 'Settings', run: () => openSettings(onSaved) },
-  ], more);
+    {
+      label: 'Search this image',
+      icon: 'search',
+      run: () => searchPicture(target, { kind: 'image' }, 'visual', ''),
+    },
+    {
+      label: 'Ask AI about it',
+      icon: 'sparkles',
+      run: () => {},
+      field: {
+        value: settings.aiPrompt,
+        placeholder: 'Ask about this picture (optional)',
+        sendLabel: 'Ask',
+        submit: (text) => searchPicture(target, { kind: 'image' }, 'ai', text.trim()),
+      },
+    },
+  ];
+
+  if (pro) {
+    items.push(
+      { label: 'Select an area', icon: 'area', divider: true, run: () => void selectArea(target) },
+      { label: 'Detected objects', icon: 'objects', run: () => void showObjects(target) },
+      { label: 'Search selected text', icon: 'text', run: () => void pickText(target) },
+      {
+        label: 'Copy translation',
+        icon: 'copy',
+        divider: true,
+        run: () => void copyFrom('translation', target.element),
+        disabled: !words,
+      },
+      {
+        label: 'Copy original text',
+        icon: 'copy',
+        run: () => void copyFrom('original', target.element),
+        disabled: !words,
+      },
+      { label: 'Translate everything in view', icon: 'images', run: () => void translateVisible() }
+    );
+  } else {
+    items.push({
+      label: translated ? 'Copy translation' : 'Copy text',
+      icon: 'copy',
+      run: () => void copyAny(target),
+    });
+  }
+  items.push({ label: 'Settings', icon: 'settings', divider: true, run: () => showSettings() });
+
+  const rect = more.getBoundingClientRect();
+  openMenu({ top: rect.bottom + 6, left: rect.right - 260 }, items, more);
 }
 
 /** Let the original show through one picture, or put the translation back. */
@@ -1094,7 +1601,7 @@ registerCommand({
   menuLabel: 'Lens Translate: settings',
   // The panel is where these are drawn, so it does not offer to open itself.
   label: null,
-  run: () => openSettings(onSaved),
+  run: () => showSettings(),
 });
 
 registerCommand({
@@ -1121,6 +1628,7 @@ registerCommand({
 registerCommand({
   menuLabel: 'Lens Translate: undo all on this page',
   label: 'Undo all on this page',
+  essential: true,
   run: () => {
     showing.clear();
     const restored = uncoverAll() + clearAllOverlays();
@@ -1177,6 +1685,7 @@ function chooseSite(next: SiteMode): void {
 registerCommand({
   menuLabel: 'Lens Translate: toggle on/off for this site',
   label: 'Toggle for this site',
+  essential: true,
   run: () => chooseSite(site === 'off' ? 'default' : 'off'),
 });
 
@@ -1189,6 +1698,7 @@ registerCommand({
 registerCommand({
   menuLabel: 'Lens Translate: diagnostics',
   label: 'Run diagnostics',
+  essential: true,
   run: openDiagnostics,
 });
 
@@ -1229,7 +1739,7 @@ function checkDebugHash(): void {
   if (window.location.hash === DEBUG_HASH) openDiagnostics();
 }
 
-onReportSettings(() => openSettings(onSaved));
+onReportSettings(() => showSettings());
 window.addEventListener('hashchange', checkDebugHash);
 
 applyButtonMode();
