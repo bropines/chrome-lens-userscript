@@ -266,6 +266,8 @@
   "set.coverOpacity.hint": "100 未満では、翻訳された画像越しに原画像が透けて見えます",
   "set.showButton.label": "画像の上にボタンを表示",
   "set.showButton.hint": "オフにすると、ショートカットとユーザースクリプトのメニューだけが残ります",
+  "set.videoButton.label": "動画の上にもボタンを表示",
+  "set.videoButton.hint": "プレーヤーが重ねるサムネイルやプレビューの上にも。ショートカットは常に動画で使えます",
   "set.buttonMode.label": "表示するタイミング",
   "set.buttonMode.hint": "タッチ画面にはホバーがなく、画像のタップはページめくりに使われます",
   "set.buttonMode.opt.auto": "自動 - タッチ画面では固定表示、それ以外はホバー時",

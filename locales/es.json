@@ -266,6 +266,8 @@
   "set.coverOpacity.hint": "por debajo de 100 el original se transparenta a través de la imagen traducida",
   "set.showButton.label": "Mostrar los botones sobre las imágenes",
   "set.showButton.hint": "desactivado, solo quedan los atajos y el menú del userscript",
+  "set.videoButton.label": "Botones también sobre vídeos",
+  "set.videoButton.hint": "y sobre la portada o la vista previa que el reproductor pone encima; los atajos funcionan con vídeos de todos modos",
   "set.buttonMode.label": "Cuándo mostrarlos",
   "set.buttonMode.hint": "una pantalla táctil no tiene cursor que pasar por encima, y tocar la imagen es como se pasa la página",
   "set.buttonMode.opt.auto": "auto - fijos en pantalla táctil; si no, al pasar el cursor",

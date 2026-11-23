@@ -266,6 +266,8 @@
   "set.coverOpacity.hint": "低于 100 时，原图会透过译图显现出来",
   "set.showButton.label": "在图片上显示按钮",
   "set.showButton.hint": "关闭后，只剩快捷键和用户脚本菜单可用",
+  "set.videoButton.label": "在视频上也显示按钮",
+  "set.videoButton.hint": "包括播放器覆盖在上面的封面或预览；快捷键始终可用于视频",
   "set.buttonMode.label": "何时显示",
   "set.buttonMode.hint": "触摸屏没有悬停，而点按图片通常用来翻页",
   "set.buttonMode.opt.auto": "自动 - 触摸屏上固定显示，否则悬停时显示",

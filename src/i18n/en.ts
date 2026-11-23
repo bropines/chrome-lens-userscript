@@ -311,6 +311,8 @@ export const EN = {
   // --- settings: Buttons
   'set.showButton.label': 'Show the buttons over images',
   'set.showButton.hint': 'off, only the shortcuts and the userscript menu remain',
+  'set.videoButton.label': 'Buttons over videos too',
+  'set.videoButton.hint': 'and over the poster or preview a player lays on top; the shortcuts work on a video either way',
   'set.buttonMode.label': 'When to show them',
   'set.buttonMode.hint': 'a touch screen has no hover, and tapping the image is how you turn the page',
   'set.buttonMode.opt.auto': 'auto - pinned on a touch screen, on hover otherwise',

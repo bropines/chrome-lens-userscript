@@ -266,6 +266,8 @@
   "set.coverOpacity.hint": "abaixo de 100 o original aparece através da imagem traduzida",
   "set.showButton.label": "Mostrar os botões sobre as imagens",
   "set.showButton.hint": "desativado, restam só os atalhos e o menu do userscript",
+  "set.videoButton.label": "Botões também sobre vídeos",
+  "set.videoButton.hint": "e sobre a capa ou prévia que o player coloca por cima; os atalhos funcionam em vídeos de qualquer forma",
   "set.buttonMode.label": "Quando mostrá-los",
   "set.buttonMode.hint": "uma tela sensível ao toque não tem cursor para passar por cima, e tocar na imagem é como se vira a página",
   "set.buttonMode.opt.auto": "auto - fixos em tela sensível ao toque; senão, ao passar o cursor",

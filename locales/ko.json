@@ -266,6 +266,8 @@
   "set.coverOpacity.hint": "100 미만이면 번역된 그림 아래로 원본이 비쳐 보입니다",
   "set.showButton.label": "이미지 위에 버튼 표시",
   "set.showButton.hint": "끄면 단축키와 유저스크립트 메뉴만 남습니다",
+  "set.videoButton.label": "동영상 위에도 버튼 표시",
+  "set.videoButton.hint": "플레이어가 위에 올리는 썸네일이나 미리보기 위에도. 단축키는 어느 경우든 동영상에서 작동합니다",
   "set.buttonMode.label": "버튼 표시 시점",
   "set.buttonMode.hint": "터치 화면에는 호버가 없고, 이미지를 탭하면 페이지가 넘어갑니다",
   "set.buttonMode.opt.auto": "auto - 터치 화면에서는 고정, 그 외에는 호버 시",

@@ -729,8 +729,39 @@ export function start({ framed, hovered }: StartOptions): void {
     controls.style.top = `${at.y}px`;
   }
 
+  /**
+   * Whether this picture is a video, or sits on one.
+   *
+   * A player is under the cursor on the way to every control it has, so a
+   * button there pops up constantly over something nobody meant to translate.
+   * The <video> is not all of it: before it plays, YouTube covers it with the
+   * poster as a background, and a feed's preview lays one over a thumbnail. So
+   * anything whose middle falls inside a showing video at least its own size is
+   * the player's too - which also takes in the end-screen cards, and that is
+   * fine for the same reason.
+   */
+  function onVideo(target: Target): boolean {
+    if (target.kind === 'video') return true;
+    const videos = document.getElementsByTagName('video');
+    if (!videos.length) return false;
+    const box = target.element.getBoundingClientRect();
+    const x = box.left + box.width / 2;
+    const y = box.top + box.height / 2;
+    const area = box.width * box.height;
+    for (const video of videos) {
+      const r = video.getBoundingClientRect();
+      if (r.width * r.height < area * 0.8) continue;
+      if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) return true;
+    }
+    return false;
+  }
+
+  /** Whether the buttons may come up over this picture at all. */
+  const offersButton = (target: Target): boolean =>
+    settings.showButton && site !== 'off' && (settings.videoButton || !onVideo(target));
+
   function showButton(target: Target, anchor?: Anchor): void {
-    if (!settings.showButton || site === 'off') return;
+    if (!offersButton(target)) return;
     const img = target.element;
     currentTarget = target;
     // Viewport coordinates: the shadow host is fixed and covers the viewport.
@@ -843,6 +874,7 @@ export function start({ framed, hovered }: StartOptions): void {
     for (const target of known) {
       if (!target.element.isConnected) continue;
       if (!isBigEnough(target, settings.minImageSize)) continue;
+      if (!settings.videoButton && onVideo(target)) continue;
       const part = visiblePart(target.element);
       const area = part.width * part.height;
       // Area decides among equals, but anything a pointer can reach outranks

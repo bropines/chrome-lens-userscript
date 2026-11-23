@@ -1,5 +1,5 @@
 import { hostFacts, panelCommands } from '../gm.js';
-import { onLocaleChange, t } from '../i18n/index.js';
+import { onLocaleChange, t, useLanguage } from '../i18n/index.js';
 import type { Key } from '../i18n/index.js';
 import {
   DEFAULTS,
@@ -510,16 +510,28 @@ function collect(root: HTMLElement, baseline: Baseline): Partial<Settings> {
   );
 }
 
-function closeNow(): void {
+/**
+ * Take the window down.
+ *
+ * `revert` puts back what the window was previewing live - the popup's
+ * opacity and the interface language - as stored, which after a save is the
+ * new value and after a cancel the old one. The one caller that passes false
+ * is the redraw for a language that has just arrived: that close is the window
+ * reopening in the language picked in it, and reverting there would undo the
+ * very choice being drawn.
+ */
+function closeNow(revert = true): void {
   stopListening?.();
   stopListening = null;
   requestClose = null;
   recording = false;
   panel?.remove();
   panel = null;
+  if (!revert) return;
   // A slider moved and then cancelled leaves its preview behind otherwise;
   // after a save this is the new value, so it is right either way.
   applyPopupOpacity(getSettings().popupOpacity);
+  useLanguage(getSettings().language);
 }
 
 /** Close the window whatever is in it. Unsaved changes are dropped. */
@@ -906,8 +918,14 @@ export function openSettings(context: SettingsContext, restore?: Restore): void 
   });
   backdrop.addEventListener('change', (event) => {
     markChanged();
+    const key = (event.target as HTMLElement).dataset['key'];
     // The interface switch changes which fields exist, so it redraws at once.
-    if ((event.target as HTMLElement).dataset['key'] === 'uiMode') fill(current());
+    if (key === 'uiMode') fill(current());
+    // The language is shown, not just stored: a choice made in a list written
+    // in the old language is checked by reading the new one. It arrives in a
+    // moment (from the host's store, or GitHub the first time) and the window
+    // redraws itself where it stands; Cancel puts the stored one back.
+    if (key === 'language') useLanguage(current().language);
   });
 
   backdrop.addEventListener('click', (event) => {
@@ -975,7 +993,7 @@ export function openSettings(context: SettingsContext, restore?: Restore): void 
   const unsubscribe = onLocaleChange(() => {
     if (panel !== backdrop) return;
     const state: Restore = { draft: current(), tab: active };
-    closeNow();
+    closeNow(false);
     openSettings(context, state);
   });
   stopListening = (): void => {

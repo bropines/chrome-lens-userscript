@@ -266,6 +266,8 @@
   "set.coverOpacity.hint": "unter 100 scheint das Original durch das übersetzte Bild",
   "set.showButton.label": "Schaltflächen über Bildern anzeigen",
   "set.showButton.hint": "aus bleiben nur die Tastenkürzel und das Userscript-Menü",
+  "set.videoButton.label": "Schaltflächen auch über Videos",
+  "set.videoButton.hint": "und über dem Vorschaubild, das ein Player darüberlegt; die Tastenkürzel funktionieren bei Videos in jedem Fall",
   "set.buttonMode.label": "Wann sie erscheinen",
   "set.buttonMode.hint": "ein Touchscreen kennt kein Hover, und mit einem Tipp aufs Bild blättert man um",
   "set.buttonMode.opt.auto": "auto - auf einem Touchscreen angeheftet, sonst bei Hover",

@@ -30,6 +30,7 @@ export const DEFAULTS: Settings = {
   maxSide: 1600,
   jpegQuality: 0.4,
   showButton: true,
+  videoButton: false,
   buttonMode: 'auto',
   hotkey: 'alt',
   keyTranslateAll: 'Alt+Shift+KeyT',
@@ -212,6 +213,7 @@ export const FIELDS: ReadonlyArray<Field> = [
 
   // Buttons
   { key: 'showButton', tab: 'buttons', type: 'checkbox' },
+  { key: 'videoButton', tab: 'buttons', type: 'checkbox' },
   { key: 'buttonMode', tab: 'buttons', essential: true, type: 'select', options: ['auto', 'hover', 'pinned'] },
   { key: 'buttons', tab: 'buttons', type: 'buttons', wide: true },
   { key: 'mainAction', tab: 'buttons', type: 'select', options: ['translate', 'search', 'ask', 'area', 'menu'] },

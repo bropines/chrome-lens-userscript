@@ -266,6 +266,8 @@
   "set.coverOpacity.hint": "100'ün altında orijinal, çevrilmiş resmin arkasından görünür",
   "set.showButton.label": "Düğmeleri görsellerin üzerinde göster",
   "set.showButton.hint": "kapalıyken yalnızca kısayollar ve betik yöneticisinin menüsü kalır",
+  "set.videoButton.label": "Düğmeler videoların üzerinde de",
+  "set.videoButton.hint": "ve oynatıcının üstüne koyduğu kapak ya da önizlemenin üzerinde; kısayollar videoda her durumda çalışır",
   "set.buttonMode.label": "Ne zaman gösterilsin",
   "set.buttonMode.hint": "dokunmatik ekranda üzerine gelme yoktur; görsele dokunmak ise sayfayı çevirir",
   "set.buttonMode.opt.auto": "auto - dokunmatik ekranda sabit, diğerlerinde üzerine gelince",

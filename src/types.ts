@@ -312,6 +312,13 @@ export interface AppSettings {
   enabled: boolean;
   showButton: boolean;
   /**
+   * Whether the buttons come up over a video and over what sits on one. Off by
+   * default: a player is hovered constantly on the way to its controls, and a
+   * frame of a video is rarely what anyone came to translate. The shortcuts
+   * still reach it.
+   */
+  videoButton: boolean;
+  /**
    * When the translate button is on screen.
    *   'auto'   - pinned on a touch screen, on hover everywhere else.
    *   'hover'  - only while the cursor is over an image.

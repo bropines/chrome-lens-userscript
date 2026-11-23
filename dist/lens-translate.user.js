@@ -978,6 +978,8 @@
     // --- settings: Buttons
     "set.showButton.label": "Show the buttons over images",
     "set.showButton.hint": "off, only the shortcuts and the userscript menu remain",
+    "set.videoButton.label": "Buttons over videos too",
+    "set.videoButton.hint": "and over the poster or preview a player lays on top; the shortcuts work on a video either way",
     "set.buttonMode.label": "When to show them",
     "set.buttonMode.hint": "a touch screen has no hover, and tapping the image is how you turn the page",
     "set.buttonMode.opt.auto": "auto - pinned on a touch screen, on hover otherwise",
@@ -1494,6 +1496,7 @@
     maxSide: 1600,
     jpegQuality: 0.4,
     showButton: true,
+    videoButton: false,
     buttonMode: "auto",
     hotkey: "alt",
     keyTranslateAll: "Alt+Shift+KeyT",
@@ -1633,6 +1636,7 @@
     { key: "coverOpacity", tab: "appearance", type: "range", min: 20, max: 100, step: 5, unit: "pct" },
     // Buttons
     { key: "showButton", tab: "buttons", type: "checkbox" },
+    { key: "videoButton", tab: "buttons", type: "checkbox" },
     { key: "buttonMode", tab: "buttons", essential: true, type: "select", options: ["auto", "hover", "pinned"] },
     { key: "buttons", tab: "buttons", type: "buttons", wide: true },
     { key: "mainAction", tab: "buttons", type: "select", options: ["translate", "search", "ask", "area", "menu"] },
@@ -5526,14 +5530,16 @@ ${OVERLAY_CSS}`;
       })
     );
   }
-  function closeNow() {
+  function closeNow(revert = true) {
     stopListening?.();
     stopListening = null;
     requestClose = null;
     recording = false;
     panel$1?.remove();
     panel$1 = null;
+    if (!revert) return;
     applyPopupOpacity(getSettings().popupOpacity);
+    useLanguage(getSettings().language);
   }
   function openSettings(context, restore) {
     if (panel$1) {
@@ -5828,7 +5834,9 @@ ${OVERLAY_CSS}`;
     });
     backdrop.addEventListener("change", (event) => {
       markChanged();
-      if (event.target.dataset["key"] === "uiMode") fill(current());
+      const key = event.target.dataset["key"];
+      if (key === "uiMode") fill(current());
+      if (key === "language") useLanguage(current().language);
     });
     backdrop.addEventListener("click", (event) => {
       const target = event.target;
@@ -5880,7 +5888,7 @@ ${OVERLAY_CSS}`;
     const unsubscribe = onLocaleChange(() => {
       if (panel$1 !== backdrop) return;
       const state = { draft: current(), tab: active2 };
-      closeNow();
+      closeNow(false);
       openSettings(context, state);
     });
     stopListening = () => {
@@ -6704,8 +6712,24 @@ ${OVERLAY_CSS}`;
       controls.style.left = `${at.x}px`;
       controls.style.top = `${at.y}px`;
     }
+    function onVideo(target) {
+      if (target.kind === "video") return true;
+      const videos = document.getElementsByTagName("video");
+      if (!videos.length) return false;
+      const box = target.element.getBoundingClientRect();
+      const x = box.left + box.width / 2;
+      const y = box.top + box.height / 2;
+      const area = box.width * box.height;
+      for (const video of videos) {
+        const r = video.getBoundingClientRect();
+        if (r.width * r.height < area * 0.8) continue;
+        if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) return true;
+      }
+      return false;
+    }
+    const offersButton = (target) => settings.showButton && site !== "off" && (settings.videoButton || !onVideo(target));
     function showButton(target, anchor) {
-      if (!settings.showButton || site === "off") return;
+      if (!offersButton(target)) return;
       const img = target.element;
       currentTarget = target;
       const rect = anchor ?? img.getBoundingClientRect();
@@ -6763,6 +6787,7 @@ ${OVERLAY_CSS}`;
       for (const target of known) {
         if (!target.element.isConnected) continue;
         if (!isBigEnough(target, settings.minImageSize)) continue;
+        if (!settings.videoButton && onVideo(target)) continue;
         const part = visiblePart(target.element);
         const area = part.width * part.height;
         const rank = target.pointable ? 1 : 0;
