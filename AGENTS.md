@@ -71,6 +71,9 @@ src/
   languages.ts          language codes; labels come from Intl.DisplayNames
   cache.ts              LRU over Lens responses and renderings, one byte budget
   store.ts              the same answers kept across reloads, keyed by content
+  likeness.ts           the same frame at another size: a grey copy, then the
+                        lines that were read, compared where they are (pure)
+  textlike.ts           could this picture have text in it, from its pixels
                         and language, with recency in a store of its own
   image.ts              fetch, downscale, JPEG encode
   gen/fields.ts         GENERATED - do not edit
@@ -717,6 +720,94 @@ upgrade, which would otherwise hang every caller waiting on the database.
 
 Downscaling is deterministic within a browser but not promised across versions.
 The worst an upgrade can do is miss and ask Lens again.
+
+### A thumbnail and its original are one picture, if the text says so
+
+The fingerprint hashes the pixels with the size, so the commonest repeat - a
+feed's thumbnail today, the original tomorrow - shares nothing with it. Lens
+answers in fractions of the picture, so either answer draws on the other.
+`likeness.ts` decides when that is safe, and the danger is all on one side:
+handing back another picture's translation is worse than asking again.
+
+- **The picture as a whole cannot decide it.** Measured on real pictures,
+  JPEG'd and scaled the way a CDN does: two captions 1.5% of the picture tall
+  differ in 0.1% of the cells of a 64x64 grey copy, and resampling a thumbnail
+  moves 1-2%. At 128 or 256 cells the resampling grows with the resolution and
+  "same text, smaller" and "other text, smaller" measured the same. So the grey
+  copy (with an 8x8 hash to find candidates) only rules out other crops, other
+  photographs and large changes, at under 1% of cells off by more than 24.
+- **The lines decide.** Every line the answer read is kept as a strip 12 cells
+  across its short side (`markStrips`, the browser's own filtering, from the
+  region straight to the strip), and the same boxes are cut from the picture
+  being asked about. Same line at half or a third the size: correlation 0.98
+  and over. Other words: 0.3-0.45. One word changed in the line: 0.88-0.90.
+  Every comparable line must reach 0.94. A line under 10 pixels tall in the
+  smaller picture is noise and is not counted; with nothing countable the match
+  is refused - and so an answer with no lines is only ever found exactly.
+- **What it cannot see** is text the stored answer never read: a copy with a
+  small caption added keeps every stored line and gains one. Only the grey copy
+  can notice, which is why its threshold is as tight as resampling allows. A
+  difference away from the text - a square in a corner - is served the same
+  answer, and correctly: the harness found that by accident.
+- **Detail flows down, not up.** A larger answer serves a smaller picture
+  always; a smaller one serves down to half the detail, measured in what Lens
+  was sent (an original goes up at 1600 at most, so a 1200 thumbnail's answer
+  is reused and a 400 preview's is not - that better answer then serves both).
+- Version 3 of the database adds a `faces` store beside the answers, read only
+  for the few candidates the small records nominate, deleted with its answer and
+  weighed into its bytes. Version 2 data is kept.
+
+### Translating as you scroll is mostly not sending
+
+`autoTranslate` turns the per-site auto rule into a setting for everywhere (a
+site rule still wins either way), and a feed is mostly photographs. What keeps
+it from being a request per picture, cheapest first:
+
+1. **A size floor** on the shorter displayed side (`autoMinPx`), which avatars,
+   icons and previews fail.
+2. **Most of it on screen** (`autoVisible`, of the picture or, for one taller
+   than the screen, of the screen), **checked again when its turn in the queue
+   comes** - a picture queued while in view and scrolled past before a slot was
+   free is `deferred`, not sent.
+3. **The scroll settles first.** Every event pushes the look back 350 ms, so a
+   fling sends nothing for what flew past; a slow steady scroll is looked at
+   every 1.2 s anyway.
+4. **Both caches and likeness**, where a picture seen before costs nothing.
+5. **`textlike.ts`**, only on a miss: the pixels at 1024 on the long side, in
+   8-pixel cells, sixteen cells with many strong edges both ways and a wide
+   grey range, each beside another. It refuses the plainly bare and nothing
+   else: measured, a meme caption down to 2% of the height and dark print on a
+   sky down to about 11 pixels pass, a plain sky is refused, and foliage and a
+   sharp-featured face pass too, which is the direction to err in. At 256 it
+   lost captions under 3%, and a threshold as a share of the picture made the
+   finer analysis worse, since one caption is a smaller share of more cells.
+   Where the browser has `TextDetector` (Shape Detection API, behind a flag) it
+   is asked instead. A WASM detector would be better and was weighed: 4-5 MB
+   of model plus a runtime, re-downloaded per origin since IndexedDB is, and
+   some CSPs refuse to compile it.
+6. **A budget of requests a minute**, a bucket holding a minute's worth; what
+   finds it empty is deferred and looked at again when a request is free. Most
+   on screen goes first, so the picture being read is the one that gets it.
+
+The automatic pass never takes a translation down - `translate` with `auto`
+returns `skipped` for a picture that is already translated rather than
+toggling it - and one the reader undid stays undone.
+
+### The General tab says what is true now
+
+It is the one most people only ever see, and it was four fields over a wall of
+identical buttons, three of which were toggles that did not say which way they
+were set. Now: a card with the switches (enabled, translate as you scroll) and
+this site as a three-way choice; the interface as two cards; language and
+opacity; the quick actions with icons, the cache's size on its button. The
+toggle commands stay in the host's menu.
+
+The site choice applies at once and says so, as it always did, and without the
+toast `chooseSite` gives from the menu - from the window it would sit over Save
+on a phone. The interface cards edit a hidden select that holds the value, so
+`[data-key]` is still one element per setting. A checkbox is a switch
+everywhere: its knob is a radial gradient, not a pseudo-element, since an
+`<input>` has no `::before` in every engine.
 
 ### Searching, and the UI around it
 

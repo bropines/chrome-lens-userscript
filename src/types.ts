@@ -329,6 +329,20 @@ export interface AppSettings {
    */
   videoButton: boolean;
   /**
+   * Translate pictures as they come into view, on every site where the rule
+   * is the default. A site set to auto-translate does it regardless; a site
+   * switched off never does.
+   */
+  autoTranslate: boolean;
+  /** How much of a picture must be on screen, 0..1 of whichever is smaller: the picture or the viewport. */
+  autoVisible: number;
+  /** The picture's shorter displayed side, in CSS pixels, below which it is left alone. */
+  autoMinPx: number;
+  /** Look at the pixels first and leave alone what has nothing like text in it. */
+  autoTextCheck: boolean;
+  /** Requests to Lens per minute that translating as you scroll may make; answers kept from before are free. */
+  autoPerMinute: number;
+  /**
    * When the translate button is on screen.
    *   'auto'   - pinned on a touch screen, on hover everywhere else.
    *   'hover'  - only while the cursor is over an image.

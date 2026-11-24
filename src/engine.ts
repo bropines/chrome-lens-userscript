@@ -70,13 +70,15 @@ export {
 export { parseResponse } from './lens/response.js';
 export { ocrText, translationText } from './lens/text.js';
 
-export type { Source } from './image.js';
+export type { Identity, Source } from './image.js';
 export {
   acquireSource,
   encodeForUpload,
   encodeRect,
   encodeRegion,
   fingerprint,
+  identify,
+  markStrips,
   prepareImage,
 } from './image.js';
 
@@ -96,6 +98,10 @@ export {
 } from './cache.js';
 
 export { clearStored, getStored, putStored, storedStats } from './store.js';
+export { looksLikeText, mayHaveText } from './textlike.js';
+export type { Near } from './store.js';
+export type { Face } from './likeness.js';
+export { sameFrame } from './likeness.js';
 
 export { renderToBlob } from './render/canvas.js';
 export {

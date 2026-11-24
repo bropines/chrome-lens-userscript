@@ -1,3 +1,5 @@
+import { candidate, linesAgree, markBoxes, reusable, sameFrame } from './likeness.js';
+import type { Box, Face, Mark } from './likeness.js';
 import type { CacheOptions, LensOptions, LensResult } from './types.js';
 
 /**
@@ -28,9 +30,15 @@ const DB_NAME = 'lens-translate';
  * records themselves, which meant rewriting a whole answer - megabytes of
  * patches - to say it had been read.
  */
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 const RESPONSES = 'responses';
 const META = 'meta';
+/**
+ * 3: the grey copy each answer's picture had, so the same frame at another size
+ * finds it (`likeness.ts`). A store of its own because it is read only for the
+ * handful of candidates the small records point at, never on an exact hit.
+ */
+const FACES = 'faces';
 
 interface StoredEntry {
   /** `hash`, a separator, then the languages: what the answer is an answer to. */
@@ -53,7 +61,48 @@ interface Meta {
   key: string;
   used: number;
   bytes: number;
+  /** Absent on entries written before version 3, which then match exactly or not at all. */
+  near?: NearMeta;
 }
+
+/** Enough to decide whether an entry is worth comparing faces with. */
+interface NearMeta {
+  /** The languages and the tiling mark: an answer to the same question. */
+  ask: string;
+  aspect: number;
+  coarse: [number, number];
+  /** The long side Lens was sent, which is how much detail the answer has. */
+  size: number;
+}
+
+/**
+ * The picture being asked about, for a lookup that tolerates a change of size.
+ *
+ * `tag` is what the exact hash carries after the fingerprint (the tiling mark),
+ * and `size` the long side that would be uploaded.
+ */
+export interface Near {
+  face: Face;
+  tag: string;
+  size: number;
+  /** The picture's pixel size. */
+  width: number;
+  height: number;
+  /** The strip of each box in this picture (`markStrips` in image.ts). */
+  sample(boxes: readonly Box[]): Uint8Array[];
+}
+
+/** What is kept beside an answer for finding it by likeness. */
+interface FaceRecord {
+  key: string;
+  gray: Uint8Array;
+  width: number;
+  height: number;
+  marks: Mark[];
+}
+
+const faceBytes = (record: Omit<FaceRecord, 'key'>): number =>
+  record.gray.byteLength + record.marks.reduce((sum, mark) => sum + mark.gray.byteLength + 32, 0);
 
 let open: Promise<IDBDatabase | null> | null = null;
 
@@ -68,15 +117,21 @@ function database(): Promise<IDBDatabase | null> {
       resolve(null);
       return;
     }
-    request.onupgradeneeded = () => {
+    request.onupgradeneeded = (event) => {
+      const oldVersion = event.oldVersion;
       const db = request.result;
-      // Whatever an older version left is keyed the wrong way round and cannot
-      // be migrated into the new key without the languages it was asked in;
-      // the worst this costs is asking Lens again.
-      if (db.objectStoreNames.contains(RESPONSES)) db.deleteObjectStore(RESPONSES);
-      if (db.objectStoreNames.contains(META)) db.deleteObjectStore(META);
-      db.createObjectStore(RESPONSES, { keyPath: 'key' });
-      db.createObjectStore(META, { keyPath: 'key' }).createIndex('used', 'used');
+      // What version 1 left is keyed the wrong way round and cannot be migrated
+      // into the new key without the languages it was asked in; the worst this
+      // costs is asking Lens again. Version 2's is kept: 3 only adds a store.
+      if (oldVersion < 2) {
+        if (db.objectStoreNames.contains(RESPONSES)) db.deleteObjectStore(RESPONSES);
+        if (db.objectStoreNames.contains(META)) db.deleteObjectStore(META);
+      }
+      if (!db.objectStoreNames.contains(RESPONSES)) db.createObjectStore(RESPONSES, { keyPath: 'key' });
+      if (!db.objectStoreNames.contains(META)) {
+        db.createObjectStore(META, { keyPath: 'key' }).createIndex('used', 'used');
+      }
+      if (!db.objectStoreNames.contains(FACES)) db.createObjectStore(FACES, { keyPath: 'key' });
     };
     request.onsuccess = () => {
       const db = request.result;
@@ -158,13 +213,7 @@ function weigh(result: LensResult): number {
 const TOUCH_INTERVAL_MS = 60_000;
 const lastTouched = new Map<string, number>();
 
-export async function getStored(
-  hash: string,
-  settings: LensOptions & CacheOptions
-): Promise<LensResult | null> {
-  if (!hash || !settings.persistCache) return null;
-  const key = entryKey(hash, settings);
-
+async function readEntry(key: string): Promise<StoredEntry | undefined> {
   let entry: StoredEntry | undefined;
   await transact('readonly', [RESPONSES], (tx) => {
     const request = tx.objectStore(RESPONSES).get(key);
@@ -172,6 +221,86 @@ export async function getStored(
       entry = request.result as StoredEntry | undefined;
     };
   });
+  return entry;
+}
+
+/** The question an answer is to, beyond the picture: languages and tiling. */
+const askOf = (settings: LensOptions, tag: string): string => `${languagesOf(settings)}\u0000${tag}`;
+
+/**
+ * The small records that can be matched by likeness, held in memory.
+ *
+ * Read once and then kept by appending what this tab writes; forgotten after a
+ * minute, because other tabs write to the same database.
+ */
+let nearIndex: Meta[] | null = null;
+let nearRead = 0;
+const NEAR_TTL_MS = 60_000;
+
+async function nearCandidates(): Promise<Meta[]> {
+  if (!nearIndex || Date.now() - nearRead > NEAR_TTL_MS) {
+    nearIndex = (await stored()).filter((meta) => meta.near);
+    nearRead = Date.now();
+  }
+  return nearIndex;
+}
+
+/** At most this many faces are read for one lookup; candidates are rare to begin with. */
+const NEAR_READS = 4;
+
+async function findNear(near: Near, settings: LensOptions): Promise<string | null> {
+  const ask = askOf(settings, near.tag);
+  const found = (await nearCandidates())
+    .filter(
+      (meta) =>
+        meta.near!.ask === ask && reusable(meta.near!.size, near.size) && candidate(near.face, meta.near!)
+    )
+    // The most detailed answer first: it is the best one to draw from.
+    .sort((a, b) => b.near!.size - a.near!.size)
+    .slice(0, NEAR_READS);
+  for (const meta of found) {
+    let record: FaceRecord | undefined;
+    await transact('readonly', [FACES], (tx) => {
+      const request = tx.objectStore(FACES).get(meta.key);
+      request.onsuccess = () => {
+        record = request.result as FaceRecord | undefined;
+      };
+    });
+    if (!record?.gray || !record.marks?.length) continue;
+    if (!sameFrame(near.face, { gray: record.gray, coarse: meta.near!.coarse, aspect: meta.near!.aspect })) continue;
+    // The picture agrees; now the text has to, line by line, where it was read.
+    const strips = near.sample(record.marks.map((mark) => mark.box));
+    const smaller =
+      record.width * record.height < near.width * near.height
+        ? { width: record.width, height: record.height }
+        : { width: near.width, height: near.height };
+    if (linesAgree(record.marks, strips, smaller)) return meta.key;
+  }
+  return null;
+}
+
+/**
+ * The answer for this picture, if one was kept.
+ *
+ * Exactly first - same pixels, same size. Then, given `near`, the same frame at
+ * another size: a thumbnail answered yesterday and the original opened today.
+ */
+export async function getStored(
+  hash: string,
+  settings: LensOptions & CacheOptions,
+  near?: Near
+): Promise<LensResult | null> {
+  if (!hash || !settings.persistCache) return null;
+  let key = entryKey(hash, settings);
+
+  let entry = await readEntry(key);
+  if (!entry && near) {
+    const other = await findNear(near, settings);
+    if (other) {
+      key = other;
+      entry = await readEntry(key);
+    }
+  }
   if (!entry) return null;
 
   // Touch it, so eviction takes the ones nobody comes back to. Only the small
@@ -215,12 +344,29 @@ const budgetOf = (settings: CacheOptions): number => settings.storeBytes ?? sett
 export async function putStored(
   hash: string,
   result: LensResult,
-  settings: LensOptions & CacheOptions
+  settings: LensOptions & CacheOptions,
+  near?: Near
 ): Promise<void> {
   const budget = budgetOf(settings);
   if (!hash || !settings.persistCache || budget <= 0) return;
 
-  const bytes = weigh(result);
+  // Only an answer with lines in it can be checked by its lines, so only that
+  // kind is found by likeness; an empty one is still found exactly.
+  let face: FaceRecord | null = null;
+  if (near) {
+    const boxes = markBoxes(result.ocr);
+    const strips = boxes.length ? near.sample(boxes) : [];
+    if (strips.length === boxes.length && boxes.length) {
+      face = {
+        key: '',
+        gray: near.face.gray,
+        width: near.width,
+        height: near.height,
+        marks: boxes.map((box, i) => ({ box, gray: strips[i]! })),
+      };
+    }
+  }
+  const bytes = weigh(result) + (face ? faceBytes(face) : 0);
   // As in memory: one oversized page should not evict everything else to land.
   if (bytes > budget) return;
 
@@ -229,18 +375,29 @@ export async function putStored(
   const entry: StoredEntry = { key, hash, languages: languagesOf(settings), result, bytes };
   let delta = bytes;
 
-  const written = await transact('readwrite', [RESPONSES, META], (tx) => {
+  const meta: Meta = { key, used: now, bytes };
+  if (near && face) {
+    meta.near = {
+      ask: askOf(settings, near.tag),
+      aspect: near.face.aspect,
+      coarse: near.face.coarse,
+      size: near.size,
+    };
+  }
+  const written = await transact('readwrite', [RESPONSES, META, FACES], (tx) => {
     const metas = tx.objectStore(META);
     const previous = metas.get(key);
     previous.onsuccess = () => {
       // Replacing an entry replaces its weight, not adds to it.
       delta = bytes - ((previous.result as Meta | undefined)?.bytes ?? 0);
       tx.objectStore(RESPONSES).put(entry);
-      const meta: Meta = { key, used: now, bytes };
       metas.put(meta);
+      if (face) tx.objectStore(FACES).put({ ...face, key });
+      else tx.objectStore(FACES).delete(key);
     };
   });
   if (!written) return;
+  if (nearIndex) nearIndex = [...nearIndex.filter((m) => m.key !== key), ...(meta.near ? [meta] : [])];
 
   lastTouched.set(key, now);
   writesSinceCount += 1;
@@ -266,9 +423,10 @@ async function evict(budget: number): Promise<void> {
   if (total <= budget) return;
 
   let remaining = total;
-  const done = await transact('readwrite', [RESPONSES, META], (tx) => {
+  const done = await transact('readwrite', [RESPONSES, META, FACES], (tx) => {
     const metas = tx.objectStore(META);
     const responses = tx.objectStore(RESPONSES);
+    const faces = tx.objectStore(FACES);
     const cursor = metas.index('used').openCursor();
     cursor.onsuccess = () => {
       const at = cursor.result;
@@ -276,6 +434,7 @@ async function evict(budget: number): Promise<void> {
       const meta = at.value as Meta;
       remaining -= meta.bytes;
       responses.delete(meta.key);
+      faces.delete(meta.key);
       lastTouched.delete(meta.key);
       at.delete();
       at.continue();
@@ -284,14 +443,17 @@ async function evict(budget: number): Promise<void> {
   // A transaction that did not commit deleted nothing, so the count is unknown
   // again rather than wrong.
   total = done ? remaining : null;
+  nearIndex = null;
 }
 
 export async function clearStored(): Promise<void> {
-  await transact('readwrite', [RESPONSES, META], (tx) => {
+  await transact('readwrite', [RESPONSES, META, FACES], (tx) => {
     tx.objectStore(RESPONSES).clear();
     tx.objectStore(META).clear();
+    tx.objectStore(FACES).clear();
   });
   lastTouched.clear();
+  nearIndex = null;
   total = 0;
   writesSinceCount = 0;
 }

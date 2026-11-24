@@ -2,6 +2,8 @@ import 'fake-indexeddb/auto';
 import { afterEach, beforeEach, describe, expect, setSystemTime, test } from 'bun:test';
 import { clearStored, entryKey, getStored, putStored, storedStats } from '../src/store.js';
 import type { CacheOptions, LensOptions, LensResult } from '../src/types.js';
+import type { Near } from '../src/store.js';
+import type { Face } from '../src/likeness.js';
 
 const lens = { targetLang: 'ru', sourceLang: '', ocrLang: '' } as LensOptions;
 const settings = (over: Partial<LensOptions & CacheOptions> = {}): LensOptions & CacheOptions => ({
@@ -206,5 +208,77 @@ describe('the persistent store', () => {
     expect(await storedStats()).toEqual({ entries: 0, bytes: 0 });
     expect(await getStored('a', settings())).toBeNull();
     expect(await raw('responses', entryKey('a', settings()))).toBeUndefined();
+  });
+});
+
+describe('the same frame at another size', () => {
+  beforeEach(async () => {
+    await clearStored();
+  });
+
+  /** A face: what matters here is that two calls with the same seed are the same picture. */
+  const face = (seed: number, aspect = 1.5): Face => ({
+    gray: Uint8Array.from({ length: 64 * 64 }, (_, i) => (i * seed * 2654435761) >>> 24),
+    coarse: [seed * 0x9e3779b1 >>> 0, seed * 0x85ebca6b >>> 0],
+    aspect,
+  });
+  /** A line's strip: inked, and different for a different text. */
+  const strip = (text: number): Uint8Array =>
+    Uint8Array.from({ length: 12 * 120 }, (_, i) => (((i * 7 + text * 13) >> 2) % 5 ? 255 : 0));
+  /** An answer that read one line, 0.1 of the picture tall. */
+  const read = (label: string): LensResult => ({
+    ...answer(label),
+    ocr: [{ writingDirection: 0, geometry: null, lines: [{ text: 'x', words: [], geometry: { cx: 0.5, cy: 0.2, w: 0.8, h: 0.1, angle: 0 } }] }],
+  });
+  const near = (o: { seed?: number; text?: number; width?: number; size?: number; tag?: string } = {}): Near => {
+    const width = o.width ?? 1200;
+    return {
+      face: face(o.seed ?? 1),
+      tag: o.tag ?? '',
+      size: o.size ?? width,
+      width,
+      height: width / 1.5,
+      sample: (boxes) => boxes.map(() => strip(o.text ?? 1)),
+    };
+  };
+
+  test('a thumbnail finds the answer its original got', async () => {
+    await putStored('original', read('big'), settings(), near({ width: 1200 }));
+    const found = await getStored('thumbnail', settings(), near({ width: 680 }));
+    expect(found?.contentLanguage).toBe('big');
+  });
+
+  test('and the original finds a thumbnail answer down to half its detail', async () => {
+    await putStored('thumb', read('small'), settings(), near({ width: 900 }));
+    expect((await getStored('orig', settings(), near({ width: 1600 })))?.contentLanguage).toBe('small');
+    await clearStored();
+    await putStored('thumb', read('small'), settings(), near({ width: 600 }));
+    expect(await getStored('orig', settings(), near({ width: 1600 }))).toBeNull();
+  });
+
+  test('different text in the same picture is a miss', async () => {
+    await putStored('a', read('caption one'), settings(), near({ text: 1 }));
+    expect(await getStored('b', settings(), near({ text: 2, width: 800 }))).toBeNull();
+  });
+
+  test('a different picture, language or tiling is a miss', async () => {
+    await putStored('a', read('x'), settings(), near());
+    expect(await getStored('b', settings(), near({ seed: 2 }))).toBeNull();
+    expect(await getStored('b', settings({ targetLang: 'de' }), near())).toBeNull();
+    expect(await getStored('b', settings(), near({ tag: '.tiled' }))).toBeNull();
+  });
+
+  test('an answer with no lines is found only exactly: there is nothing to check it by', async () => {
+    await putStored('empty', answer('nothing'), settings(), near());
+    expect(await getStored('other', settings(), near())).toBeNull();
+    expect((await getStored('empty', settings(), near()))?.contentLanguage).toBe('nothing');
+  });
+
+  test('what is kept for likeness counts against the budget, and goes with its answer', async () => {
+    await putStored('a', read('x'), settings(), near());
+    const { bytes } = await storedStats();
+    expect(bytes).toBeGreaterThan(100 + 64 * 64);
+    await putStored('b', read('y', ), settings({ cacheBytes: bytes + 50 }), near({ seed: 3 }));
+    expect(await raw('faces', entryKey('a', settings()))).toBeUndefined();
   });
 });

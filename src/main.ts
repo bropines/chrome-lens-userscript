@@ -5,12 +5,14 @@ import { diagnose } from './diagnose.js';
 
 import { askLens } from './lens/ask.js';
 import { tilingTag } from './lens/tiles.js';
+import { mayHaveText } from './textlike.js';
 import { ImageSearch, textSearchUrl } from './lens/search.js';
 import type { Selection } from './lens/search.js';
 import { ocrText, translationText } from './lens/text.js';
-import { acquireSource, encodeForUpload, encodeRegion, fingerprint } from './image.js';
+import { acquireSource, encodeForUpload, encodeRegion, identify, markStrips, targetSize } from './image.js';
 import { paintRect } from './render/background.js';
 import { clearStored, getStored, putStored, storedStats } from './store.js';
+import type { Near } from './store.js';
 import { classify, collect, ignoreElements, isBigEnough, targetFromEvent } from './detect.js';
 import type { Target } from './detect.js';
 import {
@@ -331,8 +333,10 @@ export function start({ framed, hovered }: StartOptions): void {
    *   empty   - Lens answered and there was nothing to put up
    *   failed  - something went wrong; the message is in `lastFailure`
    *   skipped - not attempted: busy, or the script is switched off here
+   *   deferred - translating as you scroll held it back: it went out of view
+   *              before its turn, or the requests for this minute are spent
    */
-  type Outcome = 'shown' | 'undone' | 'empty' | 'failed' | 'skipped';
+  type Outcome = 'shown' | 'undone' | 'empty' | 'failed' | 'skipped' | 'deferred';
 
   let lastFailure = '';
 
@@ -342,6 +346,13 @@ export function start({ framed, hovered }: StartOptions): void {
      * report that three of them had no text; the caller summarises instead.
      */
     quiet?: boolean;
+    /**
+     * Translating as you scroll asked, not a person: it never takes a
+     * translation down, waits its turn for the minute's requests, re-checks
+     * that the picture is still in view when its turn comes, and looks at the
+     * pixels for anything like text before asking Lens.
+     */
+    auto?: boolean;
   }
 
   async function translate(target: Target, options: TranslateOptions = {}): Promise<Outcome> {
@@ -351,6 +362,13 @@ export function start({ framed, hovered }: StartOptions): void {
     };
 
     if (busy.has(img)) return 'skipped';
+    if (options.auto) {
+      // A person may have translated it since it was queued; a toggle here
+      // would take theirs down.
+      if (isTranslated(img)) return 'skipped';
+      // Queued while in view, its turn came after the reader scrolled on.
+      if (!autoWorthy(target)) return 'deferred';
+    }
     if (!settings.enabled) {
       say(t('toast.off'));
       return 'skipped';
@@ -408,13 +426,45 @@ export function start({ framed, hovered }: StartOptions): void {
         // The fingerprint is of the whole picture; a strip that is asked about
         // in tiles is filed under it with a mark, so the answer a single upload
         // once got for the same pixels is not the one that comes back.
-        const print = result ? '' : fingerprint(prepared.source, prepared.width, prepared.height);
-        const hash = print && print + tilingTag(prepared.width, prepared.height, settings);
+        //
+        // Failing that, the same frame at another size (`likeness.ts`): the
+        // thumbnail a feed showed yesterday and the original opened today share
+        // nothing else.
+        const identity = result ? null : identify(prepared.source, prepared.width, prepared.height);
+        const tag = tilingTag(prepared.width, prepared.height, settings);
+        const hash = identity?.hash ? identity.hash + tag : '';
+        let near: Near | undefined;
+        if (identity?.face) {
+          // How much detail an answer has is what was uploaded: a tiled strip
+          // goes up at its own size, anything else within the upload budget.
+          const sent = tag ? prepared : targetSize(prepared.width, prepared.height, settings);
+          const source = prepared.source;
+          near = {
+            face: identity.face,
+            tag,
+            size: Math.max(sent.width, sent.height),
+            width: prepared.width,
+            height: prepared.height,
+            sample: (boxes) => markStrips(source, prepared.width, prepared.height, boxes),
+          };
+        }
         if (!result && hash) {
-          const remembered = await getStored(hash, settings);
+          const remembered = await getStored(hash, settings, near);
           if (remembered) {
             result = remembered;
             if (target.url) putCached(key, result, settings, size);
+          }
+        }
+
+        if (!result && options.auto) {
+          // Nothing kept for it, so this is where a request would be spent.
+          if (settings.autoTextCheck && !(await mayHaveText(prepared.source, prepared.width, prepared.height))) {
+            return 'empty';
+          }
+          const wait = takeRequest();
+          if (wait > 0) {
+            autoRetryIn(wait);
+            return 'deferred';
           }
         }
 
@@ -422,7 +472,7 @@ export function start({ framed, hovered }: StartOptions): void {
           // One request for a page; several, merged, for a strip too long for one.
           result = await askLens(prepared.source, settings);
           if (target.url) putCached(key, result, settings, size);
-          void putStored(hash, result, settings);
+          void putStored(hash, result, settings, near);
         }
 
         if (!result.blocks.length) {
@@ -626,41 +676,132 @@ export function start({ framed, hovered }: StartOptions): void {
   }
 
   /**
-   * Translate as you read, on a site that asked for it.
+   * Translate as you read: on a site set to it, or everywhere the setting is on.
    *
    * Remembers what it has already tried by address, so a picture that came back
    * empty is not asked about again on every scroll, and one the reader undid
    * stays undone - while a virtualised feed that reuses the element for a new
    * photo, which changes the address, gets a fresh attempt.
+   *
+   * What keeps a feed from becoming a request per photograph, cheapest first:
+   * a size floor (`autoMinPx`) that avatars and previews fail; most of the
+   * picture on screen (`autoVisible`), checked again when its turn in the
+   * queue comes, so a fast scroll past sends nothing; waiting for scrolling to
+   * settle; both caches, where a picture seen before under any address costs
+   * nothing; the pixel test for anything like text (`textlike.ts`); and a
+   * budget of requests a minute, the rest waiting their turn.
    */
+  const autoOn = (): boolean => site === 'auto' || (site === 'default' && settings.autoTranslate);
+
   const autoTried = new WeakMap<HTMLElement, string>();
-  let autoTimer = 0;
   let lastAutoComplaint = 0;
 
+  /** A picture worth translating unasked, right now. */
+  function autoWorthy(target: Target): boolean {
+    if (target.kind === 'video' || !target.element.isConnected) return false;
+    if (isTranslated(target.element) || busy.has(target.element)) return false;
+    if (!isBigEnough(target, settings.minImageSize) || onVideo(target)) return false;
+    const rect = target.element.getBoundingClientRect();
+    if (Math.min(rect.width, rect.height) < settings.autoMinPx) return false;
+    // Of the picture, or of the screen for a picture taller than it: a long
+    // strip is never half on screen, and should not have to be.
+    const part = visiblePart(target.element);
+    const whole = Math.min(rect.width * rect.height, window.innerWidth * window.innerHeight);
+    return whole > 0 && part.width * part.height >= settings.autoVisible * whole;
+  }
+
+  /**
+   * The minute's requests, as a bucket that refills continuously: a minute's
+   * worth to start with, so opening a chapter is not a wait, and then one every
+   * `60 / autoPerMinute` seconds. Returns 0 if one was taken, else how long
+   * until there is one.
+   */
+  let requestTokens = -1;
+  let requestsAt = 0;
+
+  function takeRequest(): number {
+    const capacity = Math.max(1, Math.round(settings.autoPerMinute) || 1);
+    const perMs = capacity / 60_000;
+    const now = Date.now();
+    requestTokens = requestTokens < 0 ? capacity : Math.min(capacity, requestTokens + (now - requestsAt) * perMs);
+    requestsAt = now;
+    if (requestTokens >= 1) {
+      requestTokens -= 1;
+      return 0;
+    }
+    return Math.ceil((1 - requestTokens) / perMs);
+  }
+
+  let autoRetry = 0;
+  let autoRetryAt = 0;
+
+  /** Look again once a request is free; one timer, for the soonest. */
+  function autoRetryIn(ms: number): void {
+    const at = Date.now() + ms;
+    if (autoRetry && autoRetryAt <= at) return;
+    window.clearTimeout(autoRetry);
+    autoRetryAt = at;
+    autoRetry = window.setTimeout(() => {
+      autoRetry = 0;
+      scheduleAuto();
+    }, ms + 50);
+  }
+
   function autoTranslate(): void {
-    if (site !== 'auto' || !active()) return;
-    const targets = untranslatedInView(known).filter(
-      (target) => autoTried.get(target.element) !== target.url
-    );
+    if (!autoOn() || !active()) return;
+    const area = (target: Target): number => {
+      const part = visiblePart(target.element);
+      return part.width * part.height;
+    };
+    // Most on screen first: when the minute's requests run out, the picture
+    // being read is the one that got one.
+    const targets = known
+      .filter((target) => autoTried.get(target.element) !== target.url && autoWorthy(target))
+      .sort((a, b) => area(b) - area(a));
     if (!targets.length) return;
     for (const target of targets) autoTried.set(target.element, target.url);
-    void translateAll(targets).then((tally) => {
+    let failed = 0;
+    void Promise.all(
+      targets.map((target) =>
+        schedule(async () => {
+          const outcome = await translate(target, { quiet: true, auto: true });
+          // Not tried after all: it may be asked about when it is back in view.
+          if (outcome === 'deferred') autoTried.delete(target.element);
+          else if (outcome === 'failed') failed += 1;
+        })
+      )
+    ).then(() => {
       // One complaint at most every half minute: a bad key or no connection fails
       // every picture, and a toast per scroll is worse than the problem.
-      if (tally.failed && Date.now() - lastAutoComplaint > 30_000) {
+      if (failed && Date.now() - lastAutoComplaint > 30_000) {
         lastAutoComplaint = Date.now();
-        toast(t('toast.autoFailed', { count: tally.failed, reason: lastFailure }), 5000);
+        toast(t('toast.autoFailed', { count: failed, reason: lastFailure }), 5000);
       }
     });
   }
 
-  /** Scrolling brings new pictures into view; look again once it settles. */
+  /**
+   * Scrolling brings new pictures into view; look again once it settles.
+   *
+   * Settles means a pause: every event pushes the look back, so flinging
+   * through a feed sends nothing for what flew past. A slow, steady scroll
+   * never pauses, so it is looked at anyway every so often.
+   */
+  const AUTO_SETTLE_MS = 350;
+  const AUTO_MAX_WAIT_MS = 1200;
+  let autoTimer = 0;
+  let autoSince = 0;
+
   function scheduleAuto(): void {
-    if (autoTimer || site !== 'auto') return;
+    if (!autoOn()) return;
+    const now = Date.now();
+    if (!autoTimer) autoSince = now;
+    window.clearTimeout(autoTimer);
+    const wait = Math.max(0, Math.min(AUTO_SETTLE_MS, autoSince + AUTO_MAX_WAIT_MS - now));
     autoTimer = window.setTimeout(() => {
       autoTimer = 0;
       autoTranslate();
-    }, 250);
+    }, wait);
   }
 
   let currentTarget: Target | null = null;
@@ -947,7 +1088,7 @@ export function start({ framed, hovered }: StartOptions): void {
   let watching = false;
 
   function syncWatchers(): boolean {
-    const wanted = pinned || site === 'auto';
+    const wanted = pinned || autoOn();
     if (wanted === watching) return false;
     watching = wanted;
     if (watching) {
@@ -1045,7 +1186,7 @@ export function start({ framed, hovered }: StartOptions): void {
    */
   function showSettings(): void {
     hideToast();
-    openSettings({ onSaved, site: () => site, setSite: chooseSite });
+    openSettings({ onSaved, site: () => site, setSite: (mode) => chooseSite(mode, true) });
   }
 
   function onSaved(saved: Settings): void {
@@ -1053,6 +1194,7 @@ export function start({ framed, hovered }: StartOptions): void {
     useLanguage(settings.language);
     applySettings();
     applyButtonMode();
+    scheduleAuto();
     void redrawShowing();
     toast(t('toast.saved'));
   }
@@ -2012,7 +2154,7 @@ export function start({ framed, hovered }: StartOptions): void {
    * Switching a site off takes its translations down with it: leaving them up
    * would be the one thing the person did not ask for.
    */
-  function chooseSite(next: SiteMode): void {
+  function chooseSite(next: SiteMode, quiet = false): void {
     site = next;
     setSiteMode(next);
     if (next === 'off') {
@@ -2022,7 +2164,10 @@ export function start({ framed, hovered }: StartOptions): void {
       hideButton();
     }
     const started = syncWatchers();
-    if (next === 'auto' && !started) refresh();
+    if (autoOn() && !started) refresh();
+    // The settings window shows the choice itself, and a message would sit
+    // over its Save button on a phone.
+    if (quiet) return;
     const host = hostOf();
     toast(
       next === 'off'

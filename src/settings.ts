@@ -32,6 +32,11 @@ export const DEFAULTS: Settings = {
   jpegQuality: 0.4,
   showButton: true,
   videoButton: false,
+  autoTranslate: false,
+  autoVisible: 0.5,
+  autoMinPx: 200,
+  autoTextCheck: true,
+  autoPerMinute: 20,
   buttonMode: 'auto',
   hotkey: 'alt',
   keyTranslateAll: 'Alt+Shift+KeyT',
@@ -163,6 +168,7 @@ export const FIELDS: ReadonlyArray<Field> = [
   { key: 'uiMode', tab: 'general', essential: true, type: 'select', options: ['simple', 'pro'] },
   { key: 'language', tab: 'general', essential: true, type: 'select', choices: interfaceLanguages },
   { key: 'enabled', tab: 'general', essential: true, type: 'checkbox' },
+  { key: 'autoTranslate', tab: 'general', essential: true, type: 'checkbox' },
   {
     key: 'popupOpacity', tab: 'general', essential: true, type: 'range',
     min: MIN_OPACITY, max: MAX_OPACITY, step: OPACITY_STEP, unit: 'pct',
@@ -242,6 +248,10 @@ export const FIELDS: ReadonlyArray<Field> = [
   { key: 'keyCopy', tab: 'behaviour', type: 'chord' },
   { key: 'keyUndoAll', tab: 'behaviour', type: 'chord' },
   { key: 'minImageSize', tab: 'behaviour', type: 'number', min: 10, max: 2000, step: 10 },
+  { key: 'autoVisible', tab: 'behaviour', type: 'range', min: 0.2, max: 1, step: 0.05, unit: '%' },
+  { key: 'autoMinPx', tab: 'behaviour', type: 'number', min: 50, max: 2000, step: 10 },
+  { key: 'autoTextCheck', tab: 'behaviour', type: 'checkbox' },
+  { key: 'autoPerMinute', tab: 'behaviour', type: 'number', min: 1, max: 120, step: 1 },
   { key: 'frames', tab: 'behaviour', type: 'checkbox' },
 
   // Advanced

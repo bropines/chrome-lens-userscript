@@ -1,6 +1,6 @@
 {
   "name": "lens-translate-userscript",
-  "version": "2.13.0-beta.7",
+  "version": "2.13.0-beta.8",
   "description": "Translate text inside images in place, rendered the way Chromium's Lens overlay does.",
   "license": "MIT",
   "type": "module",

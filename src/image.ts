@@ -1,4 +1,6 @@
 import { fetchImageBlob } from './lens/client.js';
+import { faceOf, markShape } from './likeness.js';
+import type { Box, Face } from './likeness.js';
 import type { Target } from './detect.js';
 import type { Bytes, LensOptions, PreparedImage } from './types.js';
 
@@ -75,12 +77,21 @@ function ownPixels(target: Target): Source | null {
  */
 const FINGERPRINT_SIZE = 128;
 
-export function fingerprint(source: Source, width: number, height: number): string {
+/** What a picture is, two ways: exactly, and as a frame that may come at other sizes. */
+export interface Identity {
+  /** The exact fingerprint; empty when the pixels cannot be read. */
+  hash: string;
+  /** For finding the same frame at another size (`likeness.ts`). */
+  face: Face | null;
+}
+
+/** Both names from one downscale: the second costs a loop over pixels already read. */
+export function identify(source: Source, width: number, height: number): Identity {
   const canvas = document.createElement('canvas');
   canvas.width = FINGERPRINT_SIZE;
   canvas.height = FINGERPRINT_SIZE;
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
-  if (!ctx) return '';
+  if (!ctx) return { hash: '', face: null };
 
   try {
     ctx.drawImage(source, 0, 0, FINGERPRINT_SIZE, FINGERPRINT_SIZE);
@@ -94,12 +105,53 @@ export function fingerprint(source: Source, width: number, height: number): stri
       b = Math.imul(b + (data[i] as number) + i, 0x85ebca6b);
     }
     const lane = (n: number): string => (n >>> 0).toString(36);
-    return `${lane(a)}.${lane(b)}.${width}x${height}`;
+    return {
+      hash: `${lane(a)}.${lane(b)}.${width}x${height}`,
+      face: faceOf(data, FINGERPRINT_SIZE, width, height),
+    };
   } catch {
     // A tainted canvas has no readable pixels, so it has no fingerprint; the
     // caller falls back to the address.
-    return '';
+    return { hash: '', face: null };
   }
+}
+
+export function fingerprint(source: Source, width: number, height: number): string {
+  return identify(source, width, height).hash;
+}
+
+/**
+ * The strip of each box in this picture, for comparing lines (`likeness.ts`).
+ *
+ * Drawn by the browser from the region straight to the strip, which filters
+ * the way it does for any downscale, so the same line in a thumbnail and in its
+ * original comes out alike. An empty array when the pixels cannot be read.
+ */
+export function markStrips(source: Source, width: number, height: number, boxes: readonly Box[]): Uint8Array[] {
+  const strips: Uint8Array[] = [];
+  const canvas = document.createElement('canvas');
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) return strips;
+  try {
+    for (const box of boxes) {
+      const pw = box.w * width;
+      const ph = box.h * height;
+      const shape = markShape(pw, ph);
+      canvas.width = shape.w;
+      canvas.height = shape.h;
+      ctx.imageSmoothingQuality = 'high';
+      ctx.drawImage(source, box.x * width, box.y * height, pw, ph, 0, 0, shape.w, shape.h);
+      const { data } = ctx.getImageData(0, 0, shape.w, shape.h);
+      const gray = new Uint8Array(shape.w * shape.h);
+      for (let i = 0; i < gray.length; i += 1) {
+        gray[i] = Math.round(0.299 * data[i * 4]! + 0.587 * data[i * 4 + 1]! + 0.114 * data[i * 4 + 2]!);
+      }
+      strips.push(gray);
+    }
+  } catch {
+    return [];
+  }
+  return strips;
 }
 
 /** Draw, then JPEG-encode at Chromium's quality. Throws if the canvas is tainted. */

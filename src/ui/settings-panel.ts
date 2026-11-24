@@ -1,4 +1,6 @@
+import { cacheStats } from '../cache.js';
 import { hostFacts, panelCommands } from '../gm.js';
+import { storedStats } from '../store.js';
 import { onLocaleChange, t, useLanguage } from '../i18n/index.js';
 import type { Key } from '../i18n/index.js';
 import {
@@ -729,30 +731,171 @@ export function openSettings(context: SettingsContext, restore?: Restore): void 
   };
 
   /**
-   * The menu commands, drawn where a host with no menu can still reach them.
+   * The General tab, which is the one most people only ever see.
    *
-   * AdGuard's userscript engine has no menu at all, so clearing the cache and
-   * undoing a page would otherwise be unreachable there. Hosts that do have one
-   * get them in both places, which costs nothing and saves a trip to the toolbar.
+   * It used to be four fields and a wall of identical buttons, three of which
+   * were toggles that did not say which way they were set. Now what is true
+   * right now comes first, as switches and a three-way choice for this site,
+   * each saying what it means; then the interface, as two cards; then the rest.
+   *
+   * Everything on it is still a field drawn by `buildField` where it can be,
+   * so search, reset and Save treat it like any other tab. The two exceptions
+   * are the site, which is not a setting and applies at once as it always has,
+   * and the interface cards, which edit a hidden select that holds the value.
    */
-  const buildActions = (pro: boolean): HTMLElement | null => {
-    const commands = panelCommands().filter((command) => pro || command.essential);
-    if (!commands.length) return null;
-    const section = el('div', 'lt-extra');
-    section.appendChild(el('div', 'lt-group', t('panel.actions')));
-    const row = el('div', 'lt-actions');
-    for (const command of commands) {
-      const action = button('lt-btn', command.label);
-      action.addEventListener('click', () => {
-        // Undoing a page is invisible from behind the panel, and toggling the
-        // script off while its settings are open reads as a bug. Close first.
-        closeNow();
-        command.run();
+  const fieldOf = (key: keyof Settings): Field => FIELDS.find((field) => field.key === key)!;
+  const GENERAL_OWN = new Set<keyof Settings>(['enabled', 'autoTranslate', 'uiMode', 'language', 'popupOpacity']);
+  let syncSiteNow: () => void = () => {};
+
+  const buildSiteNow = (): HTMLElement => {
+    const row = el('div', 'lt-row lt-extra lt-site-now');
+    row.appendChild(el('span', 'lt-label', t('general.site', { host: hostOf() })));
+    const group = el('div', 'lt-segmented');
+    group.setAttribute('role', 'radiogroup');
+    group.setAttribute('aria-label', t('general.site', { host: hostOf() }));
+    const hint = el('span', 'lt-hint');
+    const choices = (['off', 'default', 'auto'] as const).map((mode) => {
+      const choice = button('lt-seg', t(`general.site.${mode}`));
+      choice.setAttribute('role', 'radio');
+      choice.addEventListener('click', () => {
+        if (context.site() === mode) return;
+        context.setSite(mode);
+        syncSiteNow();
+        redrawSites();
       });
-      row.appendChild(action);
+      group.appendChild(choice);
+      return [mode, choice] as const;
+    });
+    syncSiteNow = (): void => {
+      const now = context.site();
+      for (const [mode, choice] of choices) choice.setAttribute('aria-checked', String(mode === now));
+      hint.textContent =
+        now === 'off'
+          ? t('general.site.hint.off')
+          : now === 'auto'
+            ? t('general.site.hint.auto')
+            : current().autoTranslate
+              ? t('general.site.hint.defaultAuto')
+              : t('general.site.hint.default');
+    };
+    row.append(group, hint);
+    return row;
+  };
+
+  const buildModes = (values: Settings): HTMLElement => {
+    const field = fieldOf('uiMode');
+    const row = el('div', 'lt-row lt-row-wide lt-modes-row');
+    row.dataset['field'] = field.key;
+    row.appendChild(el('span', 'lt-label', fieldLabel(field)));
+    // The value lives here, as for any select; the cards only set it.
+    const select = el('select', 'lt-input');
+    select.hidden = true;
+    for (const value of ['simple', 'pro']) {
+      const option = el('option', undefined, value);
+      option.value = value;
+      select.appendChild(option);
     }
-    section.append(row, el('div', 'lt-note', t('panel.actionsNote')));
+    select.value = values.uiMode;
+    select.dataset['key'] = field.key;
+    const cards = el('div', 'lt-modes');
+    cards.setAttribute('role', 'radiogroup');
+    cards.setAttribute('aria-label', fieldLabel(field));
+    for (const [mode, glyph] of [
+      ['simple', 'translate'],
+      ['pro', 'layers'],
+    ] as const) {
+      const card = button('lt-mode', '');
+      card.setAttribute('role', 'radio');
+      card.setAttribute('aria-checked', String(values.uiMode === mode));
+      const title = el('span', 'lt-mode-title');
+      title.innerHTML = icon(glyph, 16);
+      title.appendChild(el('span', undefined, t(`general.${mode}.title`)));
+      card.append(title, el('span', 'lt-mode-desc', t(`general.${mode}.desc`)));
+      card.addEventListener('click', () => {
+        if (select.value === mode) return;
+        select.value = mode;
+        // The change listener redraws the window for the other interface.
+        select.dispatchEvent(new Event('change', { bubbles: true }));
+      });
+      cards.appendChild(card);
+    }
+    row.append(select, cards);
+    return row;
+  };
+
+  /** The commands worth a button here, each with what it looks like. */
+  const QUICK: ReadonlyArray<readonly [string, IconName]> = [
+    ['translateAll', 'images'],
+    ['undoAll', 'undo'],
+    ['clearCache', 'trash'],
+    ['diagnostics', 'pulse'],
+  ];
+
+  const buildQuick = (): HTMLElement | null => {
+    const commands = panelCommands();
+    const found = QUICK.flatMap(([id, glyph]) => {
+      const command = commands.find((candidate) => candidate.id === id);
+      return command ? [[command, glyph] as const] : [];
+    });
+    if (!found.length) return null;
+    const section = el('div', 'lt-extra');
+    section.appendChild(el('div', 'lt-group', t('general.quick')));
+    const grid = el('div', 'lt-quick');
+    for (const [command, glyph] of found) {
+      const action = button('lt-btn lt-quick-btn', '');
+      action.dataset['command'] = command.id;
+      action.innerHTML = icon(glyph, 16);
+      action.appendChild(el('span', undefined, command.label));
+      if (command.id === 'clearCache') {
+        const size = el('span', 'lt-quick-meta');
+        const measure = (): void => {
+          const memory = cacheStats();
+          void storedStats().then(({ bytes }) => {
+            size.textContent = t('general.cacheSize', { size: ((memory.bytes + bytes) / 1048576).toFixed(1) });
+          });
+        };
+        measure();
+        action.appendChild(size);
+        action.addEventListener('click', () => {
+          command.run();
+          window.setTimeout(measure, 300);
+        });
+      } else {
+        action.addEventListener('click', () => {
+          // Undoing a page is invisible from behind the window, and the report
+          // takes the screen. Close first.
+          closeNow();
+          command.run();
+        });
+      }
+      grid.appendChild(action);
+    }
+    section.append(grid, el('div', 'lt-note', t('panel.actionsNote')));
     return section;
+  };
+
+  const buildGeneral = (values: Settings, fields: readonly Field[]): HTMLElement[] => {
+    const parts: HTMLElement[] = [];
+    const status = el('div', 'lt-card lt-status');
+    status.append(buildField(fieldOf('enabled'), values), buildSiteNow(), buildField(fieldOf('autoTranslate'), values));
+    parts.push(status, buildModes(values));
+
+    const grid = el('div', 'lt-grid');
+    grid.append(buildField(fieldOf('language'), values), buildField(fieldOf('popupOpacity'), values));
+    parts.push(grid);
+
+    // The simple interface has no other tabs, so what it keeps of them is here.
+    const rest = fields.filter((field) => !GENERAL_OWN.has(field.key));
+    if (rest.length) {
+      parts.push(el('div', 'lt-group lt-extra', t('general.essentials')));
+      const more = el('div', 'lt-grid');
+      for (const field of rest) more.appendChild(buildField(field, values));
+      parts.push(more);
+    }
+    const quick = buildQuick();
+    if (quick) parts.push(quick);
+    syncSiteNow();
+    return parts;
   };
 
   const buildSites = (): HTMLElement => {
@@ -928,15 +1071,11 @@ export function openSettings(context: SettingsContext, restore?: Restore): void 
       // Above the fields and stuck there, so it is in view from any of them.
       if (pro && tab === 'appearance') pane.appendChild(preview.element);
 
-      if (fields.length) {
+      if (tab === 'general') pane.append(...buildGeneral(values, fields));
+      else if (fields.length) {
         const grid = el('div', 'lt-grid');
         for (const field of fields) grid.appendChild(buildField(field, values));
         pane.appendChild(grid);
-      }
-      if (tab === 'general') {
-        const actions = buildActions(pro);
-        if (actions) pane.appendChild(actions);
-        if (!pro) pane.appendChild(el('div', 'lt-note lt-extra', t('panel.simpleNote')));
       }
       if (tab === 'sites') pane.appendChild(buildSites());
       if (tab === 'about') pane.appendChild(buildAbout());
@@ -993,6 +1132,8 @@ export function openSettings(context: SettingsContext, restore?: Restore): void 
     // moment (from the host's store, or GitHub the first time) and the window
     // redraws itself where it stands; Cancel puts the stored one back.
     if (key === 'language') useLanguage(current().language);
+    // What "default" means for this site depends on it.
+    if (key === 'autoTranslate') syncSiteNow();
     refreshPreview();
   });
 

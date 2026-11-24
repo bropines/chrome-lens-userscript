@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Lens Translate
 // @namespace    https://github.com/bropines/chrome-lens-userscript
-// @version      2.13.0-beta.7
+// @version      2.13.0-beta.8
 // @author       bropines
 // @description  Hover any image, click the button, and its text is translated in place - rendered the way Chromium's own Lens overlay does it.
 // @license      MIT
@@ -697,7 +697,7 @@
     }
     return null;
   }
-  const VERSION = "2.13.0-beta.7";
+  const VERSION = "2.13.0-beta.8";
   const EN = {
     // --- the controls over a picture
     "act.translate": "Translate",
@@ -833,9 +833,22 @@
     "panel.unsaved": "You have unsaved changes.",
     "panel.discard": "Discard",
     "panel.keepEditing": "Keep editing",
-    "panel.actions": "Actions",
     "panel.actionsNote": "These run at once, and discard anything unsaved.",
-    "panel.simpleNote": 'Switch Interface to "pro" for every setting, in tabs.',
+    "general.site": "On {host}",
+    "general.site.off": "Off",
+    "general.site.default": "When asked",
+    "general.site.auto": "Automatic",
+    "general.site.hint.off": "Nothing here: no button, no shortcuts. Takes effect at once.",
+    "general.site.hint.default": "A button when you point at a picture. Takes effect at once.",
+    "general.site.hint.defaultAuto": "Translated as you scroll, by the switch below. Takes effect at once.",
+    "general.site.hint.auto": "Every picture here is translated as it comes into view, whatever the switch below says. Takes effect at once.",
+    "general.simple.title": "Simple",
+    "general.simple.desc": "Translate, search, ask and copy; the settings that matter.",
+    "general.pro.title": "Pro",
+    "general.pro.desc": "Areas, objects and text picking; every setting, in tabs.",
+    "general.essentials": "Translation and buttons",
+    "general.quick": "Quick actions",
+    "general.cacheSize": "{size} MB",
     "tab.general": "General",
     "tab.translation": "Translation",
     "tab.search": "Search",
@@ -980,6 +993,16 @@
     // --- settings: Buttons
     "set.showButton.label": "Show the buttons over images",
     "set.showButton.hint": "off, only the shortcuts and the userscript menu remain",
+    "set.autoTranslate.label": "Translate as you scroll",
+    "set.autoTranslate.hint": "pictures are translated once most of one is on screen; a site can be set apart either way",
+    "set.autoVisible.label": "Translate as you scroll: how much must be visible",
+    "set.autoVisible.hint": "of the picture, or of the screen for one taller than it; lower starts sooner and sends more",
+    "set.autoMinPx.label": "Translate as you scroll: smallest picture (px)",
+    "set.autoMinPx.hint": "its shorter side as shown; keeps avatars, icons and previews out of it",
+    "set.autoTextCheck.label": "Translate as you scroll: skip pictures with no text",
+    "set.autoTextCheck.hint": "looks at the pixels first; refuses only the plainly bare - skies, flat graphics - and never asks Google about them",
+    "set.autoPerMinute.label": "Translate as you scroll: requests per minute",
+    "set.autoPerMinute.hint": "the rest wait their turn; pictures answered before cost nothing and do not count",
     "set.videoButton.label": "Buttons over videos too",
     "set.videoButton.hint": "and over the poster or preview a player lays on top; the shortcuts work on a video either way",
     "set.buttonMode.label": "When to show them",
@@ -1504,6 +1527,11 @@
     jpegQuality: 0.4,
     showButton: true,
     videoButton: false,
+    autoTranslate: false,
+    autoVisible: 0.5,
+    autoMinPx: 200,
+    autoTextCheck: true,
+    autoPerMinute: 20,
     buttonMode: "auto",
     hotkey: "alt",
     keyTranslateAll: "Alt+Shift+KeyT",
@@ -1585,6 +1613,7 @@
     { key: "uiMode", tab: "general", essential: true, type: "select", options: ["simple", "pro"] },
     { key: "language", tab: "general", essential: true, type: "select", choices: interfaceLanguages },
     { key: "enabled", tab: "general", essential: true, type: "checkbox" },
+    { key: "autoTranslate", tab: "general", essential: true, type: "checkbox" },
     {
       key: "popupOpacity",
       tab: "general",
@@ -1672,6 +1701,10 @@
     { key: "keyCopy", tab: "behaviour", type: "chord" },
     { key: "keyUndoAll", tab: "behaviour", type: "chord" },
     { key: "minImageSize", tab: "behaviour", type: "number", min: 10, max: 2e3, step: 10 },
+    { key: "autoVisible", tab: "behaviour", type: "range", min: 0.2, max: 1, step: 0.05, unit: "%" },
+    { key: "autoMinPx", tab: "behaviour", type: "number", min: 50, max: 2e3, step: 10 },
+    { key: "autoTextCheck", tab: "behaviour", type: "checkbox" },
+    { key: "autoPerMinute", tab: "behaviour", type: "number", min: 1, max: 120, step: 1 },
     { key: "frames", tab: "behaviour", type: "checkbox" },
     // Advanced
     { key: "jpegQuality", tab: "advanced", type: "range", min: 0.1, max: 1, step: 0.05, unit: "%" },
@@ -1794,13 +1827,13 @@
     return FIELDS.some((field) => a[field.key] !== b[field.key]);
   }
   function coerce(field, raw) {
-    let candidate = raw;
-    if (field.type === "checkbox") candidate = Boolean(raw);
+    let candidate2 = raw;
+    if (field.type === "checkbox") candidate2 = Boolean(raw);
     else if (field.type === "number" || field.type === "range") {
-      candidate = String(raw).trim() === "" ? Number.NaN : Number(raw) * (field.scale ?? 1);
-      if (field.scale && Number.isFinite(candidate)) candidate = Math.round(candidate);
+      candidate2 = String(raw).trim() === "" ? Number.NaN : Number(raw) * (field.scale ?? 1);
+      if (field.scale && Number.isFinite(candidate2)) candidate2 = Math.round(candidate2);
     }
-    return sanitize(field, candidate) ?? DEFAULTS[field.key];
+    return sanitize(field, candidate2) ?? DEFAULTS[field.key];
   }
   function shown(field, value) {
     if (field.scale && typeof value === "number") return String(Math.round(value / field.scale * 10) / 10);
@@ -1821,7 +1854,7 @@
     const report = { patch: {}, applied: [], unknown: [], invalid: [] };
     const patch = {};
     for (const [key, value] of Object.entries(inner)) {
-      const field = FIELDS.find((candidate) => candidate.key === key);
+      const field = FIELDS.find((candidate2) => candidate2.key === key);
       if (!field) {
         report.unknown.push(key);
         continue;
@@ -2457,6 +2490,147 @@
     lines.push("", verdict(results));
     return lines.join("\n");
   }
+  const FACE_SIZE = 64;
+  function faceOf(rgba, side, width, height, size = FACE_SIZE) {
+    if (side % size !== 0 || rgba.length < side * side * 4 || !(width > 0) || !(height > 0)) return null;
+    const block = side / size;
+    const sums = new Float64Array(size * size);
+    for (let y = 0; y < side; y += 1) {
+      const row2 = Math.floor(y / block) * size;
+      for (let x = 0; x < side; x += 1) {
+        const i = (y * side + x) * 4;
+        sums[row2 + Math.floor(x / block)] += 0.299 * rgba[i] + 0.587 * rgba[i + 1] + 0.114 * rgba[i + 2];
+      }
+    }
+    const gray = new Uint8Array(size * size);
+    const area = block * block;
+    for (let i = 0; i < gray.length; i += 1) gray[i] = Math.round(sums[i] / area);
+    return { gray, coarse: coarseHash(gray, size), aspect: width / height };
+  }
+  function coarseHash(gray, size) {
+    const cell = size / 8;
+    const means = [];
+    for (let by = 0; by < 8; by += 1) {
+      for (let bx = 0; bx < 8; bx += 1) {
+        let sum = 0;
+        for (let y = 0; y < cell; y += 1) {
+          for (let x = 0; x < cell; x += 1) sum += gray[(by * cell + y) * size + bx * cell + x];
+        }
+        means.push(sum);
+      }
+    }
+    const mean = means.reduce((a, b) => a + b, 0) / means.length;
+    let lo = 0;
+    let hi = 0;
+    for (let i = 0; i < 64; i += 1) {
+      if (means[i] <= mean) continue;
+      if (i < 32) lo |= 1 << i;
+      else hi |= 1 << i - 32;
+    }
+    return [lo >>> 0, hi >>> 0];
+  }
+  const bits = (n) => {
+    let v = n >>> 0;
+    let count = 0;
+    while (v) {
+      v &= v - 1;
+      count += 1;
+    }
+    return count;
+  };
+  const coarseDistance = (a, b) => bits(a[0] ^ b[0]) + bits(a[1] ^ b[1]);
+  const ASPECT_TOLERANCE = 0.02;
+  const COARSE_MAX = 10;
+  const CELL_DIFFERENCE = 24;
+  const CELLS_MAX = 0.01;
+  const MEAN_MAX = 5;
+  function similarAspect(a, b) {
+    return Math.abs(a - b) <= ASPECT_TOLERANCE * Math.max(a, b);
+  }
+  function candidate(a, b) {
+    return similarAspect(a.aspect, b.aspect) && coarseDistance(a.coarse, b.coarse) <= COARSE_MAX;
+  }
+  function difference(a, b) {
+    if (a.length !== b.length || !a.length) return { cells: 1, mean: 255 };
+    let off = 0;
+    let total2 = 0;
+    for (let i = 0; i < a.length; i += 1) {
+      const d = Math.abs(a[i] - b[i]);
+      total2 += d;
+      if (d > CELL_DIFFERENCE) off += 1;
+    }
+    return { cells: off / a.length, mean: total2 / a.length };
+  }
+  function sameFrame(a, b) {
+    if (!candidate(a, b)) return false;
+    const { cells, mean } = difference(a.gray, b.gray);
+    return cells <= CELLS_MAX && mean <= MEAN_MAX;
+  }
+  const REUSE_DOWN_TO = 0.5;
+  const reusable = (storedSize, wantedSize) => storedSize >= REUSE_DOWN_TO * wantedSize;
+  const MARK_SHORT = 12;
+  const MARK_LONG_MAX = MARK_SHORT * 16;
+  const MARK_MIN_PX = 10;
+  const MARK_AGREE = 0.94;
+  const MARK_LINES = 24;
+  function markShape(pixelW, pixelH) {
+    const along = (long, short) => Math.max(MARK_SHORT, Math.min(MARK_LONG_MAX, Math.round(MARK_SHORT * long / Math.max(short, 1e-9))));
+    return pixelW >= pixelH ? { w: along(pixelW, pixelH), h: MARK_SHORT } : { w: MARK_SHORT, h: along(pixelH, pixelW) };
+  }
+  function markBoxes(paragraphs) {
+    const boxes = [];
+    for (const paragraph of paragraphs) {
+      for (const line2 of paragraph.lines) {
+        const g = line2.geometry;
+        if (!g || !(g.w > 0) || !(g.h > 0)) continue;
+        const x = Math.max(0, g.cx - g.w / 2);
+        const y = Math.max(0, g.cy - g.h / 2);
+        const w = Math.min(1, g.cx + g.w / 2) - x;
+        const h = Math.min(1, g.cy + g.h / 2) - y;
+        if (w > 0 && h > 0) boxes.push({ x, y, w, h });
+      }
+    }
+    return boxes.sort((a, b) => b.w * b.h - a.w * a.h).slice(0, MARK_LINES);
+  }
+  function correlation(a, b) {
+    if (a.length !== b.length || !a.length) return -1;
+    let ma = 0;
+    let mb = 0;
+    for (let i = 0; i < a.length; i += 1) {
+      ma += a[i];
+      mb += b[i];
+    }
+    ma /= a.length;
+    mb /= b.length;
+    let num2 = 0;
+    let da = 0;
+    let db = 0;
+    for (let i = 0; i < a.length; i += 1) {
+      const x = a[i] - ma;
+      const y = b[i] - mb;
+      num2 += x * y;
+      da += x * x;
+      db += y * y;
+    }
+    const flat = 16 * a.length;
+    if (da < flat && db < flat) return Number.NaN;
+    if (da < flat || db < flat) return 0;
+    return num2 / Math.sqrt(da * db);
+  }
+  function linesAgree(stored2, current, smaller) {
+    let compared = 0;
+    for (const [i, mark] of stored2.entries()) {
+      const strip = current[i];
+      if (!strip) return false;
+      const short = Math.min(mark.box.w * smaller.width, mark.box.h * smaller.height);
+      if (short < MARK_MIN_PX) continue;
+      const r = correlation(mark.gray, strip);
+      if (Number.isNaN(r)) continue;
+      if (r < MARK_AGREE) return false;
+      compared += 1;
+    }
+    return compared > 0;
+  }
   function targetSize(width, height, { maxArea, maxSide }) {
     if (width * height <= maxArea || width <= maxSide && height <= maxSide) {
       return { width, height };
@@ -2489,12 +2663,12 @@
     return null;
   }
   const FINGERPRINT_SIZE = 128;
-  function fingerprint(source, width, height) {
+  function identify(source, width, height) {
     const canvas = document.createElement("canvas");
     canvas.width = FINGERPRINT_SIZE;
     canvas.height = FINGERPRINT_SIZE;
     const ctx = canvas.getContext("2d", { willReadFrequently: true });
-    if (!ctx) return "";
+    if (!ctx) return { hash: "", face: null };
     try {
       ctx.drawImage(source, 0, 0, FINGERPRINT_SIZE, FINGERPRINT_SIZE);
       const { data } = ctx.getImageData(0, 0, FINGERPRINT_SIZE, FINGERPRINT_SIZE);
@@ -2505,10 +2679,39 @@
         b = Math.imul(b + data[i] + i, 2246822507);
       }
       const lane = (n) => (n >>> 0).toString(36);
-      return `${lane(a)}.${lane(b)}.${width}x${height}`;
+      return {
+        hash: `${lane(a)}.${lane(b)}.${width}x${height}`,
+        face: faceOf(data, FINGERPRINT_SIZE, width, height)
+      };
     } catch {
-      return "";
+      return { hash: "", face: null };
     }
+  }
+  function markStrips(source, width, height, boxes) {
+    const strips = [];
+    const canvas = document.createElement("canvas");
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    if (!ctx) return strips;
+    try {
+      for (const box of boxes) {
+        const pw = box.w * width;
+        const ph = box.h * height;
+        const shape = markShape(pw, ph);
+        canvas.width = shape.w;
+        canvas.height = shape.h;
+        ctx.imageSmoothingQuality = "high";
+        ctx.drawImage(source, box.x * width, box.y * height, pw, ph, 0, 0, shape.w, shape.h);
+        const { data } = ctx.getImageData(0, 0, shape.w, shape.h);
+        const gray = new Uint8Array(shape.w * shape.h);
+        for (let i = 0; i < gray.length; i += 1) {
+          gray[i] = Math.round(0.299 * data[i * 4] + 0.587 * data[i * 4 + 1] + 0.114 * data[i * 4 + 2]);
+        }
+        strips.push(gray);
+      }
+    } catch {
+      return [];
+    }
+    return strips;
   }
   async function encodeForUpload(source, settings, release2 = () => {
   }) {
@@ -2583,11 +2786,11 @@
     const probe2 = document.createElement("canvas");
     probe2.width = 1;
     probe2.height = 1;
-    const readable = (candidate) => {
+    const readable = (candidate2) => {
       try {
         const ctx = probe2.getContext("2d");
         if (!ctx) return false;
-        ctx.drawImage(candidate, 0, 0, 1, 1);
+        ctx.drawImage(candidate2, 0, 0, 1, 1);
         ctx.getImageData(0, 0, 1, 1);
         return true;
       } catch {
@@ -2773,8 +2976,8 @@
       (a, b) => b.rank - a.rank || b.area - a.area || a.tile - b.tile || a.index - b.index
     );
     const kept = [];
-    for (const candidate of order) {
-      let current = candidate;
+    for (const candidate2 of order) {
+      let current = candidate2;
       for (const other of kept) {
         if (!current) break;
         if (other.tile === current.tile) continue;
@@ -2914,6 +3117,90 @@
     await Promise.all(Array.from({ length: TILE_PARALLEL }, worker));
     if (failure) throw failure;
     return mergeTiles(plan, results);
+  }
+  const TUNING = {
+    side: 1024,
+    cell: 8,
+    edge: 40,
+    edgesX: 6,
+    edgesY: 3,
+    range: 70,
+    cells: 16
+  };
+  function looksLikeText(gray, width, height, tuning = TUNING) {
+    const { cell: CELL, edge: EDGE, edgesX: MIN_EDGES_X, edgesY: MIN_EDGES_Y, range: MIN_RANGE } = tuning;
+    const cols = Math.floor(width / CELL);
+    const rows = Math.floor(height / CELL);
+    if (cols < 2 || rows < 1) return false;
+    const lettered = new Uint8Array(cols * rows);
+    for (let cy = 0; cy < rows; cy += 1) {
+      for (let cx = 0; cx < cols; cx += 1) {
+        let ex = 0;
+        let ey = 0;
+        let lo = 255;
+        let hi = 0;
+        for (let y = cy * CELL; y < (cy + 1) * CELL; y += 1) {
+          for (let x = cx * CELL; x < (cx + 1) * CELL; x += 1) {
+            const v = gray[y * width + x];
+            if (v < lo) lo = v;
+            if (v > hi) hi = v;
+            if (x + 1 < width && Math.abs(v - gray[y * width + x + 1]) > EDGE) ex += 1;
+            if (y + 1 < height && Math.abs(v - gray[(y + 1) * width + x]) > EDGE) ey += 1;
+          }
+        }
+        if (hi - lo >= MIN_RANGE && ex >= MIN_EDGES_X && ey >= MIN_EDGES_Y) lettered[cy * cols + cx] = 1;
+      }
+    }
+    let joined = 0;
+    for (let cy = 0; cy < rows; cy += 1) {
+      for (let cx = 0; cx < cols; cx += 1) {
+        if (!lettered[cy * cols + cx]) continue;
+        const beside = cx > 0 && lettered[cy * cols + cx - 1] || cx + 1 < cols && lettered[cy * cols + cx + 1] || cy > 0 && lettered[(cy - 1) * cols + cx] || cy + 1 < rows && lettered[(cy + 1) * cols + cx];
+        if (beside) joined += 1;
+      }
+    }
+    return joined >= tuning.cells;
+  }
+  let native;
+  function nativeDetector() {
+    if (native !== void 0) return native;
+    native = null;
+    try {
+      const Ctor = globalThis.TextDetector;
+      if (typeof Ctor === "function") native = new Ctor();
+    } catch {
+    }
+    return native;
+  }
+  async function mayHaveText(source, width, height, tuning = TUNING) {
+    const detector = tuning === TUNING ? nativeDetector() : null;
+    if (detector) {
+      try {
+        return (await detector.detect(source)).length > 0;
+      } catch {
+        native = null;
+      }
+    }
+    const scale = Math.min(1, tuning.side / Math.max(width, height));
+    const w = Math.max(1, Math.round(width * scale));
+    const h = Math.max(1, Math.round(height * scale));
+    try {
+      const canvas = document.createElement("canvas");
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext("2d", { willReadFrequently: true });
+      if (!ctx) return true;
+      ctx.imageSmoothingQuality = "high";
+      ctx.drawImage(source, 0, 0, w, h);
+      const { data } = ctx.getImageData(0, 0, w, h);
+      const gray = new Uint8Array(w * h);
+      for (let i = 0; i < gray.length; i += 1) {
+        gray[i] = Math.round(0.299 * data[i * 4] + 0.587 * data[i * 4 + 1] + 0.114 * data[i * 4 + 2]);
+      }
+      return looksLikeText(gray, w, h, tuning);
+    } catch {
+      return true;
+    }
   }
   const CLUSTER_INFO_ENDPOINT = "https://lensfrontend-pa.googleapis.com/v1/gsessionid";
   const RESULTS_URL = "https://www.google.com/search";
@@ -3186,9 +3473,11 @@
     ).filter(Boolean).join("\n\n");
   }
   const DB_NAME = "lens-translate";
-  const DB_VERSION = 2;
+  const DB_VERSION = 3;
   const RESPONSES = "responses";
   const META = "meta";
+  const FACES = "faces";
+  const faceBytes = (record) => record.gray.byteLength + record.marks.reduce((sum, mark) => sum + mark.gray.byteLength + 32, 0);
   let open$1 = null;
   function database() {
     if (open$1) return open$1;
@@ -3200,12 +3489,18 @@
         resolve2(null);
         return;
       }
-      request2.onupgradeneeded = () => {
+      request2.onupgradeneeded = (event) => {
+        const oldVersion = event.oldVersion;
         const db = request2.result;
-        if (db.objectStoreNames.contains(RESPONSES)) db.deleteObjectStore(RESPONSES);
-        if (db.objectStoreNames.contains(META)) db.deleteObjectStore(META);
-        db.createObjectStore(RESPONSES, { keyPath: "key" });
-        db.createObjectStore(META, { keyPath: "key" }).createIndex("used", "used");
+        if (oldVersion < 2) {
+          if (db.objectStoreNames.contains(RESPONSES)) db.deleteObjectStore(RESPONSES);
+          if (db.objectStoreNames.contains(META)) db.deleteObjectStore(META);
+        }
+        if (!db.objectStoreNames.contains(RESPONSES)) db.createObjectStore(RESPONSES, { keyPath: "key" });
+        if (!db.objectStoreNames.contains(META)) {
+          db.createObjectStore(META, { keyPath: "key" }).createIndex("used", "used");
+        }
+        if (!db.objectStoreNames.contains(FACES)) db.createObjectStore(FACES, { keyPath: "key" });
       };
       request2.onsuccess = () => {
         const db = request2.result;
@@ -3251,9 +3546,7 @@
   }
   const TOUCH_INTERVAL_MS = 6e4;
   const lastTouched = /* @__PURE__ */ new Map();
-  async function getStored(hash, settings) {
-    if (!hash || !settings.persistCache) return null;
-    const key = entryKey(hash, settings);
+  async function readEntry(key) {
     let entry;
     await transact("readonly", [RESPONSES], (tx) => {
       const request2 = tx.objectStore(RESPONSES).get(key);
@@ -3261,6 +3554,52 @@
         entry = request2.result;
       };
     });
+    return entry;
+  }
+  const askOf = (settings, tag) => `${languagesOf(settings)}\0${tag}`;
+  let nearIndex = null;
+  let nearRead = 0;
+  const NEAR_TTL_MS = 6e4;
+  async function nearCandidates() {
+    if (!nearIndex || Date.now() - nearRead > NEAR_TTL_MS) {
+      nearIndex = (await stored()).filter((meta) => meta.near);
+      nearRead = Date.now();
+    }
+    return nearIndex;
+  }
+  const NEAR_READS = 4;
+  async function findNear(near, settings) {
+    const ask = askOf(settings, near.tag);
+    const found = (await nearCandidates()).filter(
+      (meta) => meta.near.ask === ask && reusable(meta.near.size, near.size) && candidate(near.face, meta.near)
+    ).sort((a, b) => b.near.size - a.near.size).slice(0, NEAR_READS);
+    for (const meta of found) {
+      let record;
+      await transact("readonly", [FACES], (tx) => {
+        const request2 = tx.objectStore(FACES).get(meta.key);
+        request2.onsuccess = () => {
+          record = request2.result;
+        };
+      });
+      if (!record?.gray || !record.marks?.length) continue;
+      if (!sameFrame(near.face, { gray: record.gray, coarse: meta.near.coarse, aspect: meta.near.aspect })) continue;
+      const strips = near.sample(record.marks.map((mark) => mark.box));
+      const smaller = record.width * record.height < near.width * near.height ? { width: record.width, height: record.height } : { width: near.width, height: near.height };
+      if (linesAgree(record.marks, strips, smaller)) return meta.key;
+    }
+    return null;
+  }
+  async function getStored(hash, settings, near) {
+    if (!hash || !settings.persistCache) return null;
+    let key = entryKey(hash, settings);
+    let entry = await readEntry(key);
+    if (!entry && near) {
+      const other = await findNear(near, settings);
+      if (other) {
+        key = other;
+        entry = await readEntry(key);
+      }
+    }
     if (!entry) return null;
     const now = Date.now();
     if (now - (lastTouched.get(key) ?? 0) >= TOUCH_INTERVAL_MS) {
@@ -3286,26 +3625,51 @@
     return all2;
   }
   const budgetOf = (settings) => settings.storeBytes ?? settings.cacheBytes;
-  async function putStored(hash, result, settings) {
+  async function putStored(hash, result, settings, near) {
     const budget = budgetOf(settings);
     if (!hash || !settings.persistCache || budget <= 0) return;
-    const bytes2 = weigh$1(result);
+    let face = null;
+    if (near) {
+      const boxes = markBoxes(result.ocr);
+      const strips = boxes.length ? near.sample(boxes) : [];
+      if (strips.length === boxes.length && boxes.length) {
+        face = {
+          key: "",
+          gray: near.face.gray,
+          width: near.width,
+          height: near.height,
+          marks: boxes.map((box, i) => ({ box, gray: strips[i] }))
+        };
+      }
+    }
+    const bytes2 = weigh$1(result) + (face ? faceBytes(face) : 0);
     if (bytes2 > budget) return;
     const key = entryKey(hash, settings);
     const now = Date.now();
     const entry = { key, hash, languages: languagesOf(settings), result, bytes: bytes2 };
     let delta = bytes2;
-    const written = await transact("readwrite", [RESPONSES, META], (tx) => {
+    const meta = { key, used: now, bytes: bytes2 };
+    if (near && face) {
+      meta.near = {
+        ask: askOf(settings, near.tag),
+        aspect: near.face.aspect,
+        coarse: near.face.coarse,
+        size: near.size
+      };
+    }
+    const written = await transact("readwrite", [RESPONSES, META, FACES], (tx) => {
       const metas = tx.objectStore(META);
       const previous = metas.get(key);
       previous.onsuccess = () => {
         delta = bytes2 - (previous.result?.bytes ?? 0);
         tx.objectStore(RESPONSES).put(entry);
-        const meta = { key, used: now, bytes: bytes2 };
         metas.put(meta);
+        if (face) tx.objectStore(FACES).put({ ...face, key });
+        else tx.objectStore(FACES).delete(key);
       };
     });
     if (!written) return;
+    if (nearIndex) nearIndex = [...nearIndex.filter((m) => m.key !== key), ...meta.near ? [meta] : []];
     lastTouched.set(key, now);
     writesSinceCount += 1;
     if (writesSinceCount >= RECOUNT_EVERY) total = null;
@@ -3319,9 +3683,10 @@
     }
     if (total <= budget) return;
     let remaining = total;
-    const done = await transact("readwrite", [RESPONSES, META], (tx) => {
+    const done = await transact("readwrite", [RESPONSES, META, FACES], (tx) => {
       const metas = tx.objectStore(META);
       const responses = tx.objectStore(RESPONSES);
+      const faces = tx.objectStore(FACES);
       const cursor = metas.index("used").openCursor();
       cursor.onsuccess = () => {
         const at = cursor.result;
@@ -3329,19 +3694,23 @@
         const meta = at.value;
         remaining -= meta.bytes;
         responses.delete(meta.key);
+        faces.delete(meta.key);
         lastTouched.delete(meta.key);
         at.delete();
         at.continue();
       };
     });
     total = done ? remaining : null;
+    nearIndex = null;
   }
   async function clearStored() {
-    await transact("readwrite", [RESPONSES, META], (tx) => {
+    await transact("readwrite", [RESPONSES, META, FACES], (tx) => {
       tx.objectStore(RESPONSES).clear();
       tx.objectStore(META).clear();
+      tx.objectStore(FACES).clear();
     });
     lastTouched.clear();
+    nearIndex = null;
     total = 0;
     writesSinceCount = 0;
   }
@@ -3427,8 +3796,8 @@
       const joiner = perCharacter ? "" : " ";
       let current = "";
       for (const token of tokens) {
-        const candidate = current ? `${current}${joiner}${token}` : token;
-        if (measure(candidate) <= maxWidth || !current) current = candidate;
+        const candidate2 = current ? `${current}${joiner}${token}` : token;
+        if (measure(candidate2) <= maxWidth || !current) current = candidate2;
         else {
           lines.push(current);
           current = token;
@@ -4442,7 +4811,7 @@
     ctx.direction = isRtl(block) ? "rtl" : "ltr";
     const spacing = settings.lineSpacing > 0 ? settings.lineSpacing : 1.25;
     const perCharacter = wrapsPerCharacter(block);
-    const measure = (candidate) => ctx.measureText(candidate).width;
+    const measure = (candidate2) => ctx.measureText(candidate2).width;
     const setFont = (px2) => {
       ctx.font = fontOf(px2, fontFamily, fontWeight);
     };
@@ -4559,7 +4928,7 @@
     if (!style || !text2) return false;
     const { ctx, fontFamily, fontWeight } = draw;
     const spacing = settings.lineSpacing > 0 ? settings.lineSpacing : 1.25;
-    const measure = (candidate) => ctx.measureText(candidate).width;
+    const measure = (candidate2) => ctx.measureText(candidate2).width;
     const setFont = (px2) => {
       ctx.font = fontOf(px2, fontFamily, fontWeight);
     };
@@ -5101,6 +5470,9 @@
     objects: "M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z",
     text: "M4 7V4h16v3M9 20h6M12 4v16",
     undo: "M3 7v6h6M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13",
+    trash: "M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6",
+    pulse: "M22 12h-4l-3 9L9 3l-3 9H2",
+    layers: "m12 2 10 5-10 5L2 7zM2 17l10 5 10-5M2 12l10 5 10-5",
     close: "M18 6 6 18M6 6l12 12",
     send: "m5 12 7-7 7 7M12 19V5",
     external: "M15 3h6v6M10 14 21 3M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6",
@@ -5254,7 +5626,7 @@
       y: clamp(y, view.top, view.height, row2.height, onBottom)
     };
   }
-  const styles = "/* Lives inside a shadow root, so these selectors compete with nothing. The\n   :host is a fixed, click-through, full-viewport layer; everything here is\n   positioned in viewport coordinates.\n\n   The look is shadcn/ui's: zinc neutrals named by role, one radius, hairline\n   borders, a ring on focus. Only the look - there is no framework behind it,\n   because this stylesheet is parsed on every page the script runs on. */\n\n:host {\n  --background: #ffffff;\n  --foreground: #09090b;\n  --muted: #f4f4f5;\n  --muted-foreground: #71717a;\n  --accent: #f4f4f5;\n  --border: #e4e4e7;\n  --input: #d4d4d8;\n  --ring: #a1a1aa;\n  --primary: #18181b;\n  --primary-foreground: #fafafa;\n  --destructive: #dc2626;\n  --success: #059669;\n  --shadow: 0 10px 30px -8px rgba(9, 9, 11, 0.28), 0 2px 6px -2px rgba(9, 9, 11, 0.12);\n  /* 0.5rem, written in pixels: inside a shadow root `rem` is still the page's\n     root font size, and a site that sets that to 10px would shrink every\n     corner and control here with it. */\n  --radius: 8px;\n  /* What the keyboard covers; ui/root.ts keeps it current where it can. */\n  --lt-kb: 0px;\n  /* A hundredth of the viewport, by the best unit this browser has. `svh` is\n     the height with the address bar showing, so a sheet sized by it does not\n     jump when the bar slides away; `dvh` follows the bar. */\n  --lt-svh: 1vh;\n  --lt-dvh: 1vh;\n  /* The backgrounds of our popups, and only those: the menu, the panels, the\n     messages and a tool's bar. ui/root.ts sets --lt-opacity on the host from\n     the \"Popup opacity\" setting. Text and icons are drawn in --foreground and\n     friends, which are never touched, so the words stay solid while what is\n     behind them shows through. Without color-mix the surfaces simply stay\n     opaque: a custom property that fails to compute does not fall back to an\n     earlier declaration, it makes the background transparent, so the mix is\n     only declared where it is known to parse - and only while the setting is\n     below 100, so a fully opaque popup is the plain colour it always was. */\n  --lt-opacity: 100%;\n  --surface: var(--background);\n  --surface-muted: var(--muted);\n\n  font: 14px/1.45 system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;\n  color: var(--foreground);\n}\n@supports (background: color-mix(in srgb, red 50%, transparent)) {\n  :host([data-translucent]) {\n    --surface: color-mix(in srgb, var(--background) var(--lt-opacity), transparent);\n    --surface-muted: color-mix(in srgb, var(--muted) var(--lt-opacity), transparent);\n  }\n}\n/* A see-through popup over a photograph is a popup over noise, and the blur is\n   what turns the noise back into a tint. Only while it is see-through: a\n   backdrop filter costs a compositing pass under every surface that has one. */\n:host([data-translucent]) .lt-menu,\n:host([data-translucent]) .lt-panel,\n:host([data-translucent]) #lt-toast,\n:host([data-translucent]) .lt-bar {\n  -webkit-backdrop-filter: blur(14px) saturate(1.3);\n  backdrop-filter: blur(14px) saturate(1.3);\n}\n@supports (height: 1dvh) {\n  :host {\n    --lt-svh: 1svh;\n    --lt-dvh: 1dvh;\n  }\n}\n@media (prefers-color-scheme: dark) {\n  :host {\n    --background: #09090b;\n    --foreground: #fafafa;\n    --muted: #27272a;\n    --muted-foreground: #a1a1aa;\n    --accent: #27272a;\n    --border: #27272a;\n    --input: #3f3f46;\n    --ring: #71717a;\n    --primary: #fafafa;\n    --primary-foreground: #18181b;\n    --destructive: #ef4444;\n    --success: #10b981;\n    --shadow: 0 10px 30px -8px rgba(0, 0, 0, 0.7), 0 2px 6px -2px rgba(0, 0, 0, 0.5);\n  }\n}\n\n*,\n*::before,\n*::after {\n  box-sizing: border-box;\n}\n\n.lt-icon {\n  display: block;\n  flex: none;\n  width: 18px;\n}\n.lt-icon-loader {\n  animation: lt-spin 0.9s linear infinite;\n}\n@keyframes lt-spin {\n  to {\n    transform: rotate(360deg);\n  }\n}\n\n/* ------------------------------------------------------------- controls */\n\n/* Hung from a corner of the picture by its own matching corner, so the row\n   can be any size: main.ts measures it, sets its width and puts its top-left\n   where that corner lands - moved back onto the screen if it would leave it.\n   The controls are listed corner-first; a right-hand corner reverses them, so\n   the first - the main one - is the one in the corner whichever side that is.\n   A row wider than the screen wraps, and for a bottom corner the lines stack\n   upwards so the main control's line is still the one at the corner. */\n#lt-controls {\n  --lt-ctl: 32px;\n  --lt-idle: 1;\n  position: absolute;\n  z-index: 1;\n  display: flex;\n  flex-direction: row-reverse;\n  flex-wrap: wrap;\n  gap: 4px;\n  pointer-events: none;\n}\n#lt-controls[data-corner='br'] {\n  flex-wrap: wrap-reverse;\n}\n#lt-controls[data-corner='tl'] {\n  flex-direction: row;\n}\n#lt-controls[data-corner='bl'] {\n  flex-direction: row;\n  flex-wrap: wrap-reverse;\n}\n#lt-controls[data-size='s'] {\n  --lt-ctl: 28px;\n}\n#lt-controls[data-size='l'] {\n  --lt-ctl: 40px;\n}\n.lt-ctl {\n  flex: none;\n  width: var(--lt-ctl);\n  height: var(--lt-ctl);\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  gap: 6px;\n  /* These sit on somebody's photograph, not on a surface of ours, so they do\n     not follow the theme: dark glass reads on any picture. */\n  background: rgba(9, 9, 11, 0.72);\n  color: #fafafa;\n  border: 1px solid rgba(255, 255, 255, 0.18);\n  border-radius: var(--radius);\n  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);\n  -webkit-backdrop-filter: blur(6px);\n  backdrop-filter: blur(6px);\n  opacity: 0;\n  transform: scale(0.92);\n  pointer-events: none;\n  cursor: pointer;\n  transition: opacity 0.15s, transform 0.15s, background 0.15s;\n  -webkit-tap-highlight-color: transparent;\n}\n/* With its name beside the icon a control is as wide as the name. */\n.lt-ctl.lt-labelled {\n  width: auto;\n  padding: 0 10px 0 8px;\n  font-size: 13px;\n  font-weight: 500;\n  white-space: nowrap;\n}\n#lt-controls.lt-on .lt-main,\n/* A beat after the main button, so a passing cursor does not summon the row. */\n#lt-controls.lt-on.lt-extras .lt-ctl {\n  opacity: var(--lt-idle);\n  transform: none;\n  pointer-events: auto;\n}\n/* Dimmed until pointed at, when that was asked for; solid under the cursor. */\n#lt-controls.lt-on:hover .lt-main,\n#lt-controls.lt-on.lt-extras:hover .lt-ctl {\n  opacity: 1;\n}\n.lt-ctl:hover {\n  background: rgba(9, 9, 11, 0.92);\n}\n/* Held down, and on a touch screen a long press: the browser must not take\n   either for a scroll or a text selection. */\n.lt-main {\n  touch-action: none;\n  -webkit-user-select: none;\n  user-select: none;\n  -webkit-touch-callout: none;\n}\n/* Held down to look at the original: the button says so with a ring. */\n.lt-main.lt-peeking {\n  box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.6);\n}\n.lt-main .lt-icon-loader,\n.lt-main.lt-busy .lt-icon:not(.lt-icon-loader) {\n  display: none;\n}\n.lt-main.lt-busy .lt-icon-loader {\n  display: block;\n}\n.lt-ctl.lt-active {\n  background: var(--success);\n  border-color: transparent;\n}\n.lt-main.lt-error {\n  background: var(--destructive);\n  border-color: transparent;\n}\n\n/* -------------------------------------------------------- buttons, fields */\n\n.lt-btn {\n  display: inline-flex;\n  align-items: center;\n  justify-content: center;\n  gap: 6px;\n  height: 36px;\n  padding: 0 14px;\n  font: inherit;\n  font-weight: 500;\n  white-space: nowrap;\n  text-decoration: none;\n  color: var(--foreground);\n  background: var(--background);\n  border: 1px solid var(--border);\n  border-radius: calc(var(--radius) - 2px);\n  box-shadow: 0 1px 2px rgba(9, 9, 11, 0.05);\n  cursor: pointer;\n  -webkit-tap-highlight-color: transparent;\n}\n.lt-btn:hover {\n  background: var(--accent);\n}\n.lt-btn.lt-primary {\n  color: var(--primary-foreground);\n  background: var(--primary);\n  border-color: transparent;\n}\n.lt-btn.lt-primary:hover {\n  opacity: 0.9;\n}\n.lt-btn.lt-ghost {\n  border-color: transparent;\n  box-shadow: none;\n  background: transparent;\n}\n.lt-btn.lt-ghost:hover {\n  background: var(--accent);\n}\n.lt-btn.lt-square {\n  width: 36px;\n  padding: 0;\n  flex: none;\n}\n.lt-btn:disabled {\n  opacity: 0.5;\n  pointer-events: none;\n}\n.lt-btn.lt-small {\n  height: 28px;\n  padding: 0 10px;\n  font-size: 12px;\n}\n.lt-btn[hidden],\n.lt-reset[hidden] {\n  display: none;\n}\n.lt-btn:focus-visible,\n.lt-x:focus-visible,\n.lt-tab:focus-visible,\n.lt-reset:focus-visible,\n.lt-dot:focus-visible {\n  outline: 2px solid var(--ring);\n  outline-offset: 2px;\n}\n\n.lt-input {\n  height: 36px;\n  min-width: 0;\n  width: 100%;\n  padding: 0 12px;\n  font: inherit;\n  color: var(--foreground);\n  background: var(--background);\n  border: 1px solid var(--input);\n  border-radius: calc(var(--radius) - 2px);\n  box-shadow: 0 1px 2px rgba(9, 9, 11, 0.05);\n}\n.lt-input::placeholder {\n  color: var(--muted-foreground);\n}\n.lt-input:focus-visible {\n  outline: 2px solid var(--ring);\n  outline-offset: 1px;\n}\n.lt-input[type='checkbox'] {\n  justify-self: start;\n  width: 16px;\n  height: 16px;\n  padding: 0;\n  box-shadow: none;\n  accent-color: var(--primary);\n}\n\n/* ----------------------------------------------------------------- menu */\n\n.lt-menu {\n  position: absolute;\n  z-index: 4;\n  width: 260px;\n  padding: 4px;\n  display: flex;\n  flex-direction: column;\n  color: var(--foreground);\n  background: var(--surface);\n  border: 1px solid var(--border);\n  border-radius: var(--radius);\n  box-shadow: var(--shadow);\n  pointer-events: auto;\n}\n.lt-menu-item {\n  display: flex;\n  align-items: center;\n  gap: 10px;\n  width: 100%;\n  min-height: 36px;\n  padding: 6px 10px;\n  font: inherit;\n  text-align: left;\n  color: inherit;\n  background: transparent;\n  border: 0;\n  border-radius: calc(var(--radius) - 4px);\n  cursor: pointer;\n  -webkit-tap-highlight-color: transparent;\n}\n.lt-menu-item .lt-icon {\n  color: var(--muted-foreground);\n}\n/* The item the keyboard is on is highlighted like the one the cursor is on,\n   not ringed: the first item is focused when the menu opens, and a ring there\n   reads as a selection nobody made. */\n.lt-menu-item:hover:not(:disabled),\n.lt-menu-item:focus-visible {\n  background: var(--accent);\n  outline: none;\n}\n.lt-menu-item:disabled {\n  color: var(--muted-foreground);\n  opacity: 0.6;\n  cursor: default;\n}\n.lt-menu-rule {\n  height: 1px;\n  margin: 4px -4px;\n  background: var(--border);\n}\n/* The item and the field under it are one thing to ask. */\n.lt-field-row {\n  display: flex;\n  gap: 6px;\n  padding: 2px 6px 6px 38px;\n}\n\n/* A sheet has to sit on something that takes the press meant to dismiss it. */\n.lt-scrim {\n  position: absolute;\n  inset: 0;\n  z-index: 4;\n  background: rgba(9, 9, 11, 0.5);\n  pointer-events: auto;\n}\n.lt-menu.lt-sheet {\n  left: 0;\n  right: 0;\n  bottom: var(--lt-kb);\n  width: auto;\n  max-width: 560px;\n  margin: 0 auto;\n  max-height: calc(var(--lt-svh) * 100 - var(--lt-kb) - 24px);\n  overflow-y: auto;\n  overscroll-behavior: contain;\n  padding: 8px max(8px, env(safe-area-inset-right, 0px)) calc(8px + env(safe-area-inset-bottom, 0px))\n    max(8px, env(safe-area-inset-left, 0px));\n  border-width: 1px 0 0;\n  border-radius: 14px 14px 0 0;\n}\n/* The handle a sheet is expected to have; it says \"this slides\", nothing more. */\n.lt-menu.lt-sheet::before {\n  content: '';\n  flex: none;\n  align-self: center;\n  width: 40px;\n  height: 4px;\n  margin: 0 0 6px;\n  border-radius: 2px;\n  background: var(--input);\n}\n.lt-sheet .lt-menu-item {\n  min-height: 48px;\n  padding: 8px 12px;\n  gap: 14px;\n  font-size: 16px;\n}\n.lt-sheet .lt-menu-item .lt-icon {\n  width: 20px;\n  height: 20px;\n}\n.lt-sheet .lt-field-row {\n  padding: 2px 8px 8px 46px;\n}\n.lt-sheet .lt-menu-rule {\n  margin: 4px 0;\n}\n\n/* ---------------------------------------------------------------- toast */\n\n#lt-toast {\n  position: absolute;\n  z-index: 6;\n  left: 50%;\n  bottom: calc(16px + var(--lt-kb) + env(safe-area-inset-bottom, 0px));\n  transform: translateX(-50%);\n  display: flex;\n  align-items: center;\n  gap: 10px;\n  max-width: min(520px, calc(100% - 24px));\n  padding: 10px 14px;\n  font-size: 13px;\n  color: var(--foreground);\n  background: var(--surface);\n  border: 1px solid var(--border);\n  border-radius: var(--radius);\n  box-shadow: var(--shadow);\n  pointer-events: none;\n  opacity: 0;\n  visibility: hidden;\n  transition: opacity 0.2s, visibility 0.2s;\n}\n#lt-toast.lt-show {\n  opacity: 1;\n  visibility: visible;\n}\n/* A message with a link in it is something to press. */\n#lt-toast.lt-show.lt-has-link {\n  pointer-events: auto;\n  padding: 8px 8px 8px 14px;\n}\n#lt-toast > span {\n  flex: 1;\n  min-width: 0;\n}\n/* An address shown because it could not be opened: one line, cut short, and\n   selectable for a host where copying is out of reach too. */\n.lt-url {\n  display: block;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n  color: var(--muted-foreground);\n  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;\n  font-size: 11px;\n  user-select: text;\n  -webkit-user-select: text;\n}\n/* While a tool's bar has the bottom of the screen, messages go to the top. */\n:host([data-tool]) #lt-toast {\n  bottom: auto;\n  top: calc(12px + env(safe-area-inset-top, 0px));\n}\n\n/* --------------------------------------------------------------- panels */\n\n.lt-panel-backdrop {\n  position: absolute;\n  inset: 0;\n  z-index: 5;\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  background: rgba(9, 9, 11, 0.5);\n  pointer-events: auto;\n}\n.lt-panel {\n  width: min(560px, 92vw);\n  max-height: calc(var(--lt-dvh) * 86);\n  display: flex;\n  flex-direction: column;\n  color: var(--foreground);\n  background: var(--surface);\n  border: 1px solid var(--border);\n  border-radius: calc(var(--radius) + 4px);\n  box-shadow: var(--shadow);\n  overflow: hidden;\n}\n.lt-panel-head,\n.lt-panel-foot {\n  display: flex;\n  align-items: center;\n  gap: 8px;\n  padding: 12px 18px;\n  flex: none;\n}\n.lt-panel-head {\n  border-bottom: 1px solid var(--border);\n  justify-content: space-between;\n  font-size: 15px;\n  font-weight: 600;\n  padding-right: 10px;\n}\n.lt-panel-foot {\n  border-top: 1px solid var(--border);\n}\n.lt-spacer {\n  flex: 1;\n}\n.lt-panel-body {\n  padding: 8px 18px 16px;\n  overflow-y: auto;\n  overscroll-behavior: contain;\n}\n.lt-x {\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  width: 32px;\n  height: 32px;\n  padding: 0;\n  color: var(--muted-foreground);\n  background: transparent;\n  border: 0;\n  border-radius: calc(var(--radius) - 2px);\n  cursor: pointer;\n}\n.lt-x:hover {\n  color: var(--foreground);\n  background: var(--accent);\n}\n\n/* ------------------------------------------------------ settings window */\n\n/* A header, the tabs, the fields and a footer. The tabs are a strip along the\n   top by default - which is what a phone and a narrow window get - and become\n   a rail down the left side where there is room for one (see below). */\n.lt-settings-main {\n  flex: 1;\n  min-height: 0;\n  display: flex;\n  flex-direction: column;\n}\n.lt-settings .lt-panel-head {\n  gap: 12px;\n}\n.lt-settings .lt-panel-head strong {\n  flex: none;\n}\n.lt-search {\n  flex: 1;\n  max-width: 320px;\n  margin-left: auto;\n}\n.lt-search[hidden] {\n  display: none;\n}\n.lt-tabs {\n  flex: none;\n  display: flex;\n  gap: 4px;\n  padding: 8px 14px;\n  overflow-x: auto;\n  overscroll-behavior: contain;\n  border-bottom: 1px solid var(--border);\n  /* The strip scrolls under a finger; a bar across it would only be noise. */\n  scrollbar-width: none;\n}\n.lt-tabs::-webkit-scrollbar {\n  display: none;\n}\n.lt-tab {\n  flex: none;\n  display: flex;\n  align-items: center;\n  height: 32px;\n  padding: 0 12px;\n  font: inherit;\n  font-weight: 500;\n  white-space: nowrap;\n  color: var(--muted-foreground);\n  background: transparent;\n  border: 0;\n  border-radius: calc(var(--radius) - 2px);\n  cursor: pointer;\n  -webkit-tap-highlight-color: transparent;\n}\n.lt-tab:hover {\n  color: var(--foreground);\n  background: var(--accent);\n}\n.lt-tab[aria-selected='true'] {\n  color: var(--foreground);\n  background: var(--surface-muted);\n}\n.lt-settings .lt-panel-body {\n  flex: 1;\n  min-height: 0;\n  padding-top: 4px;\n}\n.lt-pane[hidden],\n.lt-row[hidden],\n.lt-extra[hidden],\n.lt-note[hidden],\n.lt-guard[hidden] {\n  display: none;\n}\n.lt-pane-head {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 8px;\n  min-height: 28px;\n  margin: 10px 0 2px;\n}\n.lt-pane-head h3 {\n  margin: 0;\n  font-size: 15px;\n  font-weight: 600;\n}\n/* One tab at a time needs no heading over it: the tab says where you are.\n   Search results come from several, and each group says which. */\n.lt-settings:not(.lt-searching) .lt-pane-head h3 {\n  visibility: hidden;\n}\n.lt-grid {\n  display: grid;\n  grid-template-columns: minmax(0, 1fr);\n  column-gap: 28px;\n}\n\n/* A field: its name, the control, and a line about what it does. Stacked, so\n   the control gets the full width of its column whatever the name's length. */\n.lt-row {\n  display: grid;\n  grid-template-columns: minmax(0, 1fr);\n  align-content: start;\n  gap: 6px;\n  padding: 9px 0;\n}\n.lt-row.lt-row-check {\n  grid-template-columns: minmax(0, 1fr) auto;\n  align-items: center;\n}\n.lt-label {\n  display: flex;\n  align-items: center;\n  gap: 6px;\n  min-height: 20px;\n  font-weight: 500;\n}\n/* The name is a <label for> its control: pressing it focuses or toggles. */\n.lt-label-text {\n  cursor: pointer;\n}\n.lt-hint {\n  grid-column: 1 / -1;\n  color: var(--muted-foreground);\n  font-size: 12px;\n}\n/* Back to the default; only there when the value is not the default. */\n.lt-reset {\n  display: inline-flex;\n  align-items: center;\n  justify-content: center;\n  width: 20px;\n  height: 20px;\n  padding: 0;\n  color: var(--muted-foreground);\n  background: transparent;\n  border: 0;\n  border-radius: 4px;\n  cursor: pointer;\n}\n.lt-reset:hover {\n  color: var(--foreground);\n  background: var(--accent);\n}\n.lt-reset .lt-icon {\n  width: 14px;\n}\n.lt-guard {\n  font-size: 13px;\n  font-weight: 500;\n}\n\n.lt-color,\n.lt-chord-row {\n  display: flex;\n  align-items: center;\n  gap: 8px;\n  min-width: 0;\n}\n.lt-swatch {\n  flex: none;\n  width: 36px;\n  height: 36px;\n  padding: 2px;\n  background: var(--background);\n  border: 1px solid var(--input);\n  border-radius: calc(var(--radius) - 2px);\n  cursor: pointer;\n}\n.lt-swatch.lt-unset {\n  opacity: 0.35;\n}\n.lt-chord {\n  flex: 1;\n  min-width: 0;\n  justify-content: flex-start;\n  font-variant-numeric: tabular-nums;\n}\n.lt-chord.lt-recording {\n  outline: 2px solid var(--ring);\n  outline-offset: 1px;\n  color: var(--muted-foreground);\n}\n\n/* The buttons over a picture, as a list to tick and to drag into order. */\n.lt-order,\n.lt-site-list {\n  margin: 0;\n  padding: 0;\n  list-style: none;\n}\n.lt-order {\n  border: 1px solid var(--border);\n  border-radius: calc(var(--radius) - 2px);\n  overflow: hidden;\n}\n.lt-order-item,\n.lt-site {\n  display: flex;\n  align-items: center;\n  gap: 10px;\n  min-height: 40px;\n  padding: 2px 6px 2px 4px;\n  background: var(--background);\n}\n.lt-order-item + .lt-order-item,\n.lt-site + .lt-site {\n  border-top: 1px solid var(--border);\n}\n.lt-order-item.lt-dragging {\n  background: var(--accent);\n}\n/* The handle is the only part that drags, so the rest of the row still\n   scrolls the sheet under a finger. */\n.lt-grip {\n  flex: none;\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  width: 28px;\n  height: 36px;\n  color: var(--muted-foreground);\n  cursor: grab;\n  touch-action: none;\n}\n.lt-order-name {\n  flex: 1;\n  min-width: 0;\n  display: flex;\n  align-items: center;\n  gap: 8px;\n}\n.lt-order-name .lt-icon {\n  color: var(--muted-foreground);\n}\n.lt-order-moves {\n  display: flex;\n  flex: none;\n}\n.lt-order-moves .lt-btn {\n  width: 32px;\n  height: 32px;\n}\n.lt-site {\n  padding-left: 10px;\n}\n.lt-site-host {\n  flex: 1;\n  min-width: 0;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  font-weight: 500;\n}\n.lt-site-rule {\n  color: var(--muted-foreground);\n  font-size: 12px;\n}\n\n.lt-version {\n  padding-top: 4px;\n  font-weight: 600;\n}\n.lt-link {\n  display: inline-flex;\n  align-items: center;\n  height: 32px;\n  color: var(--foreground);\n  text-underline-offset: 3px;\n}\n.lt-facts {\n  border-radius: calc(var(--radius) - 2px);\n  padding: 10px 12px;\n}\n\n/* Room for a rail: the tabs go down the left and short fields sit two to a\n   row. Only for a pointer that can aim - a wide tablet keeps the strip. */\n@media (min-width: 900px) and (pointer: fine) {\n  .lt-settings.lt-pro {\n    width: min(960px, 94vw);\n    height: min(720px, calc(var(--lt-dvh) * 88));\n    max-height: none;\n  }\n  .lt-pro .lt-settings-main {\n    flex-direction: row;\n  }\n  .lt-pro .lt-tabs {\n    flex-direction: column;\n    width: 196px;\n    padding: 12px 8px;\n    overflow-x: hidden;\n    overflow-y: auto;\n    border-bottom: 0;\n    border-right: 1px solid var(--border);\n  }\n  .lt-pro .lt-tab {\n    width: 100%;\n    height: 34px;\n  }\n  .lt-pro .lt-panel-body {\n    padding: 4px 24px 20px;\n  }\n  .lt-pro .lt-grid {\n    grid-template-columns: repeat(2, minmax(0, 1fr));\n  }\n  .lt-pro .lt-row-wide {\n    grid-column: 1 / -1;\n  }\n}\n\n/* Outline slider with its live sample. */\n.lt-slider {\n  display: flex;\n  align-items: center;\n  gap: 10px;\n  min-width: 0;\n}\n.lt-slider input[type='range'] {\n  flex: 1;\n  width: auto;\n  height: 24px;\n  padding: 0;\n  border: 0;\n  box-shadow: none;\n  background: transparent;\n  accent-color: var(--primary);\n}\n.lt-readout {\n  min-width: 42px;\n  text-align: right;\n  font-variant-numeric: tabular-nums;\n  color: var(--muted-foreground);\n}\n.lt-preview {\n  grid-column: 1 / -1;\n  width: 100%;\n  height: auto;\n  border-radius: calc(var(--radius) - 2px);\n  border: 1px solid var(--border);\n  margin-top: 6px;\n}\n\n/* The sample translation on the Appearance tab (ui/preview.ts). Stuck to the\n   top of the scrolling body so it is in view from whichever field is being\n   changed, and opaque whatever the popup opacity is: fields scroll under it. */\n.lt-live {\n  position: sticky;\n  top: 0;\n  z-index: 1;\n  margin: 2px 0 6px;\n  background: var(--background);\n  border: 1px solid var(--border);\n  border-radius: var(--radius);\n  /* The body's own padding is above it, and fields would show in that strip. */\n  box-shadow: 0 -6px 0 var(--background);\n}\n.lt-live[hidden] {\n  display: none;\n}\n.lt-live-head {\n  display: flex;\n  align-items: center;\n  gap: 6px;\n  min-height: 32px;\n  padding: 0 10px;\n  font-size: 12px;\n  font-weight: 600;\n  color: var(--muted-foreground);\n  cursor: pointer;\n  list-style: none;\n  user-select: none;\n  -webkit-tap-highlight-color: transparent;\n}\n.lt-live-head::-webkit-details-marker {\n  display: none;\n}\n.lt-live-head:hover {\n  color: var(--foreground);\n}\n.lt-live-chevron {\n  display: flex;\n  transition: transform 0.15s ease;\n}\n.lt-live:not([open]) .lt-live-chevron {\n  transform: rotate(-90deg);\n}\n.lt-live-body {\n  display: flex;\n  align-items: center;\n  gap: 14px;\n  padding: 0 10px 10px;\n}\n/* Sized here and not by its bitmap, which changes with the render sharpness.\n   The height gives way as the window does - a phone with its keyboard up has\n   a body a few fields tall, and the sample may not be most of it. 210px is\n   roughly what the header, the tabs and the footer take. */\n.lt-live-canvas {\n  flex: none;\n  display: block;\n  height: clamp(56px, calc((var(--lt-svh) * 100 - var(--lt-kb) - 210px) * 0.3), 176px);\n  width: auto;\n  max-width: 100%;\n  aspect-ratio: 20 / 11;\n  border-radius: calc(var(--radius) - 2px);\n  border: 1px solid var(--border);\n}\n.lt-live-note {\n  min-width: 0;\n  color: var(--muted-foreground);\n  font-size: 12px;\n}\n\n/* A choice that is about where something goes, with a picture of the chosen\n   value (ui/schematics.ts). Tones are classes so the theme colours them. */\n.lt-pick {\n  display: flex;\n  align-items: center;\n  gap: 8px;\n  min-width: 0;\n}\n.lt-pick .lt-input {\n  flex: 1;\n}\n.lt-sch {\n  flex: none;\n  width: 54px;\n  height: 36px;\n  color: var(--foreground);\n  background: var(--background);\n  border: 1px solid var(--border);\n  border-radius: calc(var(--radius) - 2px);\n  fill: none;\n  stroke: none;\n  stroke-width: 1.5;\n  stroke-linecap: round;\n  stroke-linejoin: round;\n}\n.lt-sch-dim {\n  stroke: var(--muted-foreground);\n  stroke-width: 1.25;\n}\n.lt-sch-ink {\n  stroke: currentColor;\n}\n.lt-sch-solid {\n  fill: currentColor;\n}\n.lt-sch-soft {\n  fill: var(--input);\n  stroke: var(--input);\n}\n.lt-sch text {\n  font: 600 11px system-ui, -apple-system, 'Segoe UI', sans-serif;\n  text-anchor: middle;\n}\n\n/* Section headings. */\n.lt-group {\n  margin: 18px 0 4px;\n  padding-bottom: 6px;\n  border-bottom: 1px solid var(--border);\n  font-size: 12px;\n  font-weight: 600;\n  color: var(--muted-foreground);\n}\n.lt-group:first-child {\n  margin-top: 6px;\n}\n\n/* Menu commands, for a host that has no menu of its own. */\n.lt-actions {\n  display: flex;\n  flex-wrap: wrap;\n  gap: 8px;\n  padding: 6px 0 0;\n}\n.lt-note {\n  color: var(--muted-foreground);\n  font-size: 12px;\n  padding-top: 10px;\n}\n\n/* The diagnostics report: fixed width, so columns line up as written. */\n.lt-report {\n  margin: 0;\n  padding: 14px 18px;\n  overflow: auto;\n  white-space: pre-wrap;\n  word-break: break-word;\n  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;\n  font-size: 12px;\n  line-height: 1.5;\n  color: var(--foreground);\n  background: var(--surface-muted);\n  user-select: text;\n  -webkit-user-select: text;\n}\n\n/* ---------------------------------------------------------------- tools */\n\n/* The layer over a picture while an area, an object or words are being\n   chosen. It scrolls by default: a webtoon page is taller than the screen,\n   and a layer that swallowed every pan would strand the reader halfway down\n   it with only the close button for a way out. Only a gesture that has to be\n   a drag locks the page - see the region layer and the words. */\n.lt-tool {\n  position: absolute;\n  z-index: 2;\n  overflow: hidden;\n  background: rgba(9, 9, 11, 0.2);\n  outline: 2px solid rgba(255, 255, 255, 0.85);\n  outline-offset: -2px;\n  pointer-events: auto;\n  touch-action: pan-x pan-y;\n  -webkit-user-select: none;\n  user-select: none;\n  -webkit-touch-callout: none;\n}\n/* Dragging out a rectangle is the whole of this tool; without `none` the\n   finger scrolls the page instead. */\n.lt-tool-region {\n  cursor: crosshair;\n  touch-action: none;\n}\n/* The chosen area is the one part left undimmed; the shadow is the dimming,\n   clipped by the layer so it stops at the picture's edge. */\n.lt-sel {\n  position: absolute;\n  border: 2px solid #fff;\n  border-radius: 4px;\n  box-shadow: 0 0 0 9999px rgba(9, 9, 11, 0.45);\n  pointer-events: none;\n}\n.lt-sel[hidden] {\n  display: none;\n}\n\n/* A dot is 16px to look at and 44px to hit. */\n.lt-dot {\n  position: absolute;\n  width: 44px;\n  height: 44px;\n  margin: -22px 0 0 -22px;\n  padding: 0;\n  background: transparent;\n  border: 0;\n  border-radius: 50%;\n  cursor: pointer;\n  -webkit-tap-highlight-color: transparent;\n}\n.lt-dot::after {\n  content: '';\n  position: absolute;\n  inset: 14px;\n  border-radius: 50%;\n  background: #fff;\n  box-shadow: 0 0 0 3px rgba(9, 9, 11, 0.55), 0 1px 5px rgba(0, 0, 0, 0.6);\n  transition: transform 0.12s;\n}\n.lt-dot:hover::after,\n.lt-dot:focus-visible::after,\n.lt-dot:active::after {\n  transform: scale(1.3);\n}\n.lt-objbox {\n  position: absolute;\n  border: 2px solid #fff;\n  border-radius: 6px;\n  box-shadow: 0 0 0 1px rgba(9, 9, 11, 0.5);\n  opacity: 0;\n  pointer-events: none;\n  transition: opacity 0.12s;\n}\n.lt-dot:hover + .lt-objbox,\n.lt-dot:focus-visible + .lt-objbox,\n.lt-dot:active + .lt-objbox {\n  opacity: 1;\n}\n\n/* A stroke that starts on a word is a drag across words and must not pan; one\n   that starts between them scrolls. touch-action is read from where the touch\n   lands, intersected up the tree, and settled before any pointer event - so it\n   has to be on the word itself; setting it from a handler is too late. */\n.lt-word {\n  position: absolute;\n  border-radius: 3px;\n  background: rgba(255, 255, 255, 0.28);\n  box-shadow: 0 0 0 1px rgba(9, 9, 11, 0.45);\n  cursor: pointer;\n  touch-action: none;\n}\n.lt-word.lt-on {\n  background: rgba(56, 189, 248, 0.5);\n  box-shadow: 0 0 0 2px #fff, 0 0 0 3px rgba(9, 9, 11, 0.6);\n}\n\n.lt-bar {\n  position: absolute;\n  z-index: 3;\n  left: 50%;\n  bottom: calc(16px + var(--lt-kb) + env(safe-area-inset-bottom, 0px));\n  transform: translateX(-50%);\n  display: flex;\n  flex-wrap: wrap;\n  align-items: center;\n  gap: 8px;\n  width: max-content;\n  max-width: min(720px, calc(100% - 24px));\n  padding: 8px 8px 8px 14px;\n  color: var(--foreground);\n  background: var(--surface);\n  border: 1px solid var(--border);\n  border-radius: calc(var(--radius) + 4px);\n  box-shadow: var(--shadow);\n  pointer-events: auto;\n}\n.lt-bar-text {\n  flex: 1 1 180px;\n  min-width: 0;\n  max-height: 2.9em;\n  overflow: hidden;\n  display: flex;\n  align-items: center;\n  gap: 8px;\n}\n.lt-bar .lt-input {\n  flex: 1 1 200px;\n  width: auto;\n}\n.lt-bar-buttons {\n  display: flex;\n  gap: 6px;\n  margin-left: auto;\n}\n\n/* ------------------------------------------------ a thumb, not a cursor */\n\n/* The same question ui/menu.ts asks. Narrow, or touched: either way the\n   targets are 44px, the fields are 16px so iOS does not zoom into them, and\n   whatever opens does so from the bottom edge, where the thumb already is. */\n@media (max-width: 640px), (pointer: coarse) {\n  /* Never under 44px here, whatever size was chosen: small is a mouse's size. */\n  #lt-controls,\n  #lt-controls[data-size='s'] {\n    --lt-ctl: 44px;\n    gap: 6px;\n  }\n  #lt-controls[data-size='l'] {\n    --lt-ctl: 52px;\n  }\n  .lt-btn,\n  .lt-input {\n    height: 44px;\n  }\n  .lt-btn.lt-square,\n  .lt-x {\n    width: 44px;\n    height: 44px;\n  }\n  .lt-input {\n    font-size: 16px;\n  }\n  .lt-input[type='checkbox'] {\n    width: 22px;\n    height: 22px;\n  }\n  .lt-slider input[type='range'] {\n    height: 44px;\n  }\n\n  .lt-panel-backdrop {\n    align-items: flex-end;\n  }\n  .lt-panel {\n    width: 100%;\n    max-width: 640px;\n    margin-bottom: var(--lt-kb);\n    max-height: calc(var(--lt-svh) * 100 - var(--lt-kb) - 24px);\n    border-width: 1px 0 0;\n    border-radius: 14px 14px 0 0;\n  }\n  .lt-panel-head,\n  .lt-panel-foot {\n    padding-left: max(14px, env(safe-area-inset-left, 0px));\n    padding-right: max(14px, env(safe-area-inset-right, 0px));\n  }\n  .lt-panel-head {\n    padding-right: max(6px, env(safe-area-inset-right, 0px));\n  }\n  .lt-panel-foot {\n    padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px));\n  }\n  .lt-panel-body {\n    padding-left: max(14px, env(safe-area-inset-left, 0px));\n    padding-right: max(14px, env(safe-area-inset-right, 0px));\n  }\n  /* The settings sheet is as tall as it may be whatever tab is open, so\n     changing tab does not move the strip out from under the thumb. */\n  .lt-settings {\n    height: calc(var(--lt-svh) * 100 - var(--lt-kb) - 24px);\n  }\n  .lt-tabs {\n    padding-left: max(10px, env(safe-area-inset-left, 0px));\n    padding-right: max(10px, env(safe-area-inset-right, 0px));\n  }\n  .lt-tab {\n    height: 44px;\n    padding: 0 14px;\n  }\n  .lt-search {\n    max-width: none;\n  }\n  .lt-reset {\n    width: 32px;\n    height: 32px;\n  }\n  .lt-swatch {\n    width: 44px;\n    height: 44px;\n  }\n  .lt-sch {\n    width: 66px;\n    height: 44px;\n  }\n  /* The title says what it is; the sentence would cost the picture its room. */\n  .lt-live-head {\n    min-height: 40px;\n  }\n  .lt-live-body {\n    justify-content: center;\n  }\n  .lt-live-note {\n    display: none;\n  }\n  .lt-live-canvas {\n    height: clamp(48px, calc((var(--lt-svh) * 100 - var(--lt-kb) - 210px) * 0.3), 132px);\n  }\n  .lt-order-item {\n    min-height: 52px;\n  }\n  .lt-grip,\n  .lt-order-moves .lt-btn {\n    width: 40px;\n    height: 44px;\n  }\n  .lt-panel-foot {\n    flex-wrap: wrap;\n  }\n\n  .lt-bar {\n    left: max(8px, env(safe-area-inset-left, 0px));\n    right: max(8px, env(safe-area-inset-right, 0px));\n    bottom: calc(8px + var(--lt-kb) + env(safe-area-inset-bottom, 0px));\n    transform: none;\n    width: auto;\n    max-width: none;\n  }\n  .lt-bar .lt-input {\n    flex-basis: 100%;\n  }\n  #lt-toast {\n    left: max(8px, env(safe-area-inset-left, 0px));\n    right: max(8px, env(safe-area-inset-right, 0px));\n    transform: none;\n    max-width: none;\n    font-size: 14px;\n  }\n}\n\n@media (prefers-reduced-motion: reduce) {\n  .lt-ctl,\n  .lt-live-chevron,\n  #lt-toast,\n  .lt-dot::after,\n  .lt-objbox {\n    transition: none;\n  }\n}\n";
+  const styles = "/* Lives inside a shadow root, so these selectors compete with nothing. The\n   :host is a fixed, click-through, full-viewport layer; everything here is\n   positioned in viewport coordinates.\n\n   The look is shadcn/ui's: zinc neutrals named by role, one radius, hairline\n   borders, a ring on focus. Only the look - there is no framework behind it,\n   because this stylesheet is parsed on every page the script runs on. */\n\n:host {\n  --background: #ffffff;\n  --foreground: #09090b;\n  --muted: #f4f4f5;\n  --muted-foreground: #71717a;\n  --accent: #f4f4f5;\n  --border: #e4e4e7;\n  --input: #d4d4d8;\n  --ring: #a1a1aa;\n  --primary: #18181b;\n  --primary-foreground: #fafafa;\n  --destructive: #dc2626;\n  --success: #059669;\n  --shadow: 0 10px 30px -8px rgba(9, 9, 11, 0.28), 0 2px 6px -2px rgba(9, 9, 11, 0.12);\n  /* 0.5rem, written in pixels: inside a shadow root `rem` is still the page's\n     root font size, and a site that sets that to 10px would shrink every\n     corner and control here with it. */\n  --radius: 8px;\n  /* What the keyboard covers; ui/root.ts keeps it current where it can. */\n  --lt-kb: 0px;\n  /* A hundredth of the viewport, by the best unit this browser has. `svh` is\n     the height with the address bar showing, so a sheet sized by it does not\n     jump when the bar slides away; `dvh` follows the bar. */\n  --lt-svh: 1vh;\n  --lt-dvh: 1vh;\n  /* The backgrounds of our popups, and only those: the menu, the panels, the\n     messages and a tool's bar. ui/root.ts sets --lt-opacity on the host from\n     the \"Popup opacity\" setting. Text and icons are drawn in --foreground and\n     friends, which are never touched, so the words stay solid while what is\n     behind them shows through. Without color-mix the surfaces simply stay\n     opaque: a custom property that fails to compute does not fall back to an\n     earlier declaration, it makes the background transparent, so the mix is\n     only declared where it is known to parse - and only while the setting is\n     below 100, so a fully opaque popup is the plain colour it always was. */\n  --lt-opacity: 100%;\n  --surface: var(--background);\n  --surface-muted: var(--muted);\n\n  font: 14px/1.45 system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;\n  color: var(--foreground);\n}\n@supports (background: color-mix(in srgb, red 50%, transparent)) {\n  :host([data-translucent]) {\n    --surface: color-mix(in srgb, var(--background) var(--lt-opacity), transparent);\n    --surface-muted: color-mix(in srgb, var(--muted) var(--lt-opacity), transparent);\n  }\n}\n/* A see-through popup over a photograph is a popup over noise, and the blur is\n   what turns the noise back into a tint. Only while it is see-through: a\n   backdrop filter costs a compositing pass under every surface that has one. */\n:host([data-translucent]) .lt-menu,\n:host([data-translucent]) .lt-panel,\n:host([data-translucent]) #lt-toast,\n:host([data-translucent]) .lt-bar {\n  -webkit-backdrop-filter: blur(14px) saturate(1.3);\n  backdrop-filter: blur(14px) saturate(1.3);\n}\n@supports (height: 1dvh) {\n  :host {\n    --lt-svh: 1svh;\n    --lt-dvh: 1dvh;\n  }\n}\n@media (prefers-color-scheme: dark) {\n  :host {\n    --background: #09090b;\n    --foreground: #fafafa;\n    --muted: #27272a;\n    --muted-foreground: #a1a1aa;\n    --accent: #27272a;\n    --border: #27272a;\n    --input: #3f3f46;\n    --ring: #71717a;\n    --primary: #fafafa;\n    --primary-foreground: #18181b;\n    --destructive: #ef4444;\n    --success: #10b981;\n    --shadow: 0 10px 30px -8px rgba(0, 0, 0, 0.7), 0 2px 6px -2px rgba(0, 0, 0, 0.5);\n  }\n}\n\n*,\n*::before,\n*::after {\n  box-sizing: border-box;\n}\n\n.lt-icon {\n  display: block;\n  flex: none;\n  width: 18px;\n}\n.lt-icon-loader {\n  animation: lt-spin 0.9s linear infinite;\n}\n@keyframes lt-spin {\n  to {\n    transform: rotate(360deg);\n  }\n}\n\n/* ------------------------------------------------------------- controls */\n\n/* Hung from a corner of the picture by its own matching corner, so the row\n   can be any size: main.ts measures it, sets its width and puts its top-left\n   where that corner lands - moved back onto the screen if it would leave it.\n   The controls are listed corner-first; a right-hand corner reverses them, so\n   the first - the main one - is the one in the corner whichever side that is.\n   A row wider than the screen wraps, and for a bottom corner the lines stack\n   upwards so the main control's line is still the one at the corner. */\n#lt-controls {\n  --lt-ctl: 32px;\n  --lt-idle: 1;\n  position: absolute;\n  z-index: 1;\n  display: flex;\n  flex-direction: row-reverse;\n  flex-wrap: wrap;\n  gap: 4px;\n  pointer-events: none;\n}\n#lt-controls[data-corner='br'] {\n  flex-wrap: wrap-reverse;\n}\n#lt-controls[data-corner='tl'] {\n  flex-direction: row;\n}\n#lt-controls[data-corner='bl'] {\n  flex-direction: row;\n  flex-wrap: wrap-reverse;\n}\n#lt-controls[data-size='s'] {\n  --lt-ctl: 28px;\n}\n#lt-controls[data-size='l'] {\n  --lt-ctl: 40px;\n}\n.lt-ctl {\n  flex: none;\n  width: var(--lt-ctl);\n  height: var(--lt-ctl);\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  gap: 6px;\n  /* These sit on somebody's photograph, not on a surface of ours, so they do\n     not follow the theme: dark glass reads on any picture. */\n  background: rgba(9, 9, 11, 0.72);\n  color: #fafafa;\n  border: 1px solid rgba(255, 255, 255, 0.18);\n  border-radius: var(--radius);\n  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);\n  -webkit-backdrop-filter: blur(6px);\n  backdrop-filter: blur(6px);\n  opacity: 0;\n  transform: scale(0.92);\n  pointer-events: none;\n  cursor: pointer;\n  transition: opacity 0.15s, transform 0.15s, background 0.15s;\n  -webkit-tap-highlight-color: transparent;\n}\n/* With its name beside the icon a control is as wide as the name. */\n.lt-ctl.lt-labelled {\n  width: auto;\n  padding: 0 10px 0 8px;\n  font-size: 13px;\n  font-weight: 500;\n  white-space: nowrap;\n}\n#lt-controls.lt-on .lt-main,\n/* A beat after the main button, so a passing cursor does not summon the row. */\n#lt-controls.lt-on.lt-extras .lt-ctl {\n  opacity: var(--lt-idle);\n  transform: none;\n  pointer-events: auto;\n}\n/* Dimmed until pointed at, when that was asked for; solid under the cursor. */\n#lt-controls.lt-on:hover .lt-main,\n#lt-controls.lt-on.lt-extras:hover .lt-ctl {\n  opacity: 1;\n}\n.lt-ctl:hover {\n  background: rgba(9, 9, 11, 0.92);\n}\n/* Held down, and on a touch screen a long press: the browser must not take\n   either for a scroll or a text selection. */\n.lt-main {\n  touch-action: none;\n  -webkit-user-select: none;\n  user-select: none;\n  -webkit-touch-callout: none;\n}\n/* Held down to look at the original: the button says so with a ring. */\n.lt-main.lt-peeking {\n  box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.6);\n}\n.lt-main .lt-icon-loader,\n.lt-main.lt-busy .lt-icon:not(.lt-icon-loader) {\n  display: none;\n}\n.lt-main.lt-busy .lt-icon-loader {\n  display: block;\n}\n.lt-ctl.lt-active {\n  background: var(--success);\n  border-color: transparent;\n}\n.lt-main.lt-error {\n  background: var(--destructive);\n  border-color: transparent;\n}\n\n/* -------------------------------------------------------- buttons, fields */\n\n.lt-btn {\n  display: inline-flex;\n  align-items: center;\n  justify-content: center;\n  gap: 6px;\n  height: 36px;\n  padding: 0 14px;\n  font: inherit;\n  font-weight: 500;\n  white-space: nowrap;\n  text-decoration: none;\n  color: var(--foreground);\n  background: var(--background);\n  border: 1px solid var(--border);\n  border-radius: calc(var(--radius) - 2px);\n  box-shadow: 0 1px 2px rgba(9, 9, 11, 0.05);\n  cursor: pointer;\n  -webkit-tap-highlight-color: transparent;\n}\n.lt-btn:hover {\n  background: var(--accent);\n}\n.lt-btn.lt-primary {\n  color: var(--primary-foreground);\n  background: var(--primary);\n  border-color: transparent;\n}\n.lt-btn.lt-primary:hover {\n  opacity: 0.9;\n}\n.lt-btn.lt-ghost {\n  border-color: transparent;\n  box-shadow: none;\n  background: transparent;\n}\n.lt-btn.lt-ghost:hover {\n  background: var(--accent);\n}\n.lt-btn.lt-square {\n  width: 36px;\n  padding: 0;\n  flex: none;\n}\n.lt-btn:disabled {\n  opacity: 0.5;\n  pointer-events: none;\n}\n.lt-btn.lt-small {\n  height: 28px;\n  padding: 0 10px;\n  font-size: 12px;\n}\n.lt-btn[hidden],\n.lt-reset[hidden] {\n  display: none;\n}\n.lt-btn:focus-visible,\n.lt-x:focus-visible,\n.lt-tab:focus-visible,\n.lt-reset:focus-visible,\n.lt-dot:focus-visible {\n  outline: 2px solid var(--ring);\n  outline-offset: 2px;\n}\n\n.lt-input {\n  height: 36px;\n  min-width: 0;\n  width: 100%;\n  padding: 0 12px;\n  font: inherit;\n  color: var(--foreground);\n  background: var(--background);\n  border: 1px solid var(--input);\n  border-radius: calc(var(--radius) - 2px);\n  box-shadow: 0 1px 2px rgba(9, 9, 11, 0.05);\n}\n.lt-input::placeholder {\n  color: var(--muted-foreground);\n}\n.lt-input:focus-visible {\n  outline: 2px solid var(--ring);\n  outline-offset: 1px;\n}\n/* A checkbox is a switch. The knob is a gradient, not a pseudo-element: an\n   input has no ::before in every engine, and a background it always has. */\n.lt-input[type='checkbox'] {\n  -webkit-appearance: none;\n  appearance: none;\n  flex: none;\n  justify-self: end;\n  width: 36px;\n  height: 20px;\n  margin: 0;\n  padding: 0;\n  border: 0;\n  border-radius: 999px;\n  box-shadow: none;\n  cursor: pointer;\n  background-color: var(--input);\n  background-image: radial-gradient(circle at 10px 50%, #fff 0 7px, transparent 7.5px);\n  transition: background-color 0.15s;\n}\n.lt-input[type='checkbox']:checked {\n  background-color: var(--primary);\n  background-image: radial-gradient(circle at calc(100% - 10px) 50%, var(--primary-foreground) 0 7px, transparent 7.5px);\n}\n.lt-input[type='checkbox']:focus-visible {\n  outline: 2px solid var(--ring);\n  outline-offset: 2px;\n}\n\n/* ----------------------------------------------------------------- menu */\n\n.lt-menu {\n  position: absolute;\n  z-index: 4;\n  width: 260px;\n  padding: 4px;\n  display: flex;\n  flex-direction: column;\n  color: var(--foreground);\n  background: var(--surface);\n  border: 1px solid var(--border);\n  border-radius: var(--radius);\n  box-shadow: var(--shadow);\n  pointer-events: auto;\n}\n.lt-menu-item {\n  display: flex;\n  align-items: center;\n  gap: 10px;\n  width: 100%;\n  min-height: 36px;\n  padding: 6px 10px;\n  font: inherit;\n  text-align: left;\n  color: inherit;\n  background: transparent;\n  border: 0;\n  border-radius: calc(var(--radius) - 4px);\n  cursor: pointer;\n  -webkit-tap-highlight-color: transparent;\n}\n.lt-menu-item .lt-icon {\n  color: var(--muted-foreground);\n}\n/* The item the keyboard is on is highlighted like the one the cursor is on,\n   not ringed: the first item is focused when the menu opens, and a ring there\n   reads as a selection nobody made. */\n.lt-menu-item:hover:not(:disabled),\n.lt-menu-item:focus-visible {\n  background: var(--accent);\n  outline: none;\n}\n.lt-menu-item:disabled {\n  color: var(--muted-foreground);\n  opacity: 0.6;\n  cursor: default;\n}\n.lt-menu-rule {\n  height: 1px;\n  margin: 4px -4px;\n  background: var(--border);\n}\n/* The item and the field under it are one thing to ask. */\n.lt-field-row {\n  display: flex;\n  gap: 6px;\n  padding: 2px 6px 6px 38px;\n}\n\n/* A sheet has to sit on something that takes the press meant to dismiss it. */\n.lt-scrim {\n  position: absolute;\n  inset: 0;\n  z-index: 4;\n  background: rgba(9, 9, 11, 0.5);\n  pointer-events: auto;\n}\n.lt-menu.lt-sheet {\n  left: 0;\n  right: 0;\n  bottom: var(--lt-kb);\n  width: auto;\n  max-width: 560px;\n  margin: 0 auto;\n  max-height: calc(var(--lt-svh) * 100 - var(--lt-kb) - 24px);\n  overflow-y: auto;\n  overscroll-behavior: contain;\n  padding: 8px max(8px, env(safe-area-inset-right, 0px)) calc(8px + env(safe-area-inset-bottom, 0px))\n    max(8px, env(safe-area-inset-left, 0px));\n  border-width: 1px 0 0;\n  border-radius: 14px 14px 0 0;\n}\n/* The handle a sheet is expected to have; it says \"this slides\", nothing more. */\n.lt-menu.lt-sheet::before {\n  content: '';\n  flex: none;\n  align-self: center;\n  width: 40px;\n  height: 4px;\n  margin: 0 0 6px;\n  border-radius: 2px;\n  background: var(--input);\n}\n.lt-sheet .lt-menu-item {\n  min-height: 48px;\n  padding: 8px 12px;\n  gap: 14px;\n  font-size: 16px;\n}\n.lt-sheet .lt-menu-item .lt-icon {\n  width: 20px;\n  height: 20px;\n}\n.lt-sheet .lt-field-row {\n  padding: 2px 8px 8px 46px;\n}\n.lt-sheet .lt-menu-rule {\n  margin: 4px 0;\n}\n\n/* ---------------------------------------------------------------- toast */\n\n#lt-toast {\n  position: absolute;\n  z-index: 6;\n  left: 50%;\n  bottom: calc(16px + var(--lt-kb) + env(safe-area-inset-bottom, 0px));\n  transform: translateX(-50%);\n  display: flex;\n  align-items: center;\n  gap: 10px;\n  max-width: min(520px, calc(100% - 24px));\n  padding: 10px 14px;\n  font-size: 13px;\n  color: var(--foreground);\n  background: var(--surface);\n  border: 1px solid var(--border);\n  border-radius: var(--radius);\n  box-shadow: var(--shadow);\n  pointer-events: none;\n  opacity: 0;\n  visibility: hidden;\n  transition: opacity 0.2s, visibility 0.2s;\n}\n#lt-toast.lt-show {\n  opacity: 1;\n  visibility: visible;\n}\n/* A message with a link in it is something to press. */\n#lt-toast.lt-show.lt-has-link {\n  pointer-events: auto;\n  padding: 8px 8px 8px 14px;\n}\n#lt-toast > span {\n  flex: 1;\n  min-width: 0;\n}\n/* An address shown because it could not be opened: one line, cut short, and\n   selectable for a host where copying is out of reach too. */\n.lt-url {\n  display: block;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n  color: var(--muted-foreground);\n  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;\n  font-size: 11px;\n  user-select: text;\n  -webkit-user-select: text;\n}\n/* While a tool's bar has the bottom of the screen, messages go to the top. */\n:host([data-tool]) #lt-toast {\n  bottom: auto;\n  top: calc(12px + env(safe-area-inset-top, 0px));\n}\n\n/* --------------------------------------------------------------- panels */\n\n.lt-panel-backdrop {\n  position: absolute;\n  inset: 0;\n  z-index: 5;\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  background: rgba(9, 9, 11, 0.5);\n  pointer-events: auto;\n}\n.lt-panel {\n  width: min(560px, 92vw);\n  max-height: calc(var(--lt-dvh) * 86);\n  display: flex;\n  flex-direction: column;\n  color: var(--foreground);\n  background: var(--surface);\n  border: 1px solid var(--border);\n  border-radius: calc(var(--radius) + 4px);\n  box-shadow: var(--shadow);\n  overflow: hidden;\n}\n.lt-panel-head,\n.lt-panel-foot {\n  display: flex;\n  align-items: center;\n  gap: 8px;\n  padding: 12px 18px;\n  flex: none;\n}\n.lt-panel-head {\n  border-bottom: 1px solid var(--border);\n  justify-content: space-between;\n  font-size: 15px;\n  font-weight: 600;\n  padding-right: 10px;\n}\n.lt-panel-foot {\n  border-top: 1px solid var(--border);\n}\n.lt-spacer {\n  flex: 1;\n}\n.lt-panel-body {\n  padding: 8px 18px 16px;\n  overflow-y: auto;\n  overscroll-behavior: contain;\n}\n.lt-x {\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  width: 32px;\n  height: 32px;\n  padding: 0;\n  color: var(--muted-foreground);\n  background: transparent;\n  border: 0;\n  border-radius: calc(var(--radius) - 2px);\n  cursor: pointer;\n}\n.lt-x:hover {\n  color: var(--foreground);\n  background: var(--accent);\n}\n\n/* ------------------------------------------------------ settings window */\n\n/* A header, the tabs, the fields and a footer. The tabs are a strip along the\n   top by default - which is what a phone and a narrow window get - and become\n   a rail down the left side where there is room for one (see below). */\n.lt-settings-main {\n  flex: 1;\n  min-height: 0;\n  display: flex;\n  flex-direction: column;\n}\n.lt-settings .lt-panel-head {\n  gap: 12px;\n}\n.lt-settings .lt-panel-head strong {\n  flex: none;\n}\n.lt-search {\n  flex: 1;\n  max-width: 320px;\n  margin-left: auto;\n}\n.lt-search[hidden] {\n  display: none;\n}\n.lt-tabs {\n  flex: none;\n  display: flex;\n  gap: 4px;\n  padding: 8px 14px;\n  overflow-x: auto;\n  overscroll-behavior: contain;\n  border-bottom: 1px solid var(--border);\n  /* The strip scrolls under a finger; a bar across it would only be noise. */\n  scrollbar-width: none;\n}\n.lt-tabs::-webkit-scrollbar {\n  display: none;\n}\n.lt-tab {\n  flex: none;\n  display: flex;\n  align-items: center;\n  height: 32px;\n  padding: 0 12px;\n  font: inherit;\n  font-weight: 500;\n  white-space: nowrap;\n  color: var(--muted-foreground);\n  background: transparent;\n  border: 0;\n  border-radius: calc(var(--radius) - 2px);\n  cursor: pointer;\n  -webkit-tap-highlight-color: transparent;\n}\n.lt-tab:hover {\n  color: var(--foreground);\n  background: var(--accent);\n}\n.lt-tab[aria-selected='true'] {\n  color: var(--foreground);\n  background: var(--surface-muted);\n}\n.lt-settings .lt-panel-body {\n  flex: 1;\n  min-height: 0;\n  padding-top: 4px;\n}\n.lt-pane[hidden],\n.lt-row[hidden],\n.lt-extra[hidden],\n.lt-note[hidden],\n.lt-guard[hidden] {\n  display: none;\n}\n.lt-pane-head {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 8px;\n  min-height: 28px;\n  margin: 10px 0 2px;\n}\n.lt-pane-head h3 {\n  margin: 0;\n  font-size: 15px;\n  font-weight: 600;\n}\n/* One tab at a time needs no heading over it: the tab says where you are.\n   Search results come from several, and each group says which. */\n.lt-settings:not(.lt-searching) .lt-pane-head h3 {\n  visibility: hidden;\n}\n/* ...and with nothing to reset there is nothing in it at all. */\n.lt-settings:not(.lt-searching) .lt-pane-head:not(:has(.lt-btn:not([hidden]))) {\n  min-height: 0;\n  height: 0;\n  margin: 0;\n  overflow: hidden;\n}\n.lt-grid {\n  display: grid;\n  grid-template-columns: minmax(0, 1fr);\n  column-gap: 28px;\n}\n\n/* A field: its name, the control, and a line about what it does. Stacked, so\n   the control gets the full width of its column whatever the name's length. */\n.lt-row {\n  display: grid;\n  grid-template-columns: minmax(0, 1fr);\n  align-content: start;\n  gap: 6px;\n  padding: 9px 0;\n}\n.lt-row.lt-row-check {\n  grid-template-columns: minmax(0, 1fr) auto;\n  align-items: center;\n}\n.lt-label {\n  display: flex;\n  align-items: center;\n  gap: 6px;\n  min-height: 20px;\n  font-weight: 500;\n}\n/* The name is a <label for> its control: pressing it focuses or toggles. */\n.lt-label-text {\n  cursor: pointer;\n}\n.lt-hint {\n  grid-column: 1 / -1;\n  color: var(--muted-foreground);\n  font-size: 12px;\n}\n/* Back to the default; only there when the value is not the default. */\n.lt-reset {\n  display: inline-flex;\n  align-items: center;\n  justify-content: center;\n  width: 20px;\n  height: 20px;\n  padding: 0;\n  color: var(--muted-foreground);\n  background: transparent;\n  border: 0;\n  border-radius: 4px;\n  cursor: pointer;\n}\n.lt-reset:hover {\n  color: var(--foreground);\n  background: var(--accent);\n}\n.lt-reset .lt-icon {\n  width: 14px;\n}\n.lt-guard {\n  font-size: 13px;\n  font-weight: 500;\n}\n\n.lt-color,\n.lt-chord-row {\n  display: flex;\n  align-items: center;\n  gap: 8px;\n  min-width: 0;\n}\n.lt-swatch {\n  flex: none;\n  width: 36px;\n  height: 36px;\n  padding: 2px;\n  background: var(--background);\n  border: 1px solid var(--input);\n  border-radius: calc(var(--radius) - 2px);\n  cursor: pointer;\n}\n.lt-swatch.lt-unset {\n  opacity: 0.35;\n}\n.lt-chord {\n  flex: 1;\n  min-width: 0;\n  justify-content: flex-start;\n  font-variant-numeric: tabular-nums;\n}\n.lt-chord.lt-recording {\n  outline: 2px solid var(--ring);\n  outline-offset: 1px;\n  color: var(--muted-foreground);\n}\n\n/* The buttons over a picture, as a list to tick and to drag into order. */\n.lt-order,\n.lt-site-list {\n  margin: 0;\n  padding: 0;\n  list-style: none;\n}\n.lt-order {\n  border: 1px solid var(--border);\n  border-radius: calc(var(--radius) - 2px);\n  overflow: hidden;\n}\n.lt-order-item,\n.lt-site {\n  display: flex;\n  align-items: center;\n  gap: 10px;\n  min-height: 40px;\n  padding: 2px 6px 2px 4px;\n  background: var(--background);\n}\n.lt-order-item + .lt-order-item,\n.lt-site + .lt-site {\n  border-top: 1px solid var(--border);\n}\n.lt-order-item.lt-dragging {\n  background: var(--accent);\n}\n/* The handle is the only part that drags, so the rest of the row still\n   scrolls the sheet under a finger. */\n.lt-grip {\n  flex: none;\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  width: 28px;\n  height: 36px;\n  color: var(--muted-foreground);\n  cursor: grab;\n  touch-action: none;\n}\n.lt-order-name {\n  flex: 1;\n  min-width: 0;\n  display: flex;\n  align-items: center;\n  gap: 8px;\n}\n.lt-order-name .lt-icon {\n  color: var(--muted-foreground);\n}\n.lt-order-moves {\n  display: flex;\n  flex: none;\n}\n.lt-order-moves .lt-btn {\n  width: 32px;\n  height: 32px;\n}\n.lt-site {\n  padding-left: 10px;\n}\n.lt-site-host {\n  flex: 1;\n  min-width: 0;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  font-weight: 500;\n}\n.lt-site-rule {\n  color: var(--muted-foreground);\n  font-size: 12px;\n}\n\n.lt-version {\n  padding-top: 4px;\n  font-weight: 600;\n}\n.lt-link {\n  display: inline-flex;\n  align-items: center;\n  height: 32px;\n  color: var(--foreground);\n  text-underline-offset: 3px;\n}\n.lt-facts {\n  border-radius: calc(var(--radius) - 2px);\n  padding: 10px 12px;\n}\n\n/* Room for a rail: the tabs go down the left and short fields sit two to a\n   row. Only for a pointer that can aim - a wide tablet keeps the strip. */\n@media (min-width: 900px) and (pointer: fine) {\n  .lt-settings.lt-pro {\n    width: min(960px, 94vw);\n    height: min(720px, calc(var(--lt-dvh) * 88));\n    max-height: none;\n  }\n  .lt-pro .lt-settings-main {\n    flex-direction: row;\n  }\n  .lt-pro .lt-tabs {\n    flex-direction: column;\n    width: 196px;\n    padding: 12px 8px;\n    overflow-x: hidden;\n    overflow-y: auto;\n    border-bottom: 0;\n    border-right: 1px solid var(--border);\n  }\n  .lt-pro .lt-tab {\n    width: 100%;\n    height: 34px;\n  }\n  .lt-pro .lt-panel-body {\n    padding: 4px 24px 20px;\n  }\n  .lt-pro .lt-grid {\n    grid-template-columns: repeat(2, minmax(0, 1fr));\n  }\n  .lt-pro .lt-row-wide {\n    grid-column: 1 / -1;\n  }\n}\n\n/* Outline slider with its live sample. */\n.lt-slider {\n  display: flex;\n  align-items: center;\n  gap: 10px;\n  min-width: 0;\n}\n.lt-slider input[type='range'] {\n  flex: 1;\n  width: auto;\n  height: 24px;\n  padding: 0;\n  border: 0;\n  box-shadow: none;\n  background: transparent;\n  accent-color: var(--primary);\n}\n.lt-readout {\n  min-width: 42px;\n  text-align: right;\n  font-variant-numeric: tabular-nums;\n  color: var(--muted-foreground);\n}\n.lt-preview {\n  grid-column: 1 / -1;\n  width: 100%;\n  height: auto;\n  border-radius: calc(var(--radius) - 2px);\n  border: 1px solid var(--border);\n  margin-top: 6px;\n}\n\n/* The sample translation on the Appearance tab (ui/preview.ts). Stuck to the\n   top of the scrolling body so it is in view from whichever field is being\n   changed, and opaque whatever the popup opacity is: fields scroll under it. */\n.lt-live {\n  position: sticky;\n  top: 0;\n  z-index: 1;\n  margin: 2px 0 6px;\n  background: var(--background);\n  border: 1px solid var(--border);\n  border-radius: var(--radius);\n  /* The body's own padding is above it, and fields would show in that strip. */\n  box-shadow: 0 -6px 0 var(--background);\n}\n.lt-live[hidden] {\n  display: none;\n}\n.lt-live-head {\n  display: flex;\n  align-items: center;\n  gap: 6px;\n  min-height: 32px;\n  padding: 0 10px;\n  font-size: 12px;\n  font-weight: 600;\n  color: var(--muted-foreground);\n  cursor: pointer;\n  list-style: none;\n  user-select: none;\n  -webkit-tap-highlight-color: transparent;\n}\n.lt-live-head::-webkit-details-marker {\n  display: none;\n}\n.lt-live-head:hover {\n  color: var(--foreground);\n}\n.lt-live-chevron {\n  display: flex;\n  transition: transform 0.15s ease;\n}\n.lt-live:not([open]) .lt-live-chevron {\n  transform: rotate(-90deg);\n}\n.lt-live-body {\n  display: flex;\n  align-items: center;\n  gap: 14px;\n  padding: 0 10px 10px;\n}\n/* Sized here and not by its bitmap, which changes with the render sharpness.\n   The height gives way as the window does - a phone with its keyboard up has\n   a body a few fields tall, and the sample may not be most of it. 210px is\n   roughly what the header, the tabs and the footer take. */\n.lt-live-canvas {\n  flex: none;\n  display: block;\n  height: clamp(56px, calc((var(--lt-svh) * 100 - var(--lt-kb) - 210px) * 0.3), 176px);\n  width: auto;\n  max-width: 100%;\n  aspect-ratio: 20 / 11;\n  border-radius: calc(var(--radius) - 2px);\n  border: 1px solid var(--border);\n}\n.lt-live-note {\n  min-width: 0;\n  color: var(--muted-foreground);\n  font-size: 12px;\n}\n\n/* A choice that is about where something goes, with a picture of the chosen\n   value (ui/schematics.ts). Tones are classes so the theme colours them. */\n.lt-pick {\n  display: flex;\n  align-items: center;\n  gap: 8px;\n  min-width: 0;\n}\n.lt-pick .lt-input {\n  flex: 1;\n}\n.lt-sch {\n  flex: none;\n  width: 54px;\n  height: 36px;\n  color: var(--foreground);\n  background: var(--background);\n  border: 1px solid var(--border);\n  border-radius: calc(var(--radius) - 2px);\n  fill: none;\n  stroke: none;\n  stroke-width: 1.5;\n  stroke-linecap: round;\n  stroke-linejoin: round;\n}\n.lt-sch-dim {\n  stroke: var(--muted-foreground);\n  stroke-width: 1.25;\n}\n.lt-sch-ink {\n  stroke: currentColor;\n}\n.lt-sch-solid {\n  fill: currentColor;\n}\n.lt-sch-soft {\n  fill: var(--input);\n  stroke: var(--input);\n}\n.lt-sch text {\n  font: 600 11px system-ui, -apple-system, 'Segoe UI', sans-serif;\n  text-anchor: middle;\n}\n\n/* The General tab: what is true now, in a card; the interface as two cards. */\n.lt-card {\n  margin: 6px 0 8px;\n  padding: 2px 16px;\n  background: var(--surface);\n  border: 1px solid var(--border);\n  border-radius: var(--radius);\n}\n.lt-card > * + * {\n  border-top: 1px solid var(--border);\n}\n.lt-card > .lt-row {\n  padding: 12px 0;\n}\n.lt-status > .lt-row:first-child .lt-label {\n  font-size: 15px;\n  font-weight: 600;\n}\n.lt-searching .lt-card {\n  padding: 0;\n  border: 0;\n}\n.lt-segmented {\n  display: grid;\n  grid-template-columns: repeat(3, minmax(0, 1fr));\n  gap: 3px;\n  padding: 3px;\n  background: var(--surface-muted);\n  border-radius: var(--radius);\n}\n.lt-seg {\n  height: 32px;\n  min-width: 0;\n  padding: 0 8px;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n  font: inherit;\n  font-weight: 500;\n  color: var(--muted-foreground);\n  background: transparent;\n  border: 0;\n  border-radius: calc(var(--radius) - 2px);\n  cursor: pointer;\n  -webkit-tap-highlight-color: transparent;\n}\n.lt-seg:hover {\n  color: var(--foreground);\n}\n.lt-seg[aria-checked='true'] {\n  color: var(--foreground);\n  background: var(--background);\n  box-shadow: 0 1px 3px rgba(9, 9, 11, 0.12), 0 0 0 1px var(--border);\n}\n.lt-seg:focus-visible,\n.lt-mode:focus-visible {\n  outline: 2px solid var(--ring);\n  outline-offset: 2px;\n}\n.lt-modes {\n  display: grid;\n  grid-template-columns: repeat(2, minmax(0, 1fr));\n  gap: 10px;\n}\n.lt-mode {\n  display: grid;\n  align-content: start;\n  gap: 6px;\n  min-width: 0;\n  padding: 12px 14px;\n  font: inherit;\n  text-align: start;\n  color: var(--foreground);\n  background: var(--surface);\n  border: 1px solid var(--border);\n  border-radius: var(--radius);\n  cursor: pointer;\n  -webkit-tap-highlight-color: transparent;\n}\n.lt-mode:hover {\n  background: var(--accent);\n}\n.lt-mode[aria-checked='true'] {\n  border-color: var(--primary);\n  box-shadow: 0 0 0 1px var(--primary);\n}\n.lt-mode-title {\n  display: flex;\n  align-items: center;\n  gap: 8px;\n  font-weight: 600;\n}\n.lt-mode-desc {\n  color: var(--muted-foreground);\n  font-size: 12px;\n  line-height: 1.4;\n}\n.lt-quick {\n  display: grid;\n  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));\n  gap: 8px;\n  padding-top: 6px;\n}\n.lt-quick-btn {\n  justify-content: flex-start;\n  gap: 10px;\n  min-width: 0;\n}\n.lt-quick-btn > span:not(.lt-quick-meta) {\n  overflow: hidden;\n  text-overflow: ellipsis;\n}\n.lt-quick-meta {\n  margin-inline-start: auto;\n  padding-inline-start: 8px;\n  color: var(--muted-foreground);\n  font-size: 12px;\n  font-weight: 400;\n}\n\n/* Section headings. */\n.lt-group {\n  margin: 18px 0 4px;\n  padding-bottom: 6px;\n  border-bottom: 1px solid var(--border);\n  font-size: 12px;\n  font-weight: 600;\n  color: var(--muted-foreground);\n}\n.lt-group:first-child {\n  margin-top: 6px;\n}\n\n/* Menu commands, for a host that has no menu of its own. */\n.lt-actions {\n  display: flex;\n  flex-wrap: wrap;\n  gap: 8px;\n  padding: 6px 0 0;\n}\n.lt-note {\n  color: var(--muted-foreground);\n  font-size: 12px;\n  padding-top: 10px;\n}\n\n/* The diagnostics report: fixed width, so columns line up as written. */\n.lt-report {\n  margin: 0;\n  padding: 14px 18px;\n  overflow: auto;\n  white-space: pre-wrap;\n  word-break: break-word;\n  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;\n  font-size: 12px;\n  line-height: 1.5;\n  color: var(--foreground);\n  background: var(--surface-muted);\n  user-select: text;\n  -webkit-user-select: text;\n}\n\n/* ---------------------------------------------------------------- tools */\n\n/* The layer over a picture while an area, an object or words are being\n   chosen. It scrolls by default: a webtoon page is taller than the screen,\n   and a layer that swallowed every pan would strand the reader halfway down\n   it with only the close button for a way out. Only a gesture that has to be\n   a drag locks the page - see the region layer and the words. */\n.lt-tool {\n  position: absolute;\n  z-index: 2;\n  overflow: hidden;\n  background: rgba(9, 9, 11, 0.2);\n  outline: 2px solid rgba(255, 255, 255, 0.85);\n  outline-offset: -2px;\n  pointer-events: auto;\n  touch-action: pan-x pan-y;\n  -webkit-user-select: none;\n  user-select: none;\n  -webkit-touch-callout: none;\n}\n/* Dragging out a rectangle is the whole of this tool; without `none` the\n   finger scrolls the page instead. */\n.lt-tool-region {\n  cursor: crosshair;\n  touch-action: none;\n}\n/* The chosen area is the one part left undimmed; the shadow is the dimming,\n   clipped by the layer so it stops at the picture's edge. */\n.lt-sel {\n  position: absolute;\n  border: 2px solid #fff;\n  border-radius: 4px;\n  box-shadow: 0 0 0 9999px rgba(9, 9, 11, 0.45);\n  pointer-events: none;\n}\n.lt-sel[hidden] {\n  display: none;\n}\n\n/* A dot is 16px to look at and 44px to hit. */\n.lt-dot {\n  position: absolute;\n  width: 44px;\n  height: 44px;\n  margin: -22px 0 0 -22px;\n  padding: 0;\n  background: transparent;\n  border: 0;\n  border-radius: 50%;\n  cursor: pointer;\n  -webkit-tap-highlight-color: transparent;\n}\n.lt-dot::after {\n  content: '';\n  position: absolute;\n  inset: 14px;\n  border-radius: 50%;\n  background: #fff;\n  box-shadow: 0 0 0 3px rgba(9, 9, 11, 0.55), 0 1px 5px rgba(0, 0, 0, 0.6);\n  transition: transform 0.12s;\n}\n.lt-dot:hover::after,\n.lt-dot:focus-visible::after,\n.lt-dot:active::after {\n  transform: scale(1.3);\n}\n.lt-objbox {\n  position: absolute;\n  border: 2px solid #fff;\n  border-radius: 6px;\n  box-shadow: 0 0 0 1px rgba(9, 9, 11, 0.5);\n  opacity: 0;\n  pointer-events: none;\n  transition: opacity 0.12s;\n}\n.lt-dot:hover + .lt-objbox,\n.lt-dot:focus-visible + .lt-objbox,\n.lt-dot:active + .lt-objbox {\n  opacity: 1;\n}\n\n/* A stroke that starts on a word is a drag across words and must not pan; one\n   that starts between them scrolls. touch-action is read from where the touch\n   lands, intersected up the tree, and settled before any pointer event - so it\n   has to be on the word itself; setting it from a handler is too late. */\n.lt-word {\n  position: absolute;\n  border-radius: 3px;\n  background: rgba(255, 255, 255, 0.28);\n  box-shadow: 0 0 0 1px rgba(9, 9, 11, 0.45);\n  cursor: pointer;\n  touch-action: none;\n}\n.lt-word.lt-on {\n  background: rgba(56, 189, 248, 0.5);\n  box-shadow: 0 0 0 2px #fff, 0 0 0 3px rgba(9, 9, 11, 0.6);\n}\n\n.lt-bar {\n  position: absolute;\n  z-index: 3;\n  left: 50%;\n  bottom: calc(16px + var(--lt-kb) + env(safe-area-inset-bottom, 0px));\n  transform: translateX(-50%);\n  display: flex;\n  flex-wrap: wrap;\n  align-items: center;\n  gap: 8px;\n  width: max-content;\n  max-width: min(720px, calc(100% - 24px));\n  padding: 8px 8px 8px 14px;\n  color: var(--foreground);\n  background: var(--surface);\n  border: 1px solid var(--border);\n  border-radius: calc(var(--radius) + 4px);\n  box-shadow: var(--shadow);\n  pointer-events: auto;\n}\n.lt-bar-text {\n  flex: 1 1 180px;\n  min-width: 0;\n  max-height: 2.9em;\n  overflow: hidden;\n  display: flex;\n  align-items: center;\n  gap: 8px;\n}\n.lt-bar .lt-input {\n  flex: 1 1 200px;\n  width: auto;\n}\n.lt-bar-buttons {\n  display: flex;\n  gap: 6px;\n  margin-left: auto;\n}\n\n/* ------------------------------------------------ a thumb, not a cursor */\n\n/* The same question ui/menu.ts asks. Narrow, or touched: either way the\n   targets are 44px, the fields are 16px so iOS does not zoom into them, and\n   whatever opens does so from the bottom edge, where the thumb already is. */\n@media (max-width: 640px), (pointer: coarse) {\n  /* Never under 44px here, whatever size was chosen: small is a mouse's size. */\n  #lt-controls,\n  #lt-controls[data-size='s'] {\n    --lt-ctl: 44px;\n    gap: 6px;\n  }\n  #lt-controls[data-size='l'] {\n    --lt-ctl: 52px;\n  }\n  .lt-btn,\n  .lt-input {\n    height: 44px;\n  }\n  .lt-btn.lt-square,\n  .lt-x {\n    width: 44px;\n    height: 44px;\n  }\n  .lt-input {\n    font-size: 16px;\n  }\n  .lt-input[type='checkbox'] {\n    width: 44px;\n    height: 26px;\n    background-image: radial-gradient(circle at 13px 50%, #fff 0 10px, transparent 10.5px);\n  }\n  .lt-input[type='checkbox']:checked {\n    background-image: radial-gradient(circle at calc(100% - 13px) 50%, var(--primary-foreground) 0 10px, transparent 10.5px);\n  }\n  .lt-seg {\n    height: 40px;\n  }\n  .lt-slider input[type='range'] {\n    height: 44px;\n  }\n\n  .lt-panel-backdrop {\n    align-items: flex-end;\n  }\n  .lt-panel {\n    width: 100%;\n    max-width: 640px;\n    margin-bottom: var(--lt-kb);\n    max-height: calc(var(--lt-svh) * 100 - var(--lt-kb) - 24px);\n    border-width: 1px 0 0;\n    border-radius: 14px 14px 0 0;\n  }\n  .lt-panel-head,\n  .lt-panel-foot {\n    padding-left: max(14px, env(safe-area-inset-left, 0px));\n    padding-right: max(14px, env(safe-area-inset-right, 0px));\n  }\n  .lt-panel-head {\n    padding-right: max(6px, env(safe-area-inset-right, 0px));\n  }\n  .lt-panel-foot {\n    padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px));\n  }\n  .lt-panel-body {\n    padding-left: max(14px, env(safe-area-inset-left, 0px));\n    padding-right: max(14px, env(safe-area-inset-right, 0px));\n  }\n  /* The settings sheet is as tall as it may be whatever tab is open, so\n     changing tab does not move the strip out from under the thumb. */\n  .lt-settings {\n    height: calc(var(--lt-svh) * 100 - var(--lt-kb) - 24px);\n  }\n  .lt-tabs {\n    padding-left: max(10px, env(safe-area-inset-left, 0px));\n    padding-right: max(10px, env(safe-area-inset-right, 0px));\n  }\n  .lt-tab {\n    height: 44px;\n    padding: 0 14px;\n  }\n  .lt-search {\n    max-width: none;\n  }\n  .lt-reset {\n    width: 32px;\n    height: 32px;\n  }\n  .lt-swatch {\n    width: 44px;\n    height: 44px;\n  }\n  .lt-sch {\n    width: 66px;\n    height: 44px;\n  }\n  /* The title says what it is; the sentence would cost the picture its room. */\n  .lt-live-head {\n    min-height: 40px;\n  }\n  .lt-live-body {\n    justify-content: center;\n  }\n  .lt-live-note {\n    display: none;\n  }\n  .lt-live-canvas {\n    height: clamp(48px, calc((var(--lt-svh) * 100 - var(--lt-kb) - 210px) * 0.3), 132px);\n  }\n  .lt-order-item {\n    min-height: 52px;\n  }\n  .lt-grip,\n  .lt-order-moves .lt-btn {\n    width: 40px;\n    height: 44px;\n  }\n  .lt-panel-foot {\n    flex-wrap: wrap;\n  }\n\n  .lt-bar {\n    left: max(8px, env(safe-area-inset-left, 0px));\n    right: max(8px, env(safe-area-inset-right, 0px));\n    bottom: calc(8px + var(--lt-kb) + env(safe-area-inset-bottom, 0px));\n    transform: none;\n    width: auto;\n    max-width: none;\n  }\n  .lt-bar .lt-input {\n    flex-basis: 100%;\n  }\n  #lt-toast {\n    left: max(8px, env(safe-area-inset-left, 0px));\n    right: max(8px, env(safe-area-inset-right, 0px));\n    transform: none;\n    max-width: none;\n    font-size: 14px;\n  }\n}\n\n@media (prefers-reduced-motion: reduce) {\n  .lt-ctl,\n  .lt-live-chevron,\n  #lt-toast,\n  .lt-dot::after,\n  .lt-objbox {\n    transition: none;\n  }\n}\n";
   const HOST_ID = "lens-translate-root";
   let shadow = null;
   let host = null;
@@ -6318,7 +6690,7 @@ ${OVERLAY_CSS}`;
             break;
           }
         }
-        const current = entries2.findIndex((candidate) => candidate.id === entry.id);
+        const current = entries2.findIndex((candidate2) => candidate2.id === entry.id);
         const target = index > current ? index - 1 : index;
         if (target !== current) commit(placeButton(entries2, entry.id, target));
       });
@@ -6497,7 +6869,7 @@ ${OVERLAY_CSS}`;
       for (const pane of body2.querySelectorAll("[data-pane]")) {
         let matches = 0;
         for (const row2 of pane.querySelectorAll("[data-field]")) {
-          const field = FIELDS.find((candidate) => candidate.key === row2.dataset["field"]);
+          const field = FIELDS.find((candidate2) => candidate2.key === row2.dataset["field"]);
           const hit = !query || field !== void 0 && fieldMatches(field, query);
           row2.hidden = !hit;
           if (hit) matches += 1;
@@ -6524,22 +6896,140 @@ ${OVERLAY_CSS}`;
       refreshPreview(0);
       tabs.querySelector(`[data-tab="${tab}"]`)?.scrollIntoView({ block: "nearest", inline: "nearest" });
     };
-    const buildActions = (pro) => {
-      const commands2 = panelCommands().filter((command) => pro || command.essential);
-      if (!commands2.length) return null;
-      const section = el("div", "lt-extra");
-      section.appendChild(el("div", "lt-group", t("panel.actions")));
-      const row2 = el("div", "lt-actions");
-      for (const command of commands2) {
-        const action = button("lt-btn", command.label);
-        action.addEventListener("click", () => {
-          closeNow();
-          command.run();
+    const fieldOf = (key) => FIELDS.find((field) => field.key === key);
+    const GENERAL_OWN = /* @__PURE__ */ new Set(["enabled", "autoTranslate", "uiMode", "language", "popupOpacity"]);
+    let syncSiteNow = () => {
+    };
+    const buildSiteNow = () => {
+      const row2 = el("div", "lt-row lt-extra lt-site-now");
+      row2.appendChild(el("span", "lt-label", t("general.site", { host: hostOf() })));
+      const group = el("div", "lt-segmented");
+      group.setAttribute("role", "radiogroup");
+      group.setAttribute("aria-label", t("general.site", { host: hostOf() }));
+      const hint = el("span", "lt-hint");
+      const choices = ["off", "default", "auto"].map((mode) => {
+        const choice = button("lt-seg", t(`general.site.${mode}`));
+        choice.setAttribute("role", "radio");
+        choice.addEventListener("click", () => {
+          if (context.site() === mode) return;
+          context.setSite(mode);
+          syncSiteNow();
+          redrawSites();
         });
-        row2.appendChild(action);
+        group.appendChild(choice);
+        return [mode, choice];
+      });
+      syncSiteNow = () => {
+        const now = context.site();
+        for (const [mode, choice] of choices) choice.setAttribute("aria-checked", String(mode === now));
+        hint.textContent = now === "off" ? t("general.site.hint.off") : now === "auto" ? t("general.site.hint.auto") : current().autoTranslate ? t("general.site.hint.defaultAuto") : t("general.site.hint.default");
+      };
+      row2.append(group, hint);
+      return row2;
+    };
+    const buildModes = (values) => {
+      const field = fieldOf("uiMode");
+      const row2 = el("div", "lt-row lt-row-wide lt-modes-row");
+      row2.dataset["field"] = field.key;
+      row2.appendChild(el("span", "lt-label", fieldLabel(field)));
+      const select = el("select", "lt-input");
+      select.hidden = true;
+      for (const value of ["simple", "pro"]) {
+        const option = el("option", void 0, value);
+        option.value = value;
+        select.appendChild(option);
       }
-      section.append(row2, el("div", "lt-note", t("panel.actionsNote")));
+      select.value = values.uiMode;
+      select.dataset["key"] = field.key;
+      const cards = el("div", "lt-modes");
+      cards.setAttribute("role", "radiogroup");
+      cards.setAttribute("aria-label", fieldLabel(field));
+      for (const [mode, glyph] of [
+        ["simple", "translate"],
+        ["pro", "layers"]
+      ]) {
+        const card = button("lt-mode", "");
+        card.setAttribute("role", "radio");
+        card.setAttribute("aria-checked", String(values.uiMode === mode));
+        const title = el("span", "lt-mode-title");
+        title.innerHTML = icon(glyph, 16);
+        title.appendChild(el("span", void 0, t(`general.${mode}.title`)));
+        card.append(title, el("span", "lt-mode-desc", t(`general.${mode}.desc`)));
+        card.addEventListener("click", () => {
+          if (select.value === mode) return;
+          select.value = mode;
+          select.dispatchEvent(new Event("change", { bubbles: true }));
+        });
+        cards.appendChild(card);
+      }
+      row2.append(select, cards);
+      return row2;
+    };
+    const QUICK = [
+      ["translateAll", "images"],
+      ["undoAll", "undo"],
+      ["clearCache", "trash"],
+      ["diagnostics", "pulse"]
+    ];
+    const buildQuick = () => {
+      const commands2 = panelCommands();
+      const found = QUICK.flatMap(([id, glyph]) => {
+        const command = commands2.find((candidate2) => candidate2.id === id);
+        return command ? [[command, glyph]] : [];
+      });
+      if (!found.length) return null;
+      const section = el("div", "lt-extra");
+      section.appendChild(el("div", "lt-group", t("general.quick")));
+      const grid = el("div", "lt-quick");
+      for (const [command, glyph] of found) {
+        const action = button("lt-btn lt-quick-btn", "");
+        action.dataset["command"] = command.id;
+        action.innerHTML = icon(glyph, 16);
+        action.appendChild(el("span", void 0, command.label));
+        if (command.id === "clearCache") {
+          const size = el("span", "lt-quick-meta");
+          const measure = () => {
+            const memory = cacheStats();
+            void storedStats().then(({ bytes: bytes2 }) => {
+              size.textContent = t("general.cacheSize", { size: ((memory.bytes + bytes2) / 1048576).toFixed(1) });
+            });
+          };
+          measure();
+          action.appendChild(size);
+          action.addEventListener("click", () => {
+            command.run();
+            window.setTimeout(measure, 300);
+          });
+        } else {
+          action.addEventListener("click", () => {
+            closeNow();
+            command.run();
+          });
+        }
+        grid.appendChild(action);
+      }
+      section.append(grid, el("div", "lt-note", t("panel.actionsNote")));
       return section;
+    };
+    const buildGeneral = (values, fields) => {
+      const parts = [];
+      const status = el("div", "lt-card lt-status");
+      status.append(buildField(fieldOf("enabled"), values), buildSiteNow(), buildField(fieldOf("autoTranslate"), values));
+      parts.push(status, buildModes(values));
+      const grid = el("div", "lt-grid");
+      grid.append(buildField(fieldOf("language"), values), buildField(fieldOf("popupOpacity"), values));
+      parts.push(grid);
+      const rest = fields.filter((field) => !GENERAL_OWN.has(field.key));
+      if (rest.length) {
+        parts.push(el("div", "lt-group lt-extra", t("general.essentials")));
+        const more = el("div", "lt-grid");
+        for (const field of rest) more.appendChild(buildField(field, values));
+        parts.push(more);
+      }
+      const quick = buildQuick();
+      if (quick) parts.push(quick);
+      syncSiteNow();
+      return parts;
     };
     const buildSites = () => {
       const section = el("div", "lt-extra lt-sites");
@@ -6681,15 +7171,11 @@ ${OVERLAY_CSS}`;
         }
         pane.appendChild(paneHead);
         if (pro && tab === "appearance") pane.appendChild(preview.element);
-        if (fields.length) {
+        if (tab === "general") pane.append(...buildGeneral(values, fields));
+        else if (fields.length) {
           const grid = el("div", "lt-grid");
           for (const field of fields) grid.appendChild(buildField(field, values));
           pane.appendChild(grid);
-        }
-        if (tab === "general") {
-          const actions = buildActions(pro);
-          if (actions) pane.appendChild(actions);
-          if (!pro) pane.appendChild(el("div", "lt-note lt-extra", t("panel.simpleNote")));
         }
         if (tab === "sites") pane.appendChild(buildSites());
         if (tab === "about") pane.appendChild(buildAbout());
@@ -6732,6 +7218,7 @@ ${OVERLAY_CSS}`;
       const key = event.target.dataset["key"];
       if (key === "uiMode") fill(current());
       if (key === "language") useLanguage(current().language);
+      if (key === "autoTranslate") syncSiteNow();
       refreshPreview();
     });
     backdrop.addEventListener("click", (event) => {
@@ -7358,6 +7845,10 @@ ${OVERLAY_CSS}`;
         if (!options.quiet) toast(message, ms);
       };
       if (busy.has(img)) return "skipped";
+      if (options.auto) {
+        if (isTranslated(img)) return "skipped";
+        if (!autoWorthy(target)) return "deferred";
+      }
       if (!settings.enabled) {
         say(t("toast.off"));
         return "skipped";
@@ -7388,19 +7879,43 @@ ${OVERLAY_CSS}`;
         try {
           const size = { width: prepared.width, height: prepared.height };
           let result = target.url ? getCached(key, settings, size) : void 0;
-          const print = result ? "" : fingerprint(prepared.source, prepared.width, prepared.height);
-          const hash = print && print + tilingTag(prepared.width, prepared.height, settings);
+          const identity = result ? null : identify(prepared.source, prepared.width, prepared.height);
+          const tag = tilingTag(prepared.width, prepared.height, settings);
+          const hash = identity?.hash ? identity.hash + tag : "";
+          let near;
+          if (identity?.face) {
+            const sent = tag ? prepared : targetSize(prepared.width, prepared.height, settings);
+            const source = prepared.source;
+            near = {
+              face: identity.face,
+              tag,
+              size: Math.max(sent.width, sent.height),
+              width: prepared.width,
+              height: prepared.height,
+              sample: (boxes) => markStrips(source, prepared.width, prepared.height, boxes)
+            };
+          }
           if (!result && hash) {
-            const remembered = await getStored(hash, settings);
+            const remembered = await getStored(hash, settings, near);
             if (remembered) {
               result = remembered;
               if (target.url) putCached(key, result, settings, size);
             }
           }
+          if (!result && options.auto) {
+            if (settings.autoTextCheck && !await mayHaveText(prepared.source, prepared.width, prepared.height)) {
+              return "empty";
+            }
+            const wait = takeRequest();
+            if (wait > 0) {
+              autoRetryIn(wait);
+              return "deferred";
+            }
+          }
           if (!result) {
             result = await askLens(prepared.source, settings);
             if (target.url) putCached(key, result, settings, size);
-            void putStored(hash, result, settings);
+            void putStored(hash, result, settings, near);
           }
           if (!result.blocks.length) {
             const detected = result.ocr.some((p) => p.lines.length > 0);
@@ -7547,29 +8062,84 @@ ${OVERLAY_CSS}`;
       toast(t("toast.batchStart", { count: targets2.length }), 12e4);
       toast(summarise(await translateAll(targets2), targets2.length), 5e3);
     }
+    const autoOn = () => site === "auto" || site === "default" && settings.autoTranslate;
     const autoTried = /* @__PURE__ */ new WeakMap();
-    let autoTimer = 0;
     let lastAutoComplaint = 0;
+    function autoWorthy(target) {
+      if (target.kind === "video" || !target.element.isConnected) return false;
+      if (isTranslated(target.element) || busy.has(target.element)) return false;
+      if (!isBigEnough(target, settings.minImageSize) || onVideo(target)) return false;
+      const rect2 = target.element.getBoundingClientRect();
+      if (Math.min(rect2.width, rect2.height) < settings.autoMinPx) return false;
+      const part = visiblePart(target.element);
+      const whole = Math.min(rect2.width * rect2.height, window.innerWidth * window.innerHeight);
+      return whole > 0 && part.width * part.height >= settings.autoVisible * whole;
+    }
+    let requestTokens = -1;
+    let requestsAt = 0;
+    function takeRequest() {
+      const capacity = Math.max(1, Math.round(settings.autoPerMinute) || 1);
+      const perMs = capacity / 6e4;
+      const now = Date.now();
+      requestTokens = requestTokens < 0 ? capacity : Math.min(capacity, requestTokens + (now - requestsAt) * perMs);
+      requestsAt = now;
+      if (requestTokens >= 1) {
+        requestTokens -= 1;
+        return 0;
+      }
+      return Math.ceil((1 - requestTokens) / perMs);
+    }
+    let autoRetry = 0;
+    let autoRetryAt = 0;
+    function autoRetryIn(ms) {
+      const at = Date.now() + ms;
+      if (autoRetry && autoRetryAt <= at) return;
+      window.clearTimeout(autoRetry);
+      autoRetryAt = at;
+      autoRetry = window.setTimeout(() => {
+        autoRetry = 0;
+        scheduleAuto();
+      }, ms + 50);
+    }
     function autoTranslate() {
-      if (site !== "auto" || !active2()) return;
-      const targets2 = untranslatedInView(known).filter(
-        (target) => autoTried.get(target.element) !== target.url
-      );
+      if (!autoOn() || !active2()) return;
+      const area = (target) => {
+        const part = visiblePart(target.element);
+        return part.width * part.height;
+      };
+      const targets2 = known.filter((target) => autoTried.get(target.element) !== target.url && autoWorthy(target)).sort((a, b) => area(b) - area(a));
       if (!targets2.length) return;
       for (const target of targets2) autoTried.set(target.element, target.url);
-      void translateAll(targets2).then((tally) => {
-        if (tally.failed && Date.now() - lastAutoComplaint > 3e4) {
+      let failed2 = 0;
+      void Promise.all(
+        targets2.map(
+          (target) => schedule(async () => {
+            const outcome = await translate(target, { quiet: true, auto: true });
+            if (outcome === "deferred") autoTried.delete(target.element);
+            else if (outcome === "failed") failed2 += 1;
+          })
+        )
+      ).then(() => {
+        if (failed2 && Date.now() - lastAutoComplaint > 3e4) {
           lastAutoComplaint = Date.now();
-          toast(t("toast.autoFailed", { count: tally.failed, reason: lastFailure }), 5e3);
+          toast(t("toast.autoFailed", { count: failed2, reason: lastFailure }), 5e3);
         }
       });
     }
+    const AUTO_SETTLE_MS = 350;
+    const AUTO_MAX_WAIT_MS = 1200;
+    let autoTimer = 0;
+    let autoSince = 0;
     function scheduleAuto() {
-      if (autoTimer || site !== "auto") return;
+      if (!autoOn()) return;
+      const now = Date.now();
+      if (!autoTimer) autoSince = now;
+      window.clearTimeout(autoTimer);
+      const wait = Math.max(0, Math.min(AUTO_SETTLE_MS, autoSince + AUTO_MAX_WAIT_MS - now));
       autoTimer = window.setTimeout(() => {
         autoTimer = 0;
         autoTranslate();
-      }, 250);
+      }, wait);
     }
     let currentTarget = null;
     let hideTimer;
@@ -7721,7 +8291,7 @@ ${OVERLAY_CSS}`;
     const TOUCH_QUERY = "(hover: none), (pointer: coarse)";
     let watching = false;
     function syncWatchers() {
-      const wanted = pinned || site === "auto";
+      const wanted = pinned || autoOn();
       if (wanted === watching) return false;
       watching = wanted;
       if (watching) {
@@ -7789,13 +8359,14 @@ ${OVERLAY_CSS}`;
     }
     function showSettings() {
       hideToast();
-      openSettings({ onSaved, site: () => site, setSite: chooseSite });
+      openSettings({ onSaved, site: () => site, setSite: (mode) => chooseSite(mode, true) });
     }
     function onSaved(saved) {
       settings = saved;
       useLanguage(settings.language);
       applySettings();
       applyButtonMode();
+      scheduleAuto();
       void redrawShowing();
       toast(t("toast.saved"));
     }
@@ -8424,7 +8995,7 @@ ${OVERLAY_CSS}`;
     command("translateAll", "cmd.translateAll", () => void translateVisible());
     command("copyTranslation", "cmd.copyTranslation", () => void copyFrom("translation"), { panel: false });
     command("copyOriginal", "cmd.copyOriginal", () => void copyFrom("original"), { panel: false });
-    function chooseSite(next) {
+    function chooseSite(next, quiet = false) {
       site = next;
       setSiteMode(next);
       if (next === "off") {
@@ -8434,7 +9005,8 @@ ${OVERLAY_CSS}`;
         hideButton();
       }
       const started = syncWatchers();
-      if (next === "auto" && !started) refresh();
+      if (autoOn() && !started) refresh();
+      if (quiet) return;
       const host2 = hostOf();
       toast(
         next === "off" ? t("toast.siteNowOff", { host: host2 }) : next === "auto" ? t("toast.siteNowAuto", { host: host2 }) : t("toast.siteNowDefault", { host: host2 })

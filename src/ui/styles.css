@@ -304,13 +304,32 @@
   outline: 2px solid var(--ring);
   outline-offset: 1px;
 }
+/* A checkbox is a switch. The knob is a gradient, not a pseudo-element: an
+   input has no ::before in every engine, and a background it always has. */
 .lt-input[type='checkbox'] {
-  justify-self: start;
-  width: 16px;
-  height: 16px;
+  -webkit-appearance: none;
+  appearance: none;
+  flex: none;
+  justify-self: end;
+  width: 36px;
+  height: 20px;
+  margin: 0;
   padding: 0;
+  border: 0;
+  border-radius: 999px;
   box-shadow: none;
-  accent-color: var(--primary);
+  cursor: pointer;
+  background-color: var(--input);
+  background-image: radial-gradient(circle at 10px 50%, #fff 0 7px, transparent 7.5px);
+  transition: background-color 0.15s;
+}
+.lt-input[type='checkbox']:checked {
+  background-color: var(--primary);
+  background-image: radial-gradient(circle at calc(100% - 10px) 50%, var(--primary-foreground) 0 7px, transparent 7.5px);
+}
+.lt-input[type='checkbox']:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
 }
 
 /* ----------------------------------------------------------------- menu */
@@ -640,6 +659,13 @@
    Search results come from several, and each group says which. */
 .lt-settings:not(.lt-searching) .lt-pane-head h3 {
   visibility: hidden;
+}
+/* ...and with nothing to reset there is nothing in it at all. */
+.lt-settings:not(.lt-searching) .lt-pane-head:not(:has(.lt-btn:not([hidden]))) {
+  min-height: 0;
+  height: 0;
+  margin: 0;
+  overflow: hidden;
 }
 .lt-grid {
   display: grid;
@@ -1005,6 +1031,126 @@
   text-anchor: middle;
 }
 
+/* The General tab: what is true now, in a card; the interface as two cards. */
+.lt-card {
+  margin: 6px 0 8px;
+  padding: 2px 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.lt-card > * + * {
+  border-top: 1px solid var(--border);
+}
+.lt-card > .lt-row {
+  padding: 12px 0;
+}
+.lt-status > .lt-row:first-child .lt-label {
+  font-size: 15px;
+  font-weight: 600;
+}
+.lt-searching .lt-card {
+  padding: 0;
+  border: 0;
+}
+.lt-segmented {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 3px;
+  padding: 3px;
+  background: var(--surface-muted);
+  border-radius: var(--radius);
+}
+.lt-seg {
+  height: 32px;
+  min-width: 0;
+  padding: 0 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: inherit;
+  font-weight: 500;
+  color: var(--muted-foreground);
+  background: transparent;
+  border: 0;
+  border-radius: calc(var(--radius) - 2px);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.lt-seg:hover {
+  color: var(--foreground);
+}
+.lt-seg[aria-checked='true'] {
+  color: var(--foreground);
+  background: var(--background);
+  box-shadow: 0 1px 3px rgba(9, 9, 11, 0.12), 0 0 0 1px var(--border);
+}
+.lt-seg:focus-visible,
+.lt-mode:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+.lt-modes {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+.lt-mode {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  min-width: 0;
+  padding: 12px 14px;
+  font: inherit;
+  text-align: start;
+  color: var(--foreground);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.lt-mode:hover {
+  background: var(--accent);
+}
+.lt-mode[aria-checked='true'] {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 1px var(--primary);
+}
+.lt-mode-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+}
+.lt-mode-desc {
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 1.4;
+}
+.lt-quick {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 8px;
+  padding-top: 6px;
+}
+.lt-quick-btn {
+  justify-content: flex-start;
+  gap: 10px;
+  min-width: 0;
+}
+.lt-quick-btn > span:not(.lt-quick-meta) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.lt-quick-meta {
+  margin-inline-start: auto;
+  padding-inline-start: 8px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  font-weight: 400;
+}
+
 /* Section headings. */
 .lt-group {
   margin: 18px 0 4px;
@@ -1212,8 +1358,15 @@
     font-size: 16px;
   }
   .lt-input[type='checkbox'] {
-    width: 22px;
-    height: 22px;
+    width: 44px;
+    height: 26px;
+    background-image: radial-gradient(circle at 13px 50%, #fff 0 10px, transparent 10.5px);
+  }
+  .lt-input[type='checkbox']:checked {
+    background-image: radial-gradient(circle at calc(100% - 13px) 50%, var(--primary-foreground) 0 10px, transparent 10.5px);
+  }
+  .lt-seg {
+    height: 40px;
   }
   .lt-slider input[type='range'] {
     height: 44px;
