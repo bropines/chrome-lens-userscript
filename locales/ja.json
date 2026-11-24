@@ -408,5 +408,18 @@
   "editor.copy": "コピー",
   "editor.save": "保存",
   "editor.cancel": "キャンセル",
-  "editor.apply": "適用"
+  "editor.apply": "適用",
+  "set.uiTheme.label": "テーマ",
+  "set.uiTheme.hint": "メニュー、設定、メッセージ。画像の上のボタンは暗いガラスのまま",
+  "set.uiTheme.opt.auto": "システム",
+  "set.uiTheme.opt.light": "ライト",
+  "set.uiTheme.opt.dark": "ダーク",
+  "set.uiAccent.label": "アクセントカラー",
+  "set.uiAccent.hint": "スイッチ、主要ボタン、翻訳ボタン",
+  "set.uiAccent.opt.zinc": "ニュートラル",
+  "set.uiAccent.opt.blue": "青",
+  "set.uiAccent.opt.violet": "紫",
+  "set.uiAccent.opt.green": "緑",
+  "set.uiAccent.opt.orange": "オレンジ",
+  "set.uiAccent.opt.rose": "ローズ"
 }

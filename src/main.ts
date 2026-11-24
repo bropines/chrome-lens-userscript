@@ -61,7 +61,7 @@ import { closeMenu, isCompact, isMenuOpen, openMenu } from './ui/menu.js';
 import { openEditor } from './ui/editor.js';
 import type { MenuItem } from './ui/menu.js';
 import { onReportSettings, openReport } from './ui/report.js';
-import { HOST_ID, applyPopupOpacity, isOurs, tendHost, uiRoot } from './ui/root.js';
+import { HOST_ID, applyLook, applyPopupOpacity, isOurs, tendHost, uiRoot } from './ui/root.js';
 import { fittedRect, insetRect, placeRow, wrapWidth } from './ui/geometry.js';
 import type { Rect, Size } from './ui/geometry.js';
 import { icon } from './ui/icons.js';
@@ -2445,6 +2445,7 @@ export function start({ framed, hovered }: StartOptions): void {
     // The language setting and the locale kept for it both arrived just now.
     useLanguage(settings.language);
     applyPopupOpacity(settings.popupOpacity);
+    applyLook(settings.uiTheme, settings.uiAccent);
     applySettings();
     applyButtonMode();
   });

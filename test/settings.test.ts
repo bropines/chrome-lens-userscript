@@ -89,7 +89,7 @@ describe('every setting has a place in the window', () => {
   test('the simple interface keeps a short list', async () => {
     const { FIELDS } = await load();
     expect(FIELDS.filter((field) => field.essential).map((field) => field.key)).toEqual([
-      'uiMode', 'language', 'enabled', 'autoTranslate', 'popupOpacity', 'targetLang', 'sourceLang', 'mangaMode', 'buttonMode',
+      'uiMode', 'language', 'enabled', 'autoTranslate', 'popupOpacity', 'uiTheme', 'uiAccent', 'targetLang', 'sourceLang', 'mangaMode', 'buttonMode',
     ]);
   });
 

@@ -408,5 +408,18 @@
   "editor.copy": "复制",
   "editor.save": "保存",
   "editor.cancel": "取消",
-  "editor.apply": "应用"
+  "editor.apply": "应用",
+  "set.uiTheme.label": "主题",
+  "set.uiTheme.hint": "菜单、设置和消息；图片上的按钮保持深色玻璃",
+  "set.uiTheme.opt.auto": "跟随系统",
+  "set.uiTheme.opt.light": "浅色",
+  "set.uiTheme.opt.dark": "深色",
+  "set.uiAccent.label": "强调色",
+  "set.uiAccent.hint": "开关、主要按钮和翻译按钮",
+  "set.uiAccent.opt.zinc": "中性",
+  "set.uiAccent.opt.blue": "蓝色",
+  "set.uiAccent.opt.violet": "紫色",
+  "set.uiAccent.opt.green": "绿色",
+  "set.uiAccent.opt.orange": "橙色",
+  "set.uiAccent.opt.rose": "玫红"
 }

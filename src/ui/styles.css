@@ -69,8 +69,10 @@
     --lt-dvh: 1dvh;
   }
 }
+/* Dark by the system unless the setting says light, or dark by the setting:
+   ui/root.ts writes data-theme only for a choice that is not 'auto'. */
 @media (prefers-color-scheme: dark) {
-  :host {
+  :host(:not([data-theme='light'])) {
     --background: #09090b;
     --foreground: #fafafa;
     --muted: #27272a;
@@ -85,6 +87,50 @@
     --success: #10b981;
     --shadow: 0 10px 30px -8px rgba(0, 0, 0, 0.7), 0 2px 6px -2px rgba(0, 0, 0, 0.5);
   }
+}
+:host([data-theme='dark']) {
+  --background: #09090b;
+  --foreground: #fafafa;
+  --muted: #27272a;
+  --muted-foreground: #a1a1aa;
+  --accent: #27272a;
+  --border: #27272a;
+  --input: #3f3f46;
+  --ring: #71717a;
+  --primary: #fafafa;
+  --primary-foreground: #18181b;
+  --destructive: #ef4444;
+  --success: #10b981;
+  --shadow: 0 10px 30px -8px rgba(0, 0, 0, 0.7), 0 2px 6px -2px rgba(0, 0, 0, 0.5);
+}
+/* A tint replaces only the primary colour and the focus ring, so it reads the
+   same on either theme. After the theme rules, which have the same
+   specificity. The main button over a picture takes it too: that is where a
+   colour is most often looked for. */
+:host([data-accent='blue']) {
+  --primary: #2563eb;
+  --primary-foreground: #ffffff;
+  --ring: #60a5fa;
+}
+:host([data-accent='violet']) {
+  --primary: #7c3aed;
+  --primary-foreground: #ffffff;
+  --ring: #a78bfa;
+}
+:host([data-accent='green']) {
+  --primary: #15803d;
+  --primary-foreground: #ffffff;
+  --ring: #4ade80;
+}
+:host([data-accent='orange']) {
+  --primary: #c2410c;
+  --primary-foreground: #ffffff;
+  --ring: #fb923c;
+}
+:host([data-accent='rose']) {
+  --primary: #e11d48;
+  --primary-foreground: #ffffff;
+  --ring: #fb7185;
 }
 
 *,
@@ -1667,5 +1713,62 @@
   }
   .lt-editor-foot .lt-spacer + .lt-btn {
     margin-left: auto;
+  }
+}
+
+/* The tint swatches in General. Their colours are the tints themselves, not
+   the theme's, so each says what it will do before it is chosen. */
+.lt-swatches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 2px 0;
+}
+.lt-swatch {
+  --lt-tint: #18181b;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  background: var(--lt-tint);
+  border: 2px solid var(--background);
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px var(--border);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.lt-swatch[data-tint='zinc'] {
+  background: linear-gradient(135deg, #18181b 50%, #fafafa 50%);
+}
+.lt-swatch[data-tint='blue'] {
+  --lt-tint: #2563eb;
+}
+.lt-swatch[data-tint='violet'] {
+  --lt-tint: #7c3aed;
+}
+.lt-swatch[data-tint='green'] {
+  --lt-tint: #15803d;
+}
+.lt-swatch[data-tint='orange'] {
+  --lt-tint: #c2410c;
+}
+.lt-swatch[data-tint='rose'] {
+  --lt-tint: #e11d48;
+}
+.lt-swatch[aria-checked='true'] {
+  box-shadow: 0 0 0 2px var(--foreground);
+}
+.lt-swatch:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 3px;
+}
+/* Translated and failed keep their own colours: they are news, the tint is not. */
+:host([data-accent]) .lt-main:not(.lt-active):not(.lt-error) {
+  background: var(--primary);
+  border-color: transparent;
+}
+@media (hover: none), (pointer: coarse) {
+  .lt-swatch {
+    width: 36px;
+    height: 36px;
   }
 }

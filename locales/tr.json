@@ -408,5 +408,18 @@
   "editor.copy": "Kopyala",
   "editor.save": "Kaydet",
   "editor.cancel": "İptal",
-  "editor.apply": "Uygula"
+  "editor.apply": "Uygula",
+  "set.uiTheme.label": "Tema",
+  "set.uiTheme.hint": "menüler, ayarlar ve mesajlar; resmin üzerindeki düğmeler koyu cam kalır",
+  "set.uiTheme.opt.auto": "Sistem",
+  "set.uiTheme.opt.light": "Açık",
+  "set.uiTheme.opt.dark": "Koyu",
+  "set.uiAccent.label": "Vurgu rengi",
+  "set.uiAccent.hint": "anahtarlar, ana düğmeler ve çeviri düğmesi",
+  "set.uiAccent.opt.zinc": "Nötr",
+  "set.uiAccent.opt.blue": "Mavi",
+  "set.uiAccent.opt.violet": "Mor",
+  "set.uiAccent.opt.green": "Yeşil",
+  "set.uiAccent.opt.orange": "Turuncu",
+  "set.uiAccent.opt.rose": "Gül"
 }

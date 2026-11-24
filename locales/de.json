@@ -408,5 +408,18 @@
   "editor.copy": "Kopieren",
   "editor.save": "Speichern",
   "editor.cancel": "Abbrechen",
-  "editor.apply": "Übernehmen"
+  "editor.apply": "Übernehmen",
+  "set.uiTheme.label": "Design",
+  "set.uiTheme.hint": "Menüs, Einstellungen und Meldungen; die Knöpfe über einem Bild bleiben dunkles Glas",
+  "set.uiTheme.opt.auto": "System",
+  "set.uiTheme.opt.light": "Hell",
+  "set.uiTheme.opt.dark": "Dunkel",
+  "set.uiAccent.label": "Akzentfarbe",
+  "set.uiAccent.hint": "Schalter, Hauptknöpfe und der Übersetzen-Knopf",
+  "set.uiAccent.opt.zinc": "Neutral",
+  "set.uiAccent.opt.blue": "Blau",
+  "set.uiAccent.opt.violet": "Violett",
+  "set.uiAccent.opt.green": "Grün",
+  "set.uiAccent.opt.orange": "Orange",
+  "set.uiAccent.opt.rose": "Rosa"
 }

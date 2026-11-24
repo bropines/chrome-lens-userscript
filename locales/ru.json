@@ -408,5 +408,18 @@
   "editor.copy": "Копировать",
   "editor.save": "Сохранить",
   "editor.cancel": "Отмена",
-  "editor.apply": "Применить"
+  "editor.apply": "Применить",
+  "set.uiTheme.label": "Тема",
+  "set.uiTheme.hint": "меню, настройки и сообщения; кнопки над картинкой остаются тёмным стеклом",
+  "set.uiTheme.opt.auto": "Как в системе",
+  "set.uiTheme.opt.light": "Светлая",
+  "set.uiTheme.opt.dark": "Тёмная",
+  "set.uiAccent.label": "Цвет акцента",
+  "set.uiAccent.hint": "переключатели, главные кнопки и кнопка перевода",
+  "set.uiAccent.opt.zinc": "Нейтральный",
+  "set.uiAccent.opt.blue": "Синий",
+  "set.uiAccent.opt.violet": "Фиолетовый",
+  "set.uiAccent.opt.green": "Зелёный",
+  "set.uiAccent.opt.orange": "Оранжевый",
+  "set.uiAccent.opt.rose": "Розовый"
 }

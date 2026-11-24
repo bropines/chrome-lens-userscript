@@ -179,6 +179,21 @@ export function applyPopupOpacity(raw: unknown): void {
   host.toggleAttribute('data-translucent', percent < MAX_OPACITY);
 }
 
+/**
+ * Light or dark, and which tint, as two attributes on the host that the
+ * stylesheet keys its colour tokens on. 'auto' and the neutral tint are the
+ * absence of the attribute, so the defaults are exactly the stylesheet as it
+ * was. Like the opacity, also what the settings window calls while a choice is
+ * being looked at.
+ */
+export function applyLook(theme: unknown, accent: unknown): void {
+  if (!host) return;
+  if (theme === 'light' || theme === 'dark') host.dataset['theme'] = theme;
+  else delete host.dataset['theme'];
+  if (typeof accent === 'string' && accent !== 'zinc' && /^[a-z]+$/.test(accent)) host.dataset['accent'] = accent;
+  else delete host.dataset['accent'];
+}
+
 export function uiRoot(): ShadowRoot {
   if (shadow) return shadow;
 
@@ -224,6 +239,7 @@ export function uiRoot(): ShadowRoot {
 
   containEvents(host);
   applyPopupOpacity(getSettings().popupOpacity);
+  applyLook(getSettings().uiTheme, getSettings().uiAccent);
   placeHost();
   trackKeyboard(host);
   for (const type of ['fullscreenchange', 'webkitfullscreenchange']) {

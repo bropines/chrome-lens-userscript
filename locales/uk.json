@@ -408,5 +408,18 @@
   "editor.copy": "Копіювати",
   "editor.save": "Зберегти",
   "editor.cancel": "Скасувати",
-  "editor.apply": "Застосувати"
+  "editor.apply": "Застосувати",
+  "set.uiTheme.label": "Тема",
+  "set.uiTheme.hint": "меню, налаштування й повідомлення; кнопки над зображенням лишаються темним склом",
+  "set.uiTheme.opt.auto": "Як у системі",
+  "set.uiTheme.opt.light": "Світла",
+  "set.uiTheme.opt.dark": "Темна",
+  "set.uiAccent.label": "Колір акценту",
+  "set.uiAccent.hint": "перемикачі, головні кнопки й кнопка перекладу",
+  "set.uiAccent.opt.zinc": "Нейтральний",
+  "set.uiAccent.opt.blue": "Синій",
+  "set.uiAccent.opt.violet": "Фіолетовий",
+  "set.uiAccent.opt.green": "Зелений",
+  "set.uiAccent.opt.orange": "Помаранчевий",
+  "set.uiAccent.opt.rose": "Рожевий"
 }

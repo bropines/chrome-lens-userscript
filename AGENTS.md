@@ -811,6 +811,15 @@ on a phone. The interface cards edit a hidden select that holds the value, so
 everywhere: its knob is a radial gradient, not a pseudo-element, since an
 `<input>` has no `::before` in every engine.
 
+The theme and the tint are attributes on the host (`data-theme`,
+`data-accent`, written by `applyLook` in `ui/root.ts`), and 'auto' and the
+neutral tint are their absence, so the defaults are the stylesheet as it always
+was. A tint replaces only `--primary` and `--ring`, so it reads the same on
+either theme, and it is declared after the theme rules, which have the same
+specificity. The controls over a picture stay dark glass whatever the theme;
+only the main button takes the tint, and not while it is green or red, which
+is news.
+
 ### Searching, and the UI around it
 
 `lens/search.ts` is the engine half; `main.ts` keeps one `ImageSearch` per

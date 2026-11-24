@@ -78,6 +78,8 @@ export const DEFAULTS: Settings = {
   aiPrompt: 'What is in this picture?',
   frames: true,
   popupOpacity: MAX_OPACITY,
+  uiTheme: 'auto',
+  uiAccent: 'zinc',
   language: 'auto',
   coverOpacity: 100,
   buttons: DEFAULT_BUTTONS,
@@ -172,6 +174,11 @@ export const FIELDS: ReadonlyArray<Field> = [
   {
     key: 'popupOpacity', tab: 'general', essential: true, type: 'range',
     min: MIN_OPACITY, max: MAX_OPACITY, step: OPACITY_STEP, unit: 'pct',
+  },
+  { key: 'uiTheme', tab: 'general', essential: true, type: 'select', options: ['auto', 'light', 'dark'] },
+  {
+    key: 'uiAccent', tab: 'general', essential: true, type: 'select',
+    options: ['zinc', 'blue', 'violet', 'green', 'orange', 'rose'],
   },
 
   // Translation

@@ -408,5 +408,18 @@
   "editor.copy": "복사",
   "editor.save": "저장",
   "editor.cancel": "취소",
-  "editor.apply": "적용"
+  "editor.apply": "적용",
+  "set.uiTheme.label": "테마",
+  "set.uiTheme.hint": "메뉴, 설정, 메시지. 이미지 위 버튼은 어두운 유리 그대로",
+  "set.uiTheme.opt.auto": "시스템",
+  "set.uiTheme.opt.light": "라이트",
+  "set.uiTheme.opt.dark": "다크",
+  "set.uiAccent.label": "강조 색상",
+  "set.uiAccent.hint": "스위치, 주요 버튼, 번역 버튼",
+  "set.uiAccent.opt.zinc": "중립",
+  "set.uiAccent.opt.blue": "파랑",
+  "set.uiAccent.opt.violet": "보라",
+  "set.uiAccent.opt.green": "초록",
+  "set.uiAccent.opt.orange": "주황",
+  "set.uiAccent.opt.rose": "로즈"
 }

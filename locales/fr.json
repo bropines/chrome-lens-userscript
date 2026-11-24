@@ -408,5 +408,18 @@
   "editor.copy": "Copier",
   "editor.save": "Enregistrer",
   "editor.cancel": "Annuler",
-  "editor.apply": "Appliquer"
+  "editor.apply": "Appliquer",
+  "set.uiTheme.label": "Thème",
+  "set.uiTheme.hint": "menus, réglages et messages ; les boutons sur une image restent en verre sombre",
+  "set.uiTheme.opt.auto": "Système",
+  "set.uiTheme.opt.light": "Clair",
+  "set.uiTheme.opt.dark": "Sombre",
+  "set.uiAccent.label": "Couleur d'accent",
+  "set.uiAccent.hint": "interrupteurs, boutons principaux et bouton de traduction",
+  "set.uiAccent.opt.zinc": "Neutre",
+  "set.uiAccent.opt.blue": "Bleu",
+  "set.uiAccent.opt.violet": "Violet",
+  "set.uiAccent.opt.green": "Vert",
+  "set.uiAccent.opt.orange": "Orange",
+  "set.uiAccent.opt.rose": "Rose"
 }

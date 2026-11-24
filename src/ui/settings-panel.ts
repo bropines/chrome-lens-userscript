@@ -30,7 +30,7 @@ import { icon } from './icons.js';
 import type { IconName } from './icons.js';
 import { isCompact } from './menu.js';
 import { createPreview } from './preview.js';
-import { applyPopupOpacity, uiRoot } from './root.js';
+import { applyLook, applyPopupOpacity, uiRoot } from './root.js';
 import { SCHEMATIC_H, SCHEMATIC_W, hasSchematic, schematic } from './schematics.js';
 import { chordFromEvent, formatChord, serializeChord } from './shortcuts.js';
 
@@ -586,6 +586,7 @@ function closeNow(revert = true): void {
   // A slider moved and then cancelled leaves its preview behind otherwise;
   // after a save this is the new value, so it is right either way.
   applyPopupOpacity(getSettings().popupOpacity);
+  applyLook(getSettings().uiTheme, getSettings().uiAccent);
   useLanguage(getSettings().language);
 }
 
@@ -745,7 +746,7 @@ export function openSettings(context: SettingsContext, restore?: Restore): void 
    * and the interface cards, which edit a hidden select that holds the value.
    */
   const fieldOf = (key: keyof Settings): Field => FIELDS.find((field) => field.key === key)!;
-  const GENERAL_OWN = new Set<keyof Settings>(['enabled', 'autoTranslate', 'uiMode', 'language', 'popupOpacity']);
+  const GENERAL_OWN = new Set<keyof Settings>(['enabled', 'autoTranslate', 'uiMode', 'language', 'popupOpacity', 'uiTheme', 'uiAccent']);
   let syncSiteNow: () => void = () => {};
 
   const buildSiteNow = (): HTMLElement => {
@@ -824,6 +825,91 @@ export function openSettings(context: SettingsContext, restore?: Restore): void 
     return row;
   };
 
+  /**
+   * The theme as three segments and the tint as swatches, each editing a
+   * hidden select that holds the value, as the interface cards do. A choice is
+   * shown on this very window at once; Save keeps it and closing puts back what
+   * was saved, as the opacity slider does.
+   */
+  const buildLook = (values: Settings): HTMLElement => {
+    const card = el('div', 'lt-card lt-look');
+    const live = { theme: values.uiTheme as string, accent: values.uiAccent as string };
+    const show = (): void => applyLook(live.theme, live.accent);
+    const hiddenSelect = (field: Field, value: string): HTMLSelectElement => {
+      const select = el('select', 'lt-input');
+      select.hidden = true;
+      for (const option of field.options ?? []) {
+        const node = el('option', undefined, option);
+        node.value = option;
+        select.appendChild(node);
+      }
+      select.value = value;
+      select.dataset['key'] = field.key;
+      return select;
+    };
+    const group = (
+      field: Field,
+      value: string,
+      className: string,
+      make: (option: string) => HTMLButtonElement,
+      onPick: (option: string) => void
+    ): HTMLElement => {
+      const row = el('div', 'lt-row lt-row-wide');
+      row.dataset['field'] = field.key;
+      row.appendChild(el('span', 'lt-label', fieldLabel(field)));
+      const select = hiddenSelect(field, value);
+      const choices = el('div', className);
+      choices.setAttribute('role', 'radiogroup');
+      choices.setAttribute('aria-label', fieldLabel(field));
+      const buttons = (field.options ?? []).map((option) => {
+        const choice = make(option);
+        choice.setAttribute('role', 'radio');
+        choice.setAttribute('aria-checked', String(option === value));
+        choice.addEventListener('click', () => {
+          select.value = option;
+          for (const [i, other] of buttons.entries()) {
+            other.setAttribute('aria-checked', String(field.options?.[i] === option));
+          }
+          onPick(option);
+          select.dispatchEvent(new Event('change', { bubbles: true }));
+        });
+        return choice;
+      });
+      choices.append(...buttons);
+      row.append(select, choices);
+      return row;
+    };
+    const theme = fieldOf('uiTheme');
+    const accent = fieldOf('uiAccent');
+    card.append(
+      group(theme, values.uiTheme, 'lt-segmented', (option) => button('lt-seg', t(`set.uiTheme.opt.${option}` as Key)), (option) => {
+        live.theme = option;
+        show();
+      }),
+      group(
+        accent,
+        values.uiAccent,
+        'lt-swatches',
+        (option) => {
+          const swatch = button('lt-swatch', '');
+          swatch.dataset['tint'] = option;
+          const name = t(`set.uiAccent.opt.${option}` as Key);
+          swatch.title = name;
+          swatch.setAttribute('aria-label', name);
+          return swatch;
+        },
+        (option) => {
+          live.accent = option;
+          show();
+        }
+      )
+    );
+    // A reset or a redraw builds this again from the form's values, which is
+    // also what the window should look like now.
+    show();
+    return card;
+  };
+
   /** The commands worth a button here, each with what it looks like. */
   const QUICK: ReadonlyArray<readonly [string, IconName]> = [
     ['translateAll', 'images'],
@@ -883,7 +969,7 @@ export function openSettings(context: SettingsContext, restore?: Restore): void 
 
     const grid = el('div', 'lt-grid');
     grid.append(buildField(fieldOf('language'), values), buildField(fieldOf('popupOpacity'), values));
-    parts.push(grid);
+    parts.push(grid, buildLook(values));
 
     // The simple interface has no other tabs, so what it keeps of them is here.
     const rest = fields.filter((field) => !GENERAL_OWN.has(field.key));

@@ -150,6 +150,10 @@ export type HotkeyModifier = 'alt' | 'ctrl' | 'shift' | 'none';
 export type ButtonMode = 'auto' | 'hover' | 'pinned';
 export type PeekKey = 'off' | 'backquote' | 'shift' | 'control';
 export type UiMode = 'simple' | 'pro';
+/** Light or dark for our own surfaces; 'auto' follows the system. */
+export type UiTheme = 'auto' | 'light' | 'dark';
+/** The colour of the primary controls: neutral, or one of a few tints. */
+export type UiAccent = 'zinc' | 'blue' | 'violet' | 'green' | 'orange' | 'rose';
 /** What the main button does when pressed. */
 export type MainAction = 'translate' | 'search' | 'ask' | 'area' | 'menu';
 /** What holding it down does; 'peek' shows the original while held. */
@@ -424,6 +428,10 @@ export interface AppSettings {
    * percent (40..100). The text on them is never faded.
    */
   popupOpacity: number;
+  /** Light or dark menus and panels; never the controls over a picture. */
+  uiTheme: UiTheme;
+  /** The colour of switches, primary buttons, focus rings and the main button. */
+  uiAccent: UiAccent;
   /** Interface language: 'auto' follows the browser, otherwise a locale code. */
   language: string;
   /** Opacity of a finished translation over its picture, in percent. */

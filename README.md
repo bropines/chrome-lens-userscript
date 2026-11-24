@@ -406,7 +406,7 @@ Hovering an image shows the translate button, and holding the cursor there for a
 
 All UI — button, toast, settings panel and the translation overlay itself — lives in a **shadow root**, not in the page. Injecting with `GM_addStyle` loses on sites that ship rules like `div { display: inline !important }`: page CSS wins on equal specificity when it comes later, and `!important` beats an injected sheet outright. A shadow root is not a specificity contest; page rules cannot reach inside it.
 
-**Popup opacity** in settings (40-100%) lets the picture show through the menu, the settings panel, messages and a tool's bar - their backgrounds only; the text on them stays solid, and below 100% the background is blurred so the words stay readable over a busy picture. Moving the slider changes the open panel as you drag.
+**Popup opacity** in settings (40-100%) lets the picture show through the menu, the settings panel, messages and a tool's bar - their backgrounds only; the text on them stays solid, and below 100% the background is blurred so the words stay readable over a busy picture. Moving the slider changes the open panel as you drag. Next to it, **Theme** (system, light or dark) and **Accent colour** (neutral, blue, violet, green, orange or rose) change the menus and panels, the switches and primary buttons, and the translate button over a picture; a choice shows on the open panel at once and is kept on Save.
 
 The shadow host is a fixed, full-viewport, click-through layer, which also means everything inside is positioned in viewport coordinates and follows scrolling by re-reading `getBoundingClientRect`, with no page-offset arithmetic.
 
