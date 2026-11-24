@@ -29,9 +29,11 @@
 export type {
   Alignment,
   BackgroundImage,
+  BlockEdit,
   Bytes,
   CacheOptions,
   DetectedObject,
+  Edits,
   EngineOptions,
   Geometry,
   LensOptions,
@@ -97,13 +99,15 @@ export {
   renderKey,
 } from './cache.js';
 
-export { clearStored, getStored, putStored, storedStats } from './store.js';
+export { clearStored, getStored, putEdits, putStored, storedStats } from './store.js';
 export { looksLikeText, mayHaveText } from './textlike.js';
 export type { Near } from './store.js';
 export type { Face } from './likeness.js';
 export { sameFrame } from './likeness.js';
 
 export { renderToBlob } from './render/canvas.js';
+export { SCALE_MAX, SCALE_MIN, cleanEdit, cleanEdits, editsTag, resets } from './render/edits.js';
+export type { LooseEdit } from './render/edits.js';
 export {
   OVERLAY_CSS,
   clearAllOverlays,

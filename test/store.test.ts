@@ -1,6 +1,6 @@
 import 'fake-indexeddb/auto';
 import { afterEach, beforeEach, describe, expect, setSystemTime, test } from 'bun:test';
-import { clearStored, entryKey, getStored, putStored, storedStats } from '../src/store.js';
+import { clearStored, entryKey, getStored, putEdits, putStored, storedStats } from '../src/store.js';
 import type { CacheOptions, LensOptions, LensResult } from '../src/types.js';
 import type { Near } from '../src/store.js';
 import type { Face } from '../src/likeness.js';
@@ -280,5 +280,41 @@ describe('the same frame at another size', () => {
     expect(bytes).toBeGreaterThan(100 + 64 * 64);
     await putStored('b', read('y', ), settings({ cacheBytes: bytes + 50 }), near({ seed: 3 }));
     expect(await raw('faces', entryKey('a', settings()))).toBeUndefined();
+  });
+});
+
+describe('edits', () => {
+  beforeEach(async () => {
+    await clearStored();
+  });
+
+  test('are written back to the record the answer came from, and read back', async () => {
+    const options = settings({ cacheBytes: 100_000 });
+    const first = answer('edited');
+    await putStored('e1', first, options);
+    first.edits = { 0: { text: 'by hand', scale: 1.5 } };
+    expect(await putEdits(first)).toBe(true);
+
+    const again = await getStored('e1', options);
+    expect(again?.edits).toEqual({ 0: { text: 'by hand', scale: 1.5 } });
+
+    // Taken out again, they are gone from storage too.
+    delete again!.edits;
+    expect(await putEdits(again!)).toBe(true);
+    expect((await getStored('e1', options))?.edits).toBeUndefined();
+  });
+
+  test('an answer that was never stored keeps its edits in memory only', async () => {
+    const loose = answer('loose');
+    loose.edits = { 0: { hidden: true } };
+    expect(await putEdits(loose)).toBe(false);
+  });
+
+  test('what storage hands back is cleaned: no edits for paragraphs that do not exist', async () => {
+    const options = settings({ cacheBytes: 100_000 });
+    const tampered = answer('tampered');
+    tampered.edits = { 0: { scale: 99, color: 'red' }, 7: { text: 'nowhere' } } as never;
+    await putStored('e2', tampered, options);
+    expect((await getStored('e2', options))?.edits).toEqual({ 0: { scale: 3 } });
   });
 });

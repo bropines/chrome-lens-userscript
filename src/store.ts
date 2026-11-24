@@ -1,4 +1,5 @@
 import { candidate, linesAgree, markBoxes, reusable, sameFrame } from './likeness.js';
+import { cleanEdits } from './render/edits.js';
 import type { Box, Face, Mark } from './likeness.js';
 import type { CacheOptions, LensOptions, LensResult } from './types.js';
 
@@ -224,6 +225,14 @@ async function readEntry(key: string): Promise<StoredEntry | undefined> {
   return entry;
 }
 
+/**
+ * Which stored entry each answer in memory came from or went to, so an edit
+ * made to it later is written back to the same record - including when the
+ * answer was found by likeness, under another picture's key, which is what
+ * lets a correction made on a thumbnail follow it to the original.
+ */
+const keyOfResult = new WeakMap<LensResult, string>();
+
 /** The question an answer is to, beyond the picture: languages and tiling. */
 const askOf = (settings: LensOptions, tag: string): string => `${languagesOf(settings)}\u0000${tag}`;
 
@@ -302,6 +311,11 @@ export async function getStored(
     }
   }
   if (!entry) return null;
+  // Storage is the site's; what comes back is checked like an imported file.
+  const edits = cleanEdits(entry.result.edits, entry.result.blocks?.length ?? 0);
+  if (edits) entry.result.edits = edits;
+  else delete entry.result.edits;
+  keyOfResult.set(entry.result, key);
 
   // Touch it, so eviction takes the ones nobody comes back to. Only the small
   // record is rewritten, and nothing waits on it: the answer is in hand.
@@ -397,6 +411,7 @@ export async function putStored(
     };
   });
   if (!written) return;
+  keyOfResult.set(result, key);
   if (nearIndex) nearIndex = [...nearIndex.filter((m) => m.key !== key), ...(meta.near ? [meta] : [])];
 
   lastTouched.set(key, now);
@@ -444,6 +459,26 @@ async function evict(budget: number): Promise<void> {
   // again rather than wrong.
   total = done ? remaining : null;
   nearIndex = null;
+}
+
+/**
+ * Write an answer's edits back to the record it came from.
+ *
+ * The whole record is rewritten, patches and all; an edit is rare enough for
+ * that, and it keeps the edits inside the answer, where every path that finds
+ * an answer finds them too. False when the answer was never stored - storage
+ * off, too big, or blocked - and the edits then live as long as the page.
+ */
+export async function putEdits(result: LensResult): Promise<boolean> {
+  const key = keyOfResult.get(result);
+  if (!key) return false;
+  const entry = await readEntry(key);
+  if (!entry) return false;
+  if (result.edits) entry.result.edits = result.edits;
+  else delete entry.result.edits;
+  return transact('readwrite', [RESPONSES], (tx) => {
+    tx.objectStore(RESPONSES).put(entry);
+  });
 }
 
 export async function clearStored(): Promise<void> {

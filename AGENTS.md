@@ -85,6 +85,7 @@ src/
     bubble.ts           a speech bubble as a text area: is it one, its shape
                         from the pixels, the largest type that shape holds (pure)
     background.ts       a CSS background as geometry (pure)
+    edits.ts            a person's corrections to a drawing, as data (pure)
     canvas.ts           paints the translation into a bitmap
     cover.ts            lays that bitmap over the image as a sibling
     watch.ts            notices that a covered element is no longer that picture
@@ -98,6 +99,7 @@ src/
     preview.ts          paints that picture and runs the real renderer over it
     schematics.ts       small pictures for spatial choices, as lists of shapes
     tools.ts            the layer over a picture: area, objects, words
+    editor.ts           the quick editor: the drawing, a box per paragraph
     icons.ts            stroke icons as path data
 ```
 
@@ -1137,6 +1139,45 @@ every line box's corners is exactly the text's extent. Growing it and rounding
 its corners is one operation — stroke the hull path with a round-joined line of
 width `2 * pad`, then fill.
 
+### The quick editor changes data, and the renderer draws it
+
+Copying or saving the translated picture, and correcting it by hand, are one
+feature: the picture each cover shows is kept (`drawnAs` in main.ts, weak like
+`results`), and the editor draws new ones. Four things about it:
+
+- **An edit is a record, not a drawing.** `BlockEdit` (types.ts) is a few
+  optional fields per paragraph - text, size, colours, offset, hidden, original
+  - and `renderToBlob` takes them as its last argument. The window never paints
+  anything itself; every change is drawn again by the real renderer a moment
+  later, so what it shows is what Apply lays down. `cleanEdit` decides what an
+  edit may hold, for the window and for whatever storage hands back, the way
+  `sanitize` does for settings: "scale 1" is the absence of an edit, not one.
+- **A changed text, size or position re-sets the paragraph as one area**
+  (`resets`). New words have no line ranges to follow, and moving or resizing
+  has to leave the erased source where it was - which is exactly the split the
+  re-wrap path already makes: patches per line, then the text. Size and offset
+  are a canvas transform about the paragraph's centre around that text pass, so
+  they reach the rectangle, the bubble mask and the ellipse alike. The room and
+  the neighbours are still measured from the answer as it came, so correcting
+  one paragraph does not move another. Colour and hiding need none of this and
+  leave the layout alone.
+- **Edits live on the answer** (`LensResult.edits`). The response cache holds
+  the same object, so a toggle or a settings redraw keeps them; `putEdits`
+  writes them into the stored record the answer came from - the key it was
+  *found* under, which for a likeness hit is the other picture's, so an edit
+  made on a thumbnail follows it to the original. The render key gains
+  `editsTag`, empty without edits, so nothing cached before them misses.
+- **A copy is asked for during the press.** `ClipboardItem` gets the picture
+  as a promise, because the clipboard is granted only while the gesture is being
+  handled and downscaling to the picture's own size (the cover is supersampled)
+  takes longer. Refused - an older Firefox, most phones - it is saved instead
+  and the message says so. Saving uses the share sheet on a touch screen, where
+  the gallery and the messengers are, and a download elsewhere.
+
+The menu offers edit, copy and save only on a picture that has a drawing; three
+greyed-out entries on every untranslated picture would be noise. The DOM
+renderer has no picture to copy and no editor.
+
 ## Conventions
 
 - Strict TypeScript. `noUncheckedIndexedAccess` and `exactOptionalPropertyTypes`
@@ -1164,7 +1205,8 @@ punctuation set is compared with the Python one when the sibling checkout is
 there), background geometry, the IndexedDB store, `gm.ts`, the per-site rules,
 the settings schema and import (`test/settings.test.ts`), the button list and
 key chords (`test/controls.test.ts`), the settings preview's sample answer and
-the schematics (`test/preview.test.ts`) and the locales (`test/i18n.test.ts`).
+the schematics (`test/preview.test.ts`), the editor's edits as data
+(`test/edits.test.ts`) and the locales (`test/i18n.test.ts`).
 
 - `test/setup.ts` stands in for the page with a ruler anyone can do in their
   head (a Latin glyph is half an em, a CJK one a full em, the font box one em

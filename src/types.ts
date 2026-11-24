@@ -97,7 +97,37 @@ export interface LensResult {
   contentLanguage: string;
   ocr: OcrParagraph[];
   blocks: TranslationBlock[];
+  /**
+   * What a person changed by hand in the quick editor, by paragraph index.
+   * Kept on the answer because the answer is what is cached and stored: an
+   * edit then follows the picture under any address, and across reloads.
+   */
+  edits?: Edits;
 }
+
+/**
+ * One paragraph as a person corrected it. Everything is optional, and an
+ * absent field is the renderer's own choice.
+ */
+export interface BlockEdit {
+  /** Replaces the translation; the paragraph is then set as one text area. */
+  text?: string;
+  /** Multiplies the size the renderer chose, 1 being unchanged. */
+  scale?: number;
+  /** `#rrggbb`, over the settings' colour and the server's. */
+  color?: string;
+  outline?: string;
+  /** Where the text moves to, as a fraction of the picture's width and height. */
+  dx?: number;
+  dy?: number;
+  /** The source is erased and nothing is written. */
+  hidden?: boolean;
+  /** The paragraph is left as the picture has it: not erased, not written. */
+  original?: boolean;
+}
+
+/** Keyed by the paragraph's index in `blocks`. */
+export type Edits = Record<number, BlockEdit>;
 
 export const WritingDirection = {
   LeftToRight: 0,

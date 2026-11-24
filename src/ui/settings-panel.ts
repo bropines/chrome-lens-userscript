@@ -53,6 +53,7 @@ export const BUTTON_ICONS: Record<ButtonId, IconName> = {
   objects: 'objects',
   text: 'text',
   copy: 'copy',
+  edit: 'edit',
   settings: 'settings',
   menu: 'more',
 };

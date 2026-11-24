@@ -11,7 +11,7 @@ import type { Selection } from './lens/search.js';
 import { ocrText, translationText } from './lens/text.js';
 import { acquireSource, encodeForUpload, encodeRegion, identify, markStrips, targetSize } from './image.js';
 import { paintRect } from './render/background.js';
-import { clearStored, getStored, putStored, storedStats } from './store.js';
+import { clearStored, getStored, putEdits, putStored, storedStats } from './store.js';
 import type { Near } from './store.js';
 import { classify, collect, ignoreElements, isBigEnough, targetFromEvent } from './detect.js';
 import type { Target } from './detect.js';
@@ -57,7 +57,8 @@ import { parseButtons, rowOf } from './ui/buttons.js';
 import type { ButtonId } from './ui/buttons.js';
 import { matchesChord, parseChord } from './ui/shortcuts.js';
 import type { Chord } from './ui/shortcuts.js';
-import { closeMenu, isMenuOpen, openMenu } from './ui/menu.js';
+import { closeMenu, isCompact, isMenuOpen, openMenu } from './ui/menu.js';
+import { openEditor } from './ui/editor.js';
 import type { MenuItem } from './ui/menu.js';
 import { onReportSettings, openReport } from './ui/report.js';
 import { HOST_ID, applyPopupOpacity, isOurs, tendHost, uiRoot } from './ui/root.js';
@@ -65,7 +66,7 @@ import { fittedRect, insetRect, placeRow, wrapWidth } from './ui/geometry.js';
 import type { Rect, Size } from './ui/geometry.js';
 import { icon } from './ui/icons.js';
 import { closeTool, openObjectsTool, openRegionTool, openTextTool, repositionTool } from './ui/tools.js';
-import type { LensResult, NormalizedBox, OcrParagraph, PeekKey, Settings } from './types.js';
+import type { Edits, LensResult, NormalizedBox, OcrParagraph, PeekKey, Settings } from './types.js';
 
 /** How the front end is being started, which boot.ts decides. */
 export interface StartOptions {
@@ -304,6 +305,7 @@ export function start({ framed, hovered }: StartOptions): void {
   function undo(img: HTMLElement): boolean {
     showing.delete(img);
     results.delete(img);
+    drawnAs.delete(img);
     const restored = uncoverImage(img) || clearOverlay(img);
     if (restored) markTranslated(false);
     return restored;
@@ -394,15 +396,14 @@ export function start({ framed, hovered }: StartOptions): void {
       // Not for a background: where its cover goes depends on the picture's own
       // size, which a stored rendering does not carry and the pixels do.
       if (settings.renderMode === 'canvas' && target.url && target.kind !== 'background') {
-        const done = getRender(
-          renderKey(key, settings, displayedWidth),
-          settings,
-          naturalSizeOf(target)
-        );
+        const natural = naturalSizeOf(target);
+        const answered = getCached(key, settings, natural);
+        const done = getRender(renderKey(key, settings, displayedWidth, answered?.edits), settings, natural);
         // coverImage owns the URL from here, so a cover that cannot be laid does
         // not leave one behind.
-        if (done && coverImage(img, URL.createObjectURL(done), { onGone: forgetter(img), ...seeThrough() })) {
-          shown(img, target, getCached(key, settings, naturalSizeOf(target)));
+        if (done && natural && coverWith(target, done, natural)) {
+          shown(img, target, answered);
+          drawnAs.set(img, { blob: done, ...natural });
           return 'shown';
         }
       }
@@ -493,23 +494,14 @@ export function start({ framed, hovered }: StartOptions): void {
             result.blocks,
             settings,
             // The displayed width is what decides whether text will be legible.
-            displayedWidth
+            displayedWidth,
+            result.edits
           );
           if (target.url) {
-            putRender(renderKey(key, settings, displayedWidth), blob, settings, size);
+            putRender(renderKey(key, settings, displayedWidth, result.edits), blob, settings, size);
           }
-          const covered = coverImage(img, URL.createObjectURL(blob), {
-            onGone: forgetter(img),
-            ...seeThrough(),
-            ...(target.background
-              ? {
-                  background: {
-                    spec: target.background,
-                    natural: { width: prepared.width, height: prepared.height },
-                  },
-                }
-              : {}),
-          });
+          const covered = coverWith(target, blob, size);
+          if (covered) drawnAs.set(img, { blob, ...size });
           if (!covered) {
             lastFailure = target.kind === 'background' ? t('toast.backgroundTiled') : t('toast.cannotCover');
             say(lastFailure);
@@ -550,6 +542,21 @@ export function start({ framed, hovered }: StartOptions): void {
       busy.delete(img);
       setWorking(-1);
     }
+  }
+
+  /**
+   * The picture each cover shows, at the size it was drawn from, for copying
+   * and saving it. Weak, like `results`: a discarded element takes it along.
+   */
+  const drawnAs = new WeakMap<HTMLElement, { blob: Blob; width: number; height: number }>();
+
+  /** Lay a finished drawing over its picture. */
+  function coverWith(target: Target, blob: Blob, natural: { width: number; height: number }): boolean {
+    return coverImage(target.element, URL.createObjectURL(blob), {
+      onGone: forgetter(target.element),
+      ...seeThrough(),
+      ...(target.background ? { background: { spec: target.background, natural } } : {}),
+    });
   }
 
   /** Book-keeping for a translation that is now on screen. */
@@ -1259,6 +1266,9 @@ export function start({ framed, hovered }: StartOptions): void {
       case 'copy':
         void copyAny(target);
         break;
+      case 'edit':
+        void editPicture(target);
+        break;
       case 'settings':
         showSettings();
         break;
@@ -1459,6 +1469,181 @@ export function start({ framed, hovered }: StartOptions): void {
     await copied(text, kind === 'translation' ? 'toast.copiedTranslation' : 'toast.copiedOriginal');
   }
 
+
+  // --- The translated picture, as a picture -----------------------------------
+
+  /**
+   * A drawing at the picture's own size.
+   *
+   * The cover is drawn at the supersample factor so it stays sharp when the
+   * page is zoomed; a copy someone pastes into a chat should be the picture
+   * they saw, not two or three times it.
+   */
+  async function atOwnSize(drawn: { blob: Blob; width: number; height: number }): Promise<Blob> {
+    const bitmap = await createImageBitmap(drawn.blob);
+    try {
+      if (bitmap.width <= drawn.width) return drawn.blob;
+      const canvas = document.createElement('canvas');
+      canvas.width = drawn.width;
+      canvas.height = drawn.height;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return drawn.blob;
+      ctx.imageSmoothingQuality = 'high';
+      ctx.drawImage(bitmap, 0, 0, drawn.width, drawn.height);
+      const small = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'));
+      return small ?? drawn.blob;
+    } finally {
+      bitmap.close();
+    }
+  }
+
+  /** A file name that says what it is and where it came from. */
+  function pictureName(target: Target): string {
+    let base = '';
+    try {
+      base = new URL(target.url).pathname.split('/').pop() ?? '';
+    } catch {
+      // A canvas, a video or a data: address has no name worth keeping.
+    }
+    base = base.replace(/\.[a-z0-9]{2,5}$/i, '').replace(/[^\w.-]+/g, '_').slice(0, 60);
+    return `${base ? base + '-' : ''}translated.png`;
+  }
+
+  /**
+   * Put a picture on the clipboard.
+   *
+   * The clipboard is asked during the press, with the picture still a promise:
+   * a browser grants it only while the gesture is being handled, and drawing
+   * or downscaling takes longer than that. Where it is refused - an older
+   * Firefox, a page without the permission, most phones - the picture is
+   * saved instead, and the message says so.
+   */
+  function copyPicture(picture: Promise<Blob>, name: string): void {
+    let write: Promise<void>;
+    try {
+      if (!navigator.clipboard?.write || typeof ClipboardItem === 'undefined') throw new Error('no clipboard');
+      write = navigator.clipboard.write([new ClipboardItem({ 'image/png': picture })]);
+    } catch (error) {
+      write = Promise.reject(error);
+    }
+    write.then(
+      () => toast(t('toast.copiedPicture')),
+      () =>
+        void picture.then(
+          (blob) => {
+            downloadPicture(blob, name);
+            toast(t('toast.pictureSavedInstead'), 4000);
+          },
+          (error: Error) => failed(error)
+        )
+    );
+  }
+
+  function downloadPicture(blob: Blob, name: string): void {
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = name;
+    anchor.rel = 'noopener';
+    uiRoot().appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    // Long enough for the browser to have started on it.
+    window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  }
+
+  /**
+   * Save a picture: the share sheet on a touch screen, where "save to gallery"
+   * and every messenger live and a download is hard to find again; a download
+   * everywhere else, or wherever sharing is refused.
+   */
+  async function savePicture(blob: Blob, name: string): Promise<void> {
+    const file = new File([blob], name, { type: 'image/png' });
+    if (isCompact() && navigator.canShare?.({ files: [file] })) {
+      try {
+        await navigator.share({ files: [file] });
+        return;
+      } catch (error) {
+        // Closing the sheet is an answer, not a failure.
+        if ((error as Error).name === 'AbortError') return;
+      }
+    }
+    downloadPicture(blob, name);
+  }
+
+  function copyShown(target: Target): void {
+    const drawn = drawnAs.get(target.element);
+    if (!drawn) {
+      toast(t('toast.pictureFirst'));
+      return;
+    }
+    copyPicture(atOwnSize(drawn), pictureName(target));
+  }
+
+  function saveShown(target: Target): void {
+    const drawn = drawnAs.get(target.element);
+    if (!drawn) {
+      toast(t('toast.pictureFirst'));
+      return;
+    }
+    void atOwnSize(drawn).then((blob) => savePicture(blob, pictureName(target)), failed);
+  }
+
+  /**
+   * Open the quick editor over a translated picture.
+   *
+   * It draws with the settings and the displayed width of the moment, the
+   * same as the cover, so what it shows is what Apply lays down. Its edits
+   * live on the answer, which is what the response cache and the store keep,
+   * so they follow the picture under another address and across reloads.
+   */
+  async function editPicture(target: Target): Promise<void> {
+    const img = target.element;
+    const result = results.get(img);
+    if (!drawnAs.has(img) || !result?.blocks.length) {
+      toast(t('toast.pictureFirst'));
+      return;
+    }
+    closeTool();
+    closeMenu();
+    hideToast();
+    let prepared: Awaited<ReturnType<typeof acquireSource>>;
+    try {
+      prepared = await acquireSource(target);
+    } catch (error) {
+      failed(error as Error);
+      return;
+    }
+    const drawWith = settings;
+    const displayedWidth = img.getBoundingClientRect().width || prepared.width;
+    const size = { width: prepared.width, height: prepared.height };
+    const draw = (edits: Edits | undefined): Promise<Blob> =>
+      renderToBlob(prepared.source, prepared.width, prepared.height, result.blocks, drawWith, displayedWidth, edits);
+    const name = pictureName(target);
+    openEditor({
+      blocks: result.blocks,
+      edits: result.edits,
+      render: draw,
+      copy: (picture) => copyPicture(picture.then((blob) => atOwnSize({ blob, ...size })), name),
+      save: (blob) => void atOwnSize({ blob, ...size }).then((own) => savePicture(own, name), failed),
+      apply: (edits) => {
+        if (edits) result.edits = edits;
+        else delete result.edits;
+        void putEdits(result);
+        void draw(result.edits).then((blob) => {
+          if (!img.isConnected) return;
+          if (target.url && target.kind !== 'background') {
+            putRender(renderKey(cacheKey(target.url, drawWith), drawWith, displayedWidth, result.edits), blob, drawWith, size);
+          }
+          if (coverWith(target, blob, size)) {
+            drawnAs.set(img, { blob, ...size });
+            shown(img, target, result);
+          }
+        }, failed);
+      },
+      closed: () => prepared.release(),
+    });
+  }
 
   // --- Searching with a picture -----------------------------------------------
 
@@ -1900,6 +2085,14 @@ export function start({ framed, hovered }: StartOptions): void {
         add('tools', { id, label: t('menu.objects'), icon: 'objects', run: act(id) });
       } else if (id === 'text' && pro) {
         add('tools', { id, label: t('menu.text'), icon: 'text', run: act(id) });
+      } else if (id === 'edit') {
+        // Only for a picture that has a drawing to edit, copy or save: three
+        // greyed-out entries on every untranslated picture are only noise.
+        if (drawnAs.has(target.element)) {
+          add('picture', { id, label: t('menu.edit'), icon: 'edit', run: act(id) });
+          add('picture', { id: 'copyPicture', label: t('menu.copyPicture'), icon: 'images', run: () => copyShown(target) });
+          add('picture', { id: 'savePicture', label: t('menu.savePicture'), icon: 'download', run: () => saveShown(target) });
+        }
       } else if (id === 'copy' && pro) {
         add('copy', {
           id: 'copyTranslation',

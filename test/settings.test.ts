@@ -210,7 +210,7 @@ describe('importing a settings file', () => {
       fillColor: '',
       keyAsk: 'Alt+Shift+KeyQ',
       keyCopy: '',
-      buttons: 'menu*,translate,search,ask,area,objects,text,copy,settings',
+      buttons: 'menu*,translate,search,ask,area,objects,text,copy,edit,settings',
       supersample: 3,
       fontWeight: 700,
       cacheBytes: 1024 * 1024 * 1024,

@@ -18,6 +18,7 @@ export const BUTTON_IDS = [
   'objects',
   'text',
   'copy',
+  'edit',
   'settings',
   'menu',
 ] as const;
@@ -34,7 +35,7 @@ export interface ButtonEntry {
  * The row every build before this had: the main button in the corner, then
  * settings, then the menu - and the menu's own order as it always was.
  */
-export const DEFAULT_BUTTONS = 'translate*,search,ask,area,objects,text,copy,settings*,menu*';
+export const DEFAULT_BUTTONS = 'translate*,search,ask,area,objects,text,copy,edit,settings*,menu*';
 
 const isButtonId = (value: string): value is ButtonId =>
   (BUTTON_IDS as readonly string[]).includes(value);

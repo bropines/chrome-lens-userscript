@@ -33,7 +33,8 @@ import {
 import type { Mask, Shape } from './bubble.js';
 import { boxCorners, convexHull, fillHull } from './hull.js';
 import type { Point } from './hull.js';
-import type { RenderOptions, TranslatedLine, TranslationBlock } from '../types.js';
+import { resets } from './edits.js';
+import type { Edits, RenderOptions, TranslatedLine, TranslationBlock } from '../types.js';
 
 /**
  * Bake the translation into a bitmap that replaces the image.
@@ -688,6 +689,10 @@ async function drawLine(
  *
  * `source` is whatever was already decoded for the upload, so a cross-origin
  * image that tainted the element's own canvas still works here.
+ *
+ * `edits` are a person's corrections by paragraph (`render/edits.ts`). The
+ * neighbours and the room are still measured from the answer as it came, so
+ * correcting one paragraph does not move another.
  */
 export async function renderToBlob(
   source: CanvasImageSource,
@@ -695,7 +700,8 @@ export async function renderToBlob(
   naturalHeight: number,
   blocks: TranslationBlock[],
   settings: RenderOptions,
-  displayedWidth = naturalWidth
+  displayedWidth = naturalWidth,
+  edits?: Edits
 ): Promise<Blob> {
   // Supersampling: the canvas replaces the image, so rendering above natural
   // size is what keeps text sharp when the reader zooms in or opens it full
@@ -738,8 +744,19 @@ export async function renderToBlob(
   );
   const growth = settings.mangaMode ? Math.max(1, settings.mangaBoxGrowth) : 1;
   const mode = reflowMode(settings.reflowHorizontal);
+  const base = settings;
 
-  for (const [index, block] of blocks.entries()) {
+  for (const [index, answered] of blocks.entries()) {
+    const edit = edits?.[index];
+    // Left as the picture has it: nothing erased, nothing written.
+    if (edit?.original) continue;
+    const block = edit?.text !== undefined ? { ...answered, translation: edit.text } : answered;
+    const settings: RenderOptions =
+      edit?.color || edit?.outline
+        ? { ...base, textColor: edit.color || base.textColor, outlineColor: edit.outline || base.outlineColor }
+        : base;
+    // Set anew: the text is drawn apart from the patches, which stay put.
+    const reset = resets(edit) && Boolean(block.geometry);
     const vertical = block.writingDirection === 2;
     // Manga mode never leaves a column standing: that is the whole point of it.
     const stayVertical =
@@ -747,13 +764,20 @@ export async function renderToBlob(
     // Manga mode implies hull erasing; the residue is the reason it exists.
     const hull = settings.drawBackground && (settings.eraseMode === 'hull' || settings.mangaMode);
     if (hull) eraseTextArea(draw, block, settings);
+    if (edit?.hidden) {
+      // Erased and left empty: the patches without the words.
+      if (!hull) {
+        for (const line of block.lines) await drawLine(draw, block, line, undefined, settings, true);
+      }
+      continue;
+    }
     // Erase the source either way; only the text placement changes.
     //
     // A vertical column has to be re-wrapped or the translation cannot be set
     // in it at all. A horizontal paragraph does not have to be, and Chromium
     // never is - but keeping the server's lines is also what leaves the spacing
     // between them out of anyone's hands, so it is a setting.
-    let reflow = Boolean(block.geometry) && !stayVertical && (vertical || mode === 'on');
+    let reflow = reset || (Boolean(block.geometry) && !stayVertical && (vertical || mode === 'on'));
     // Manga mode says the page is bubbles; otherwise the paragraph has to.
     let bubble = settings.mangaMode;
     const own = boxes[index];
@@ -802,6 +826,18 @@ export async function renderToBlob(
         if (!hull) await drawLine(draw, block, line, block.lines[i + 1], settings, true);
       } else await drawLine(draw, block, line, block.lines[i + 1], settings, false, hull);
     }
+    // Moved and resized as a whole, about the paragraph's own centre - the
+    // room and the bubble are still found where the source was.
+    const shifted = reset && own && (edit?.scale !== undefined || edit?.dx || edit?.dy);
+    if (shifted && own) {
+      const cx = (own.left + own.right) / 2;
+      const cy = (own.top + own.bottom) / 2;
+      const scaleBy = edit?.scale ?? 1;
+      ctx.save();
+      ctx.translate(cx + (edit?.dx ?? 0) * width, cy + (edit?.dy ?? 0) * height);
+      ctx.scale(scaleBy, scaleBy);
+      ctx.translate(-cx, -cy);
+    }
     if (reflow && own && block.geometry) {
       const others = boxes.filter((rect, at): rect is Rect => rect !== null && at !== index);
       let shaped = false;
@@ -844,6 +880,7 @@ export async function renderToBlob(
         drawReflowedParagraph(draw, block, settings, roomFor(own, others, growth, width, height));
       }
     }
+    if (shifted) ctx.restore();
   }
 
   const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'));

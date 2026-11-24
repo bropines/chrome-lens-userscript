@@ -1,5 +1,7 @@
+import { editsTag } from './render/edits.js';
 import type {
   CacheOptions,
+  Edits,
   LensOptions,
   LensResult,
   RenderOptions,
@@ -247,13 +249,15 @@ const DRAWN = Object.keys({
 } satisfies Record<keyof RenderOptions, 0>)
   .sort() as Array<keyof RenderOptions>;
 
-export function renderKey(key: string, settings: RenderOptions, displayedWidth: number): string {
+export function renderKey(key: string, settings: RenderOptions, displayedWidth: number, edits?: Edits): string {
   const parts = [key];
   for (const name of DRAWN) parts.push(`${name}=${String(settings[name])}`);
   // Legibility is decided against the displayed size, so a different one is a
   // different picture - bucketed, because a pixel of resize is not.
   parts.push(`w=${Math.round(displayedWidth / 50)}`);
-  return parts.join(SEPARATOR);
+  // A person's corrections are part of the drawing; none adds nothing, so a
+  // rendering cached before they existed is still found.
+  return parts.join(SEPARATOR) + editsTag(edits);
 }
 
 /**

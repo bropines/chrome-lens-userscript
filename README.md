@@ -38,6 +38,8 @@ Alt+click an image, or use the button that appears when you hover one. Click aga
 | **Copy the translation** or **the original text** | the small `...` button next to the gear (it appears with it), or right-click the main button. The original is whatever Lens could read, including text it could not translate |
 | Switch it off on one site | **Off** for this site in General - the button disappears, Alt+click is the page's again and any translations come down |
 | **Translate as you read** | **Translate as you scroll** in General, for every site, or **Automatic** for this site alone. A picture is translated once most of it is on screen and the scroll has settled; one that had no text is not asked about again, and one you undid stays undone. Pictures under a size, plainly bare ones (a sky, a flat graphic) and anything past a number of requests a minute are left alone - all settings under Behaviour |
+| **Copy or save the translated picture** | *Copy the picture* / *Save the picture* in the menu of a translated picture. A copy that the browser refuses is saved instead; on a phone, saving opens the share sheet |
+| **Fix a translation by hand** | *Edit the translation* in the same menu: tap a paragraph to change its words, size, colours, hide it or show the original there; drag it to move the text. The edits are kept with the stored answer, so they come back after a reload |
 | Clear the cache, undo a whole page, run diagnostics | the menu, or **Quick actions** in General |
 
 ### Settings, buttons and shortcuts

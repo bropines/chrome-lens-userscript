@@ -1480,3 +1480,192 @@
     transition: none;
   }
 }
+
+/* --------------------------------------------------------------- quick editor */
+
+.lt-panel.lt-editor {
+  width: min(1080px, 96vw);
+  max-width: none;
+}
+.lt-editor-body {
+  display: flex;
+  gap: 14px;
+  min-height: 0;
+  padding: 12px 18px;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+.lt-editor-stage {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+}
+.lt-editor-frame {
+  position: relative;
+  display: inline-block;
+  line-height: 0;
+  max-width: 100%;
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: var(--muted);
+  /* A finger dragging a box must not scroll the sheet. */
+  touch-action: none;
+}
+.lt-editor-img {
+  display: block;
+  max-width: 100%;
+  max-height: calc(var(--lt-dvh) * 66);
+  width: auto;
+  height: auto;
+  min-width: 120px;
+  min-height: 80px;
+  user-select: none;
+  -webkit-user-select: none;
+  transition: opacity 0.15s;
+}
+.lt-editor-frame.lt-busy .lt-editor-img {
+  opacity: 0.75;
+}
+.lt-editor-box {
+  position: absolute;
+  margin: 0;
+  padding: 0;
+  min-width: 14px;
+  min-height: 14px;
+  border: 1.5px dashed rgba(255, 255, 255, 0.85);
+  border-radius: 4px;
+  outline: 1px solid rgba(0, 0, 0, 0.45);
+  background: transparent;
+  cursor: grab;
+  touch-action: none;
+}
+.lt-editor-box:hover {
+  background: rgba(59, 130, 246, 0.12);
+}
+.lt-editor-box.lt-edited {
+  border-style: solid;
+  border-color: rgba(250, 204, 21, 0.95);
+}
+.lt-editor-box.lt-off {
+  border-color: rgba(161, 161, 170, 0.9);
+}
+.lt-editor-box.lt-picked {
+  border: 2px solid #3b82f6;
+  background: rgba(59, 130, 246, 0.16);
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.7);
+}
+.lt-editor-box:active {
+  cursor: grabbing;
+}
+.lt-editor-box:focus-visible {
+  outline: 2px solid var(--ring);
+}
+.lt-editor-side {
+  flex: 0 0 280px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+.lt-editor-hint {
+  margin: 0;
+}
+.lt-editor-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.lt-editor-fields[hidden],
+.lt-editor-hint[hidden] {
+  display: none;
+}
+.lt-editor-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.lt-editor-field .lt-label {
+  display: flex;
+  justify-content: space-between;
+}
+.lt-editor-value {
+  color: var(--muted-foreground);
+  font-variant-numeric: tabular-nums;
+}
+.lt-editor-text {
+  min-height: 72px;
+  resize: vertical;
+  font: inherit;
+  line-height: 1.4;
+}
+.lt-editor-range {
+  width: 100%;
+  accent-color: var(--primary);
+}
+.lt-editor-colours {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+}
+.lt-editor-colour {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.lt-editor-swatch {
+  width: 36px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+}
+.lt-editor-toggles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.lt-editor-toggles .lt-btn[aria-pressed='true'] {
+  color: var(--primary-foreground, #fff);
+  background: var(--primary);
+}
+.lt-editor-foot {
+  flex-wrap: wrap;
+}
+
+@media (max-width: 760px), (pointer: coarse) {
+  .lt-panel.lt-editor {
+    width: 100%;
+  }
+  .lt-editor-body {
+    flex-direction: column;
+    padding-left: max(14px, env(safe-area-inset-left, 0px));
+    padding-right: max(14px, env(safe-area-inset-right, 0px));
+  }
+  .lt-editor-side {
+    flex: none;
+  }
+  .lt-editor-img {
+    max-height: calc(var(--lt-svh) * 46 - var(--lt-kb));
+  }
+  .lt-editor-swatch {
+    width: 44px;
+    height: 36px;
+  }
+  .lt-editor-toggles .lt-btn,
+  .lt-editor-foot .lt-btn {
+    min-height: 40px;
+  }
+  /* Two rows: what to do with the picture, then the way out, on the right
+     where the thumb is - not wherever the wrap happens to leave Apply. */
+  .lt-editor-foot .lt-spacer {
+    flex-basis: 100%;
+    height: 0;
+  }
+  .lt-editor-foot .lt-spacer + .lt-btn {
+    margin-left: auto;
+  }
+}
