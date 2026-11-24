@@ -715,7 +715,7 @@ Three things about where it sits in the flow:
   upgrade drops it. It is tested against `fake-indexeddb`, upgrade included.
 
 It is per-origin, being IndexedDB - what was translated on a site sits in that
-site's origin, readable by the site's own scripts, which the README says
+site's origin, readable by the site's own scripts, which docs/how-it-works.md says
 plainly. It degrades to nothing when storage is
 blocked - every call resolves to null rather than throwing, including a blocked
 upgrade, which would otherwise hang every caller waiting on the database.
