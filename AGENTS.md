@@ -239,6 +239,16 @@ direction and line-height still reach in through the host, so the host carries
 for `font-family` is the browser's serif default and an inline `!important`
 declaration outranks any `:host` rule.
 
+**Nothing we style may depend on inline style being allowed.** A page or frame
+whose CSP has `style-src` without 'unsafe-inline' - or with a nonce, which turns
+'unsafe-inline' off - refuses a `<style>` element and a `style` attribute set
+from script. On 360.yandex.ru that left the host in the flow after the page and
+the controls a bare column of icons. So the sheet is a constructed
+`CSSStyleSheet` in `adoptedStyleSheets` (the element is only the fallback), and
+the host and the cover are styled through `style.cssText`: both are CSSOM, which
+CSP does not govern. Never `setAttribute('style', ...)` and never markup with a
+`style=` in it.
+
 ### Every word is a key, and the other languages are not in the bundle
 
 `src/i18n/en.ts` is the one place a user-visible string is written. Everything

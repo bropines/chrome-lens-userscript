@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Lens Translate
 // @namespace    https://github.com/bropines/chrome-lens-userscript
-// @version      2.13.0
+// @version      2.13.1
 // @author       bropines
 // @description  Hover any image, click the button, and its text is translated in place - rendered the way Chromium's own Lens overlay does it.
 // @license      MIT
@@ -697,7 +697,7 @@
     }
     return null;
   }
-  const VERSION = "2.13.0";
+  const VERSION = "2.13.1";
   const EN = {
     // --- the controls over a picture
     "act.translate": "Translate",
@@ -5397,32 +5397,29 @@
     const element = document.createElement("img");
     element.src = blobUrl;
     element.setAttribute(COVER_MARK, "");
-    element.setAttribute(
-      "style",
-      [
-        "position: absolute",
-        "margin: 0",
-        "padding: 0",
-        "border: 0",
-        "max-width: none",
-        "max-height: none",
-        "min-width: 0",
-        "min-height: 0",
-        "pointer-events: none",
-        // Above the image, below anything the page floats on top of it.
-        "z-index: 1",
-        ...options.opacity !== void 0 && options.opacity < 1 ? [`opacity: ${options.opacity}`] : [],
-        // A background's window, corners included, is cut out by place().
-        ...options.background ? ["border-radius: 0", "object-fit: fill"] : [
-          // Inherit the shape so rounded media does not get square corners.
-          `border-radius: ${getComputedStyle(img).borderRadius}`,
-          // And how the picture sits in its box: `contain` letterboxes it,
-          // and where in the box it lands is object-position's to say.
-          `object-fit: ${getComputedStyle(img).objectFit || "fill"}`,
-          `object-position: ${getComputedStyle(img).objectPosition || "50% 50%"}`
-        ]
-      ].map((rule) => `${rule} !important`).join(";")
-    );
+    element.style.cssText = [
+      "position: absolute",
+      "margin: 0",
+      "padding: 0",
+      "border: 0",
+      "max-width: none",
+      "max-height: none",
+      "min-width: 0",
+      "min-height: 0",
+      "pointer-events: none",
+      // Above the image, below anything the page floats on top of it.
+      "z-index: 1",
+      ...options.opacity !== void 0 && options.opacity < 1 ? [`opacity: ${options.opacity}`] : [],
+      // A background's window, corners included, is cut out by place().
+      ...options.background ? ["border-radius: 0", "object-fit: fill"] : [
+        // Inherit the shape so rounded media does not get square corners.
+        `border-radius: ${getComputedStyle(img).borderRadius}`,
+        // And how the picture sits in its box: `contain` letterboxes it,
+        // and where in the box it lands is object-position's to say.
+        `object-fit: ${getComputedStyle(img).objectFit || "fill"}`,
+        `object-position: ${getComputedStyle(img).objectPosition || "50% 50%"}`
+      ]
+    ].map((rule) => `${rule} !important`).join(";");
     if (getComputedStyle(parent).position === "static") {
       parent.style.setProperty("position", "relative", "important");
     }
@@ -5839,31 +5836,40 @@
     if (typeof accent === "string" && accent !== "zinc" && /^[a-z]+$/.test(accent)) host.dataset["accent"] = accent;
     else delete host.dataset["accent"];
   }
+  function adoptStyles(root, css) {
+    try {
+      if ("adoptedStyleSheets" in root && typeof CSSStyleSheet.prototype.replaceSync === "function") {
+        const sheet = new CSSStyleSheet();
+        sheet.replaceSync(css);
+        root.adoptedStyleSheets = [sheet];
+        return;
+      }
+    } catch {
+    }
+    const element = document.createElement("style");
+    element.textContent = css;
+    root.appendChild(element);
+  }
   function uiRoot() {
     if (shadow) return shadow;
     host = document.createElement("div");
     host.id = HOST_ID;
     host.dataset["version"] = scriptVersion();
-    host.setAttribute(
-      "style",
-      [
-        "all: initial",
-        "font: 14px/1.45 system-ui, -apple-system, 'Segoe UI', Roboto, Ubuntu, sans-serif",
-        "color: #09090b",
-        "position: fixed",
-        "top: 0",
-        "left: 0",
-        "width: 100%",
-        "height: 100%",
-        `z-index: ${TOP}`,
-        "pointer-events: none"
-      ].map((rule) => `${rule} !important`).join(";")
-    );
+    host.style.cssText = [
+      "all: initial",
+      "font: 14px/1.45 system-ui, -apple-system, 'Segoe UI', Roboto, Ubuntu, sans-serif",
+      "color: #09090b",
+      "position: fixed",
+      "top: 0",
+      "left: 0",
+      "width: 100%",
+      "height: 100%",
+      `z-index: ${TOP}`,
+      "pointer-events: none"
+    ].map((rule) => `${rule} !important`).join(";");
     shadow = host.attachShadow({ mode: "open" });
-    const sheet = document.createElement("style");
-    sheet.textContent = `${styles}
-${OVERLAY_CSS}`;
-    shadow.appendChild(sheet);
+    adoptStyles(shadow, `${styles}
+${OVERLAY_CSS}`);
     containEvents(host);
     applyPopupOpacity(getSettings().popupOpacity);
     applyLook(getSettings().uiTheme, getSettings().uiAccent);

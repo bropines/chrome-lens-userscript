@@ -194,6 +194,33 @@ export function applyLook(theme: unknown, accent: unknown): void {
   else delete host.dataset['accent'];
 }
 
+/**
+ * Our stylesheet, as a constructed sheet where the browser has them.
+ *
+ * A `<style>` element is inline style to a Content-Security-Policy, and a page
+ * or frame with `style-src` but no 'unsafe-inline' (or with a nonce, which
+ * switches 'unsafe-inline' off) refuses it: the controls then come out as a
+ * bare column of icons under the page, as reported on 360.yandex.ru. A
+ * constructed sheet is CSSOM, which CSP does not govern, and no page script
+ * can take it out of the tree either. The element stays as the fallback for an
+ * engine without `adoptedStyleSheets`.
+ */
+function adoptStyles(root: ShadowRoot, css: string): void {
+  try {
+    if ('adoptedStyleSheets' in root && typeof CSSStyleSheet.prototype.replaceSync === 'function') {
+      const sheet = new CSSStyleSheet();
+      sheet.replaceSync(css);
+      root.adoptedStyleSheets = [sheet];
+      return;
+    }
+  } catch {
+    // An engine that has the property but refuses the constructor.
+  }
+  const element = document.createElement('style');
+  element.textContent = css;
+  root.appendChild(element);
+}
+
 export function uiRoot(): ShadowRoot {
   if (shadow) return shadow;
 
@@ -212,30 +239,30 @@ export function uiRoot(): ShadowRoot {
   // after it: `initial` for font-family is the browser's serif default, and an
   // inline !important declaration outranks any :host rule, so a stylesheet
   // cannot put it back.
-  host.setAttribute(
-    'style',
-    [
-      'all: initial',
-      "font: 14px/1.45 system-ui, -apple-system, 'Segoe UI', Roboto, Ubuntu, sans-serif",
-      'color: #09090b',
-      'position: fixed',
-      'top: 0',
-      'left: 0',
-      'width: 100%',
-      'height: 100%',
-      `z-index: ${TOP}`,
-      'pointer-events: none',
-    ]
-      .map((rule) => `${rule} !important`)
-      .join(';')
-  );
+  //
+  // Through `cssText`, never the `style` attribute: a page whose CSP allows no
+  // inline styles drops an attribute set from script, and the host then sits
+  // in the flow after the page with everything inherited from it. CSSOM is not
+  // what CSP governs.
+  host.style.cssText = [
+    'all: initial',
+    "font: 14px/1.45 system-ui, -apple-system, 'Segoe UI', Roboto, Ubuntu, sans-serif",
+    'color: #09090b',
+    'position: fixed',
+    'top: 0',
+    'left: 0',
+    'width: 100%',
+    'height: 100%',
+    `z-index: ${TOP}`,
+    'pointer-events: none',
+  ]
+    .map((rule) => `${rule} !important`)
+    .join(';');
 
   shadow = host.attachShadow({ mode: 'open' });
-  const sheet = document.createElement('style');
   // The DOM renderer's own rules come with it rather than being kept here: a
   // front end that forgets them gets a correct layout stacked in one corner.
-  sheet.textContent = `${styles}\n${OVERLAY_CSS}`;
-  shadow.appendChild(sheet);
+  adoptStyles(shadow, `${styles}\n${OVERLAY_CSS}`);
 
   containEvents(host);
   applyPopupOpacity(getSettings().popupOpacity);

@@ -233,9 +233,9 @@ export function coverImage(
   const element = document.createElement('img');
   element.src = blobUrl;
   element.setAttribute(COVER_MARK, '');
-  element.setAttribute(
-    'style',
-    [
+  // `cssText`, not the attribute: a CSP without inline styles drops an
+  // attribute set from script and the cover lands unpositioned under the page.
+  element.style.cssText = [
       'position: absolute',
       'margin: 0',
       'padding: 0',
@@ -261,8 +261,7 @@ export function coverImage(
           ]),
     ]
       .map((rule) => `${rule} !important`)
-      .join(';')
-  );
+      .join(';');
 
   // An absolutely positioned child needs a positioned ancestor to resolve
   // against; without one it would escape to the viewport.
