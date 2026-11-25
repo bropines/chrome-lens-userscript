@@ -2823,6 +2823,47 @@
     if (!jpeg) throw new Error("Canvas is tainted");
     return { bytes: new Uint8Array(await jpeg.arrayBuffer()), width, height };
   }
+  async function decoded(image) {
+    if (typeof image.decode !== "function") return;
+    await Promise.race([image.decode().catch(() => {
+    }), new Promise((resolve2) => setTimeout(resolve2, 2e3))]);
+  }
+  function isTainted(error) {
+    const e = error;
+    return e?.name === "SecurityError" || /taint|insecure|cross-origin/i.test(e?.message ?? "");
+  }
+  async function sourceFromBytes(url) {
+    const blob = await fetchImageBlob(url);
+    try {
+      const bitmap = await createImageBitmap(blob);
+      return { source: bitmap, width: bitmap.width, height: bitmap.height, release: () => bitmap.close() };
+    } catch (error) {
+      const image = await imageFromBlob(blob).catch(() => null);
+      if (!image) throw error;
+      return {
+        source: image.element,
+        width: image.element.naturalWidth,
+        height: image.element.naturalHeight,
+        release: image.release
+      };
+    }
+  }
+  async function imageFromBlob(blob) {
+    const address = URL.createObjectURL(blob);
+    const element = new Image();
+    element.src = address;
+    try {
+      await element.decode();
+    } catch (error) {
+      URL.revokeObjectURL(address);
+      throw error;
+    }
+    if (!element.naturalWidth || !element.naturalHeight) {
+      URL.revokeObjectURL(address);
+      throw new Error("The image has no size of its own");
+    }
+    return { element, release: () => URL.revokeObjectURL(address) };
+  }
   function loadWithCors(url) {
     return new Promise((resolve2, reject) => {
       const probe2 = new Image();
@@ -2833,12 +2874,13 @@
       probe2.src = url;
     });
   }
-  async function acquireSource(target) {
-    const probe2 = document.createElement("canvas");
-    probe2.width = 1;
-    probe2.height = 1;
+  async function acquireSource(target, options = {}) {
+    if (options.bytes && target.url) return sourceFromBytes(target.url);
     const readable = (candidate2) => {
       try {
+        const probe2 = document.createElement("canvas");
+        probe2.width = 1;
+        probe2.height = 1;
         const ctx = probe2.getContext("2d");
         if (!ctx) return false;
         ctx.drawImage(candidate2, 0, 0, 1, 1);
@@ -2849,6 +2891,7 @@
       }
     };
     const own = ownPixels(target);
+    if (own instanceof HTMLImageElement) await decoded(own);
     if (own && readable(own)) {
       const size = sourceSize(own);
       return { source: own, ...size, release: () => {
@@ -2869,14 +2912,7 @@
       }
     } catch {
     }
-    const blob = await fetchImageBlob(url);
-    const bitmap = await createImageBitmap(blob);
-    return {
-      source: bitmap,
-      width: bitmap.width,
-      height: bitmap.height,
-      release: () => bitmap.close()
-    };
+    return sourceFromBytes(url);
   }
   const TILE_BELOW = 0.7;
   const TILE_ASPECT = 1.5;
@@ -8423,6 +8459,10 @@ ${OVERLAY_CSS}`);
     }
     let lastFailure = "";
     async function translate(target, options = {}) {
+      const outcome = await translateOnce(target, options);
+      return outcome === "tainted" ? await translateOnce(target, { ...options, bytes: true }) : outcome;
+    }
+    async function translateOnce(target, options) {
       const img = target.element;
       const say = (message, ms) => {
         if (!options.quiet) toast(message, ms);
@@ -8457,7 +8497,7 @@ ${OVERLAY_CSS}`);
             return "shown";
           }
         }
-        const prepared = await acquireSource(target);
+        const prepared = await acquireSource(target, { bytes: Boolean(options.bytes) });
         try {
           const size = { width: prepared.width, height: prepared.height };
           let result = target.url ? getCached(key, settings, size) : void 0;
@@ -8550,6 +8590,7 @@ ${OVERLAY_CSS}`);
           prepared.release();
         }
       } catch (error) {
+        if (isTainted(error) && target.url && !options.bytes) return "tainted";
         lastFailure = error.message;
         button2.classList.add("lt-error");
         say(t("toast.lensError", { message: lastFailure }), 5e3);

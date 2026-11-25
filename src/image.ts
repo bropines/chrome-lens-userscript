@@ -252,6 +252,61 @@ export async function encodeRect(
   return { bytes: new Uint8Array(await jpeg.arrayBuffer()) as Bytes, width, height };
 }
 
+/** Wait for an image to be drawable, but not for ever: a lazy one may never load. */
+async function decoded(image: HTMLImageElement): Promise<void> {
+  if (typeof image.decode !== 'function') return;
+  await Promise.race([image.decode().catch(() => {}), new Promise((resolve) => setTimeout(resolve, 2000))]);
+}
+
+/** Whether an error is the browser refusing to export cross-origin pixels. */
+export function isTainted(error: unknown): boolean {
+  const e = error as { name?: string; message?: string } | null;
+  return e?.name === 'SecurityError' || /taint|insecure|cross-origin/i.test(e?.message ?? '');
+}
+
+/**
+ * The picture's own bytes, fetched through the transport: clean whatever the
+ * page's copy is. The last rung of the ladder, and what an encode that turned
+ * out tainted after all falls back to.
+ */
+async function sourceFromBytes(
+  url: string
+): Promise<{ source: Source; width: number; height: number; release(): void }> {
+  const blob = await fetchImageBlob(url);
+  try {
+    const bitmap = await createImageBitmap(blob);
+    return { source: bitmap, width: bitmap.width, height: bitmap.height, release: () => bitmap.close() };
+  } catch (error) {
+    // createImageBitmap takes no SVG, and a logo is often one. A blob: address
+    // is our own origin, so the same bytes as an <img> draw clean.
+    const image = await imageFromBlob(blob).catch(() => null);
+    if (!image) throw error;
+    return {
+      source: image.element,
+      width: image.element.naturalWidth,
+      height: image.element.naturalHeight,
+      release: image.release,
+    };
+  }
+}
+
+async function imageFromBlob(blob: Blob): Promise<{ element: HTMLImageElement; release(): void }> {
+  const address = URL.createObjectURL(blob);
+  const element = new Image();
+  element.src = address;
+  try {
+    await element.decode();
+  } catch (error) {
+    URL.revokeObjectURL(address);
+    throw error;
+  }
+  if (!element.naturalWidth || !element.naturalHeight) {
+    URL.revokeObjectURL(address);
+    throw new Error('The image has no size of its own');
+  }
+  return { element, release: () => URL.revokeObjectURL(address) };
+}
+
 /**
  * Re-request the same URL with CORS so the canvas stays clean.
  *
@@ -298,6 +353,14 @@ export async function prepareImage(
     return await encodeForUpload(acquired.source, settings, acquired.release);
   } catch (error) {
     acquired.release();
+    if (!isTainted(error) || !target.url) throw error;
+  }
+  // Readable by every test and tainted all the same: the bytes are clean.
+  const fetched = await sourceFromBytes(target.url);
+  try {
+    return await encodeForUpload(fetched.source, settings, fetched.release);
+  } catch (error) {
+    fetched.release();
     throw error;
   }
 }
@@ -310,15 +373,26 @@ export async function prepareImage(
  * the element as it stands, the URL re-requested with CORS, then the raw bytes.
  */
 export async function acquireSource(
-  target: Target
+  target: Target,
+  options: { bytes?: boolean } = {}
 ): Promise<{ source: Source; width: number; height: number; release(): void }> {
-  const probe = document.createElement('canvas');
-  probe.width = 1;
-  probe.height = 1;
+  // Asked again after an encode came out tainted: straight to the clean rung.
+  if (options.bytes && target.url) return sourceFromBytes(target.url);
 
-  /** Cheap test for whether this source can be read back out of a canvas. */
+  /**
+   * Cheap test for whether this source can be read back out of a canvas.
+   *
+   * A canvas of its own each time: taint is for the life of a canvas, so one
+   * shared probe that met a cross-origin picture said "unreadable" about every
+   * clean one after it. And the picture must be decoded first - drawing one
+   * that is not yet is a silent no-op, which taints nothing, so the test passed
+   * and the real encode then threw "Tainted canvases may not be exported".
+   */
   const readable = (candidate: Source): boolean => {
     try {
+      const probe = document.createElement('canvas');
+      probe.width = 1;
+      probe.height = 1;
       const ctx = probe.getContext('2d');
       if (!ctx) return false;
       ctx.drawImage(candidate, 0, 0, 1, 1);
@@ -330,6 +404,7 @@ export async function acquireSource(
   };
 
   const own = ownPixels(target);
+  if (own instanceof HTMLImageElement) await decoded(own);
   if (own && readable(own)) {
     const size = sourceSize(own);
     return { source: own, ...size, release: () => {} };
@@ -356,12 +431,5 @@ export async function acquireSource(
     // Falls through to fetching the bytes.
   }
 
-  const blob = await fetchImageBlob(url);
-  const bitmap = await createImageBitmap(blob);
-  return {
-    source: bitmap,
-    width: bitmap.width,
-    height: bitmap.height,
-    release: () => bitmap.close(),
-  };
+  return sourceFromBytes(url);
 }

@@ -336,6 +336,17 @@ in the corner, because it arrives alone a beat before the rest.
 3. `GM_xmlhttpRequest` — only for hosts with no CORS headers. This is what
    `@connect *` is for, and it is rarely reached.
 
+The test between rungs is a 1x1 draw and `getImageData`, and it lied twice. A
+shared probe canvas stays tainted after the first cross-origin picture, so
+every clean one after it failed; and drawing an `<img>` that is not yet decoded
+is a silent no-op that taints nothing, so it passed and the real encode threw
+"Tainted canvases may not be exported". So each test gets its own canvas, an
+`<img>` is `decode()`d first, and an encode that comes out tainted anyway is
+tried once more from the bytes (`translate` -> `translateOnce` with `bytes`,
+and `prepareImage` for the engine). The bytes rung takes SVG too:
+`createImageBitmap` refuses it, so it goes through an `<img>` on a `blob:`
+address, which is our own origin and draws clean.
+
 ### Protobuf is hand-rolled, but field numbers are not
 
 `@bufbuild/protobuf` with generated code measured 160.6 kB / 33.8 kB gzip for

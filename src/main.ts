@@ -9,7 +9,7 @@ import { mayHaveText } from './textlike.js';
 import { ImageSearch, textSearchUrl } from './lens/search.js';
 import type { Selection } from './lens/search.js';
 import { ocrText, translationText } from './lens/text.js';
-import { acquireSource, encodeForUpload, encodeRegion, identify, markStrips, targetSize } from './image.js';
+import { acquireSource, encodeForUpload, encodeRegion, identify, isTainted, markStrips, targetSize } from './image.js';
 import { paintRect } from './render/background.js';
 import { clearStored, getStored, putEdits, putStored, storedStats } from './store.js';
 import type { Near } from './store.js';
@@ -366,9 +366,21 @@ export function start({ framed, hovered }: StartOptions): void {
      * pixels for anything like text before asking Lens.
      */
     auto?: boolean;
+    /** The second attempt at a picture whose pixels turned out unreadable: its own bytes. */
+    bytes?: boolean;
   }
 
+  /**
+   * Translate, or take a translation down - once more from the picture's own
+   * bytes if the pixels that every test called readable turned out tainted when
+   * it came to exporting them.
+   */
   async function translate(target: Target, options: TranslateOptions = {}): Promise<Outcome> {
+    const outcome = await translateOnce(target, options);
+    return outcome === 'tainted' ? ((await translateOnce(target, { ...options, bytes: true })) as Outcome) : outcome;
+  }
+
+  async function translateOnce(target: Target, options: TranslateOptions): Promise<Outcome | 'tainted'> {
     const img = target.element;
     const say = (message: string, ms?: number): void => {
       if (!options.quiet) toast(message, ms);
@@ -422,7 +434,7 @@ export function start({ framed, hovered }: StartOptions): void {
       // Pixels are needed for rendering either way. The JPEG encode and the round
       // trip are not, so both sit behind the response cache - encoding an upload
       // nobody sends was the expensive half of a cache hit.
-      const prepared = await acquireSource(target);
+      const prepared = await acquireSource(target, { bytes: Boolean(options.bytes) });
       try {
         // What the pixels measure, so a cached answer for a different crop under
         // the same address is a miss rather than a translation laid out for
@@ -544,6 +556,7 @@ export function start({ framed, hovered }: StartOptions): void {
         prepared.release();
       }
     } catch (error) {
+      if (isTainted(error) && target.url && !options.bytes) return 'tainted';
       lastFailure = (error as Error).message;
       button.classList.add('lt-error');
       say(t('toast.lensError', { message: lastFailure }), 5000);
