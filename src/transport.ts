@@ -28,6 +28,32 @@ export interface BinaryRequest {
   headers: Record<string, string>;
   body: Bytes;
   timeoutMs: number;
+  /**
+   * The same request with nothing binary in either direction, for a host
+   * that cannot carry a binary body at all. AdGuard for Android passes
+   * `GM_xmlhttpRequest` through a local API that writes a typed array out as
+   * comma-separated numbers, re-encodes a binary string as UTF-8 (a NUL ends
+   * it) and refuses anything over 64 kB with "invalid request". A transport
+   * that finds both binary shapes refused may try this before giving up.
+   */
+  text?: TextAlternative;
+}
+
+/** A request whose body and answer are plain text. */
+export interface TextRequest {
+  url: string;
+  headers: Record<string, string>;
+  body: string;
+}
+
+export interface TextAlternative {
+  /**
+   * The text request, made to pass `fits` - the host's own limit - by sending
+   * a smaller picture where it has to.
+   */
+  build(fits: (body: string) => boolean): Promise<TextRequest>;
+  /** The answer as it arrived, as the bytes the binary request would have had. */
+  decode(bytes: Bytes): Bytes;
 }
 
 /** What a fetch of someone else's image may need to say about where it is from. */

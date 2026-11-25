@@ -1,6 +1,7 @@
 import { getTransport } from '../transport.js';
 import { buildRequest } from './request.js';
 import { parseResponse } from './response.js';
+import { textAlternative } from './wire-text.js';
 import type { LensOptions, LensResult, PreparedImage } from '../types.js';
 
 export const LENS_ENDPOINT = 'https://lensfrontend-pa.googleapis.com/v1/crupload';
@@ -32,6 +33,7 @@ export async function callLens(
     },
     body: buildRequest(image, settings),
     timeoutMs: settings.timeoutMs,
+    text: textAlternative(image, settings, LENS_ENDPOINT),
   });
 
   try {

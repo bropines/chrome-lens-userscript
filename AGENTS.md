@@ -80,6 +80,7 @@ src/
   gen/fields.ts         GENERATED - do not edit
   lens/                 request builder, response parser, transport, plain text;
                         tiles.ts cuts a long strip and merges the answers (pure),
+                        wire-text.ts the same request as text both ways;
                         ask.ts sends them
   render/
     layout.ts           the pure layout maths, shared by both renderers
@@ -416,7 +417,22 @@ Two more differences live in the same file:
   the string case lossless - a host that honours `responseType` ignores it,
   since it only governs how *text* is decoded.
 
-Under both of those sits a third rung: a plain `fetch`. AdGuard for Android's
+**And on AdGuard for Android neither binary shape can work.** Read over CDP on
+the device: its `GM_xmlhttpRequest` is a POST from the page to
+`local.adguard.org/adguard-ajax-api/api`, a form with the body as one field. A
+typed array goes in as `String(array)` - "10,189,131,..." - and a binary string
+is re-encoded as UTF-8, with a NUL ending it; and the API answers "invalid
+request" to any form over 64 kB, which every picture is. Lens never sees it. So
+the engine offers the same request as text (`lens/wire-text.ts`, the
+`text` field of a `BinaryRequest`): proto3 JSON with the picture as base64,
+`$alt=proto` and `X-Goog-Encode-Response-If-Executable: base64`, which brings
+the usual binary answer back as base64 `text/plain` - JSPB is refused for this
+service, plain JSON is not. `gm.ts` tries it as a third shape after two
+`400`s and latches it like the others. The picture is re-encoded smaller,
+quality first and then size, until the URL-encoded body is under 60 kB; that
+costs detail, and is still a translation where there was none.
+
+Under all of those sits a last rung: a plain `fetch`. AdGuard for Android's
 `GM_xmlhttpRequest` reported a network error without the request ever leaving
 the device - the DNS log showed nothing - and the Lens endpoint turns out to
 answer a CORS preflight, so a page-context request reaches it. It is **last**

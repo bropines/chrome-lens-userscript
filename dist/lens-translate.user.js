@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Lens Translate
 // @namespace    https://github.com/bropines/chrome-lens-userscript
-// @version      2.14.0
+// @version      2.14.1
 // @author       bropines
 // @description  Hover any image, click the button, and its text is translated in place - rendered the way Chromium's own Lens overlay does it.
 // @license      MIT
@@ -256,7 +256,16 @@
     error.name = "TimeoutError";
     return error;
   }
-  function sendViaGm(attempt) {
+  const TEXT_BODY_LIMIT = 6e4;
+  const fitsTextChannel = (body2) => encodeURIComponent(body2).length <= TEXT_BODY_LIMIT;
+  async function sendViaGm(attempt) {
+    if (attempt.encoding !== "text" || !attempt.text) return sendBodyViaGm(attempt);
+    const alternative = attempt.text;
+    const textual = await alternative.build(fitsTextChannel);
+    const response = await sendBodyViaGm({ ...attempt, ...textual, body: null, textBody: textual.body });
+    return { ...response, bytes: alternative.decode(response.bytes) };
+  }
+  function sendBodyViaGm(attempt) {
     return new Promise((resolve2, reject) => {
       if (!request) {
         reject(new Error(`${hostName()} has no GM_xmlhttpRequest`));
@@ -278,13 +287,14 @@
           });
         })();
       };
-      const data = attempt.body === null ? void 0 : attempt.encoding === "typed" ? attempt.body : toLatin1(attempt.body);
+      const data = attempt.textBody !== void 0 ? attempt.textBody : attempt.body === null ? void 0 : attempt.encoding === "typed" ? attempt.body : toLatin1(attempt.body);
+      const binary = attempt.textBody === void 0;
       request({
         method: attempt.method,
         url: attempt.url,
         headers: attempt.headers,
         ...attempt.withCookies === void 0 ? {} : { anonymous: !attempt.withCookies },
-        ...data === void 0 ? {} : { data, binary: true },
+        ...data === void 0 ? {} : binary ? { data, binary: true } : { data },
         responseType: "arraybuffer",
         overrideMimeType: BINARY_MIME,
         timeout: attempt.timeoutMs,
@@ -324,9 +334,9 @@
   }
   let workingTransport = null;
   let workingEncoding = null;
-  function ladder(hasBody, remember, allowFetch) {
+  function ladder(hasBody, remember, allowFetch, hasText = false) {
     const latchedEncoding = remember ? workingEncoding : null;
-    const encodings = !hasBody ? ["typed"] : latchedEncoding ? [latchedEncoding] : ["typed", "binary-string"];
+    const encodings = !hasBody ? ["typed"] : latchedEncoding && (latchedEncoding !== "text" || hasText) ? [latchedEncoding] : hasText ? ["typed", "binary-string", "text"] : ["typed", "binary-string"];
     const rungs = encodings.map((encoding) => ({ transport: "gm", encoding }));
     if (allowFetch) rungs.push({ transport: "fetch", encoding: "typed" });
     const latchedTransport = remember ? workingTransport : null;
@@ -335,7 +345,7 @@
   const BAD_REQUEST = 400;
   async function climb(attempt, remember, allowFetch = true) {
     const failures = [];
-    for (const rung of ladder(attempt.body !== null, remember, allowFetch)) {
+    for (const rung of ladder(attempt.body !== null, remember, allowFetch, Boolean(attempt.text))) {
       const next = { ...attempt, encoding: rung.encoding };
       let response;
       try {
@@ -697,7 +707,7 @@
     }
     return null;
   }
-  const VERSION = "2.14.0";
+  const VERSION = "2.14.1";
   const EN = {
     // --- the controls over a picture
     "act.translate": "Translate",
@@ -2272,8 +2282,8 @@
   }
   const PLATFORM_WEB = 3;
   const SURFACE_CHROMIUM = 4;
-  const FILTER_TRANSLATE = 2;
-  const FILTER_AUTO = 7;
+  const FILTER_TRANSLATE$1 = 2;
+  const FILTER_AUTO$1 = 7;
   const RENDERING_ENV_LENS_OVERLAY = 14;
   function randomUuid() {
     const high = BigInt(Math.floor(Math.random() * 1073741824));
@@ -2291,10 +2301,10 @@
       F.LensOverlayClientContext.clientFilters,
       (filters) => filters.sub(F.AppliedFilters.filter, (filter) => {
         if (!translate) {
-          filter.int(F.AppliedFilter.filterType, FILTER_AUTO);
+          filter.int(F.AppliedFilter.filterType, FILTER_AUTO$1);
           return;
         }
-        filter.int(F.AppliedFilter.filterType, FILTER_TRANSLATE);
+        filter.int(F.AppliedFilter.filterType, FILTER_TRANSLATE$1);
         filter.sub(
           F.AppliedFilter.translate,
           (t2) => t2.str(F.AppliedFilter_Translate.targetLanguage, settings.targetLang).str(F.AppliedFilter_Translate.sourceLanguage, settings.sourceLang)
@@ -2433,6 +2443,115 @@
       blocks: parseTranslation(objects)
     };
   }
+  const FILTER_TRANSLATE = 2;
+  const FILTER_AUTO = 7;
+  function jsonRequest(imageBase64, width, height, settings) {
+    const translate = Boolean(settings.targetLang);
+    const compact = (fields) => Object.fromEntries(Object.entries(fields).filter(([, value]) => value));
+    return JSON.stringify({
+      objectsRequest: {
+        requestContext: {
+          requestId: { uuid: randomUuid().toString(), sequenceId: 1, imageSequenceId: 1 },
+          clientContext: {
+            platform: PLATFORM_WEB,
+            surface: SURFACE_CHROMIUM,
+            localeContext: compact({
+              language: settings.ocrLang || settings.targetLang,
+              region: settings.region,
+              timeZone: settings.timeZone
+            }),
+            clientFilters: {
+              filter: [
+                translate ? {
+                  filterType: FILTER_TRANSLATE,
+                  translate: compact({ targetLanguage: settings.targetLang, sourceLanguage: settings.sourceLang })
+                } : { filterType: FILTER_AUTO }
+              ]
+            },
+            renderingContext: { renderingEnvironment: RENDERING_ENV_LENS_OVERLAY }
+          }
+        },
+        imageData: { payload: { imageBytes: imageBase64 }, imageMetadata: { width, height } }
+      }
+    });
+  }
+  function toBase64(bytes2) {
+    let binary = "";
+    for (let i = 0; i < bytes2.length; i += 32768) {
+      binary += String.fromCharCode(...bytes2.subarray(i, i + 32768));
+    }
+    return btoa(binary);
+  }
+  function fromBase64(text2) {
+    const clean = text2.replace(/\s+/g, "").replace(/-/g, "+").replace(/_/g, "/");
+    const binary = atob(clean);
+    const out = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i += 1) out[i] = binary.charCodeAt(i);
+    return out;
+  }
+  function isBase64Text(bytes2) {
+    const head = bytes2.subarray(0, 256);
+    if (!head.length) return false;
+    for (const byte of head) {
+      const ok = byte >= 65 && byte <= 90 || byte >= 97 && byte <= 122 || byte >= 48 && byte <= 57 || byte === 43 || byte === 47 || byte === 61 || byte === 45 || byte === 95 || byte === 10 || byte === 13;
+      if (!ok) return false;
+    }
+    return true;
+  }
+  async function reencode(jpeg, width, height, scale, quality) {
+    const bitmap = await createImageBitmap(new Blob([jpeg], { type: "image/jpeg" }));
+    try {
+      const w = Math.max(1, Math.round(width * scale));
+      const h = Math.max(1, Math.round(height * scale));
+      const canvas = document.createElement("canvas");
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) throw new Error("Could not get a 2d canvas context");
+      ctx.drawImage(bitmap, 0, 0, w, h);
+      const blob = await new Promise((resolve2) => canvas.toBlob(resolve2, "image/jpeg", quality));
+      if (!blob) throw new Error("Could not encode the smaller picture");
+      return { bytes: new Uint8Array(await blob.arrayBuffer()), width: w, height: h };
+    } finally {
+      bitmap.close();
+    }
+  }
+  const STEPS = [
+    [1, 0.7],
+    [1, 0.55],
+    [0.85, 0.55],
+    [0.72, 0.55],
+    [0.6, 0.5],
+    [0.5, 0.5],
+    [0.4, 0.45],
+    [0.3, 0.4]
+  ];
+  function textAlternative(image, settings, url) {
+    return {
+      async build(fits) {
+        const wrap = (body2) => ({
+          url: `${url}?%24alt=proto`,
+          headers: {
+            "Content-Type": "application/json",
+            "X-Goog-Api-Key": settings.apiKey,
+            "X-Goog-Encode-Response-If-Executable": "base64"
+          },
+          body: body2
+        });
+        const first = jsonRequest(toBase64(image.imageBytes), image.width, image.height, settings);
+        if (fits(first)) return wrap(first);
+        for (const [scale, quality] of STEPS) {
+          const smaller = await reencode(image.imageBytes, image.width, image.height, scale, quality);
+          const body2 = jsonRequest(toBase64(smaller.bytes), smaller.width, smaller.height, settings);
+          if (fits(body2)) return wrap(body2);
+        }
+        throw new Error("The picture does not fit what this userscript host can send, even made small");
+      },
+      decode(bytes2) {
+        return isBase64Text(bytes2) ? fromBase64(new TextDecoder().decode(bytes2)) : bytes2;
+      }
+    };
+  }
   const LENS_ENDPOINT = "https://lensfrontend-pa.googleapis.com/v1/crupload";
   const IMAGE_TIMEOUT_MS = 3e4;
   async function callLens(image, settings) {
@@ -2443,7 +2562,8 @@
         "X-Goog-Api-Key": settings.apiKey
       },
       body: buildRequest(image, settings),
-      timeoutMs: settings.timeoutMs
+      timeoutMs: settings.timeoutMs,
+      text: textAlternative(image, settings, LENS_ENDPOINT)
     });
     try {
       return parseResponse(response.bytes);

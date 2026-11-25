@@ -13,6 +13,7 @@ import type {
   BinaryRequest,
   BinaryResponse,
   GetOptions,
+  TextAlternative,
   Transport as EngineTransport,
 } from './transport.js';
 import type { Bytes } from './types.js';
@@ -486,7 +487,7 @@ function timedOut(): Error {
 }
 
 /** How the body goes on the wire. Not a preference - a host capability. */
-type BodyEncoding = 'typed' | 'binary-string';
+type BodyEncoding = 'typed' | 'binary-string' | 'text';
 
 /** As much of a GM response as this script reads, from either callback. */
 interface RawResponse {
@@ -510,9 +511,28 @@ interface Attempt {
   body: Bytes | null;
   encoding: BodyEncoding;
   timeoutMs: number;
+  /** The request as text both ways, where the caller can make one. */
+  text?: TextAlternative;
 }
 
-function sendViaGm(attempt: Attempt): Promise<HostResponse> {
+/**
+ * The most a text body may grow to here. AdGuard for Android's local API
+ * refuses a request over 64 kB, and it URL-encodes the body into a form along
+ * with the address, the headers and two tokens; 60 kB of encoded body leaves
+ * room for those. Measured on the device: 64,347 bytes passed, 70,347 did not.
+ */
+const TEXT_BODY_LIMIT = 60_000;
+const fitsTextChannel = (body: string): boolean => encodeURIComponent(body).length <= TEXT_BODY_LIMIT;
+
+async function sendViaGm(attempt: Attempt): Promise<HostResponse> {
+  if (attempt.encoding !== 'text' || !attempt.text) return sendBodyViaGm(attempt);
+  const alternative = attempt.text;
+  const textual = await alternative.build(fitsTextChannel);
+  const response = await sendBodyViaGm({ ...attempt, ...textual, body: null, textBody: textual.body });
+  return { ...response, bytes: alternative.decode(response.bytes) };
+}
+
+function sendBodyViaGm(attempt: Attempt & { textBody?: string }): Promise<HostResponse> {
   return new Promise((resolve, reject) => {
     if (!request) {
       reject(new Error(`${hostName()} has no GM_xmlhttpRequest`));
@@ -538,18 +558,21 @@ function sendViaGm(attempt: Attempt): Promise<HostResponse> {
     };
 
     const data =
-      attempt.body === null
-        ? undefined
-        : attempt.encoding === 'typed'
-          ? attempt.body
-          : toLatin1(attempt.body);
+      attempt.textBody !== undefined
+        ? attempt.textBody
+        : attempt.body === null
+          ? undefined
+          : attempt.encoding === 'typed'
+            ? attempt.body
+            : toLatin1(attempt.body);
+    const binary = attempt.textBody === undefined;
 
     request({
       method: attempt.method,
       url: attempt.url,
       headers: attempt.headers,
       ...(attempt.withCookies === undefined ? {} : { anonymous: !attempt.withCookies }),
-      ...(data === undefined ? {} : { data, binary: true }),
+      ...(data === undefined ? {} : binary ? { data, binary: true } : { data }),
       responseType: 'arraybuffer',
       overrideMimeType: BINARY_MIME,
       timeout: attempt.timeoutMs,
@@ -634,13 +657,15 @@ interface Rung {
   encoding: BodyEncoding;
 }
 
-function ladder(hasBody: boolean, remember: boolean, allowFetch: boolean): Rung[] {
+function ladder(hasBody: boolean, remember: boolean, allowFetch: boolean, hasText = false): Rung[] {
   const latchedEncoding = remember ? workingEncoding : null;
   const encodings: BodyEncoding[] = !hasBody
     ? ['typed']
-    : latchedEncoding
+    : latchedEncoding && (latchedEncoding !== 'text' || hasText)
       ? [latchedEncoding]
-      : ['typed', 'binary-string'];
+      : hasText
+        ? ['typed', 'binary-string', 'text']
+        : ['typed', 'binary-string'];
 
   const rungs: Rung[] = encodings.map((encoding) => ({ transport: 'gm' as const, encoding }));
   if (allowFetch) rungs.push({ transport: 'fetch', encoding: 'typed' });
@@ -655,7 +680,7 @@ const BAD_REQUEST = 400;
 async function climb(attempt: Attempt, remember: boolean, allowFetch = true): Promise<HostResponse> {
   const failures: string[] = [];
 
-  for (const rung of ladder(attempt.body !== null, remember, allowFetch)) {
+  for (const rung of ladder(attempt.body !== null, remember, allowFetch, Boolean(attempt.text))) {
     const next = { ...attempt, encoding: rung.encoding };
     let response: HostResponse;
     try {

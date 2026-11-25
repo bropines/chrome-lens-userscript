@@ -388,6 +388,43 @@ describe('the body encoding ladder', () => {
     expect(typeof sent[2]?.data).toBe('string');
   });
 
+  test('when both binary shapes are refused, the request goes as text, and that is kept', async () => {
+    // AdGuard for Android: its local API refuses a binary body either way.
+    const answer = Array.from(new TextEncoder().encode(btoa('\u0012\u0003abc')));
+    const { sent, request } = fakeRequest([{ status: 400 }, { status: 400 }, { status: 200, body: answer }]);
+    const gm = await loadWith({ GM_xmlhttpRequest: request });
+    const built: number[] = [];
+    const post = () =>
+      gm.postBinary({
+        url: 'https://lensfrontend-pa.googleapis.com/v1/crupload',
+        headers: { 'Content-Type': 'application/x-protobuf' },
+        body: Uint8Array.from([0, 128, 255]) as never,
+        timeoutMs: 1000,
+        text: {
+          async build(fits) {
+            const body = '{"x":"' + 'A'.repeat(70_000) + '"}';
+            built.push(fits(body) ? 1 : 0, fits('{"x":1}') ? 1 : 0);
+            return { url: 'https://lensfrontend-pa.googleapis.com/v1/crupload?%24alt=proto', headers: { 'Content-Type': 'application/json' }, body: '{"x":1}' };
+          },
+          decode: (bytes) => Uint8Array.from(atob(new TextDecoder().decode(bytes)), (c) => c.charCodeAt(0)) as never,
+        },
+      });
+
+    const response = await post();
+    expect(response.status).toBe(200);
+    expect([...response.bytes]).toEqual([0x12, 0x03, 0x61, 0x62, 0x63]);
+    expect(sent).toHaveLength(3);
+    expect(sent[2]?.data).toBe('{"x":1}');
+    expect(sent[2]?.url).toContain('%24alt=proto');
+    expect((sent[2] as unknown as Record<string, unknown>)['binary']).toBeUndefined();
+    // Over the host's limit does not fit; a small body does.
+    expect(built).toEqual([0, 1]);
+
+    await post();
+    expect(sent).toHaveLength(4);
+    expect(sent[3]?.data).toBe('{"x":1}');
+  });
+
   test('any other status is a real answer and is not retried', async () => {
     const { sent, request } = fakeRequest([{ status: 403 }]);
     const gm = await loadWith({ GM_xmlhttpRequest: request });
