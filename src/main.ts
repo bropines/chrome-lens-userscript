@@ -40,6 +40,7 @@ import { SETTINGS_KEYS, getSettings, reloadSettings, saveSettings } from './sett
 import { LOCALE_KEYS, onLocaleChange, t, useLanguage } from './i18n/index.js';
 import type { Key } from './i18n/index.js';
 import { STATE_KEY, getState, reloadState, setState } from './state.js';
+import { browserTranslation } from './pagetranslate.js';
 import { SITES_KEY, hostOf, reloadSites, setSiteMode, siteMode } from './sites.js';
 import type { SiteMode } from './sites.js';
 import {
@@ -99,6 +100,16 @@ export function start({ framed, hovered }: StartOptions): void {
    * the commands that change it update this as well as the store.
    */
   let site: SiteMode = siteMode();
+
+  /**
+   * The language the browser translated this page into, when it has: '' when
+   * it did but did not say into what, null when the page is as it arrived.
+   * While it is set, pictures are translated as they come into view, into that
+   * language, as if "translate as you scroll" were on for this tab.
+   */
+  let pageLang: string | null = null;
+  /** The stored settings, with the browser's language in place of ours while it applies. */
+  const adopt = (stored: Settings): Settings => (pageLang ? { ...stored, targetLang: pageLang } : stored);
 
   /** Whether the script should act on this page at all. */
   const active = (): boolean => settings.enabled && site !== 'off';
@@ -698,9 +709,10 @@ export function start({ framed, hovered }: StartOptions): void {
    * nothing; the pixel test for anything like text (`textlike.ts`); and a
    * budget of requests a minute, the rest waiting their turn.
    */
-  const autoOn = (): boolean => site === 'auto' || (site === 'default' && settings.autoTranslate);
+  const autoOn = (): boolean =>
+    site === 'auto' || (site === 'default' && (settings.autoTranslate || pageLang !== null));
 
-  const autoTried = new WeakMap<HTMLElement, string>();
+  let autoTried = new WeakMap<HTMLElement, string>();
   let lastAutoComplaint = 0;
 
   /** A picture worth translating unasked, right now. */
@@ -1197,7 +1209,8 @@ export function start({ framed, hovered }: StartOptions): void {
   }
 
   function onSaved(saved: Settings): void {
-    settings = saved;
+    settings = adopt(saved);
+    checkPageTranslation();
     useLanguage(settings.language);
     applySettings();
     applyButtonMode();
@@ -2381,7 +2394,7 @@ export function start({ framed, hovered }: StartOptions): void {
   if (!framed) command('diagnostics', 'cmd.diagnostics', openDiagnostics, { essential: true });
 
   command('toggle', 'cmd.toggle', () => {
-    settings = saveSettings({ enabled: !settings.enabled });
+    settings = adopt(saveSettings({ enabled: !settings.enabled }));
     if (!settings.enabled) {
       showing.clear();
       uncoverAll();
@@ -2431,6 +2444,46 @@ export function start({ framed, hovered }: StartOptions): void {
   // brought the button out; it would otherwise wait for the next one.
   if (hovered) showButton(hovered);
 
+  /**
+   * The browser's own page translation, followed.
+   *
+   * Turned on, it translates the pictures in view and those scrolled to, into
+   * the language the page went into; "Show original" takes them all down again,
+   * since that is what the person asked for. Watched with an observer on the
+   * root element's `class` and `lang` alone, which costs nothing between
+   * changes. See pagetranslate.ts for what counts as translated.
+   */
+  const initialLang = document.documentElement.lang;
+
+  function checkPageTranslation(): void {
+    const root = document.documentElement;
+    const next = settings.followPageTranslation
+      ? browserTranslation({ className: root.className, lang: root.lang, initialLang })
+      : null;
+    if (next === pageLang) return;
+    pageLang = next;
+    settings = adopt(getSettings());
+    if (next === null) {
+      showing.clear();
+      uncoverAll();
+      clearAllOverlays();
+      markTranslated(false);
+      syncWatchers();
+      return;
+    }
+    // A fresh request from the person: what they undid before may be wanted now.
+    autoTried = new WeakMap();
+    // Into the new language, where something is already showing in another.
+    if (showing.size) void redrawShowing();
+    if (!syncWatchers()) refresh();
+  }
+
+  new MutationObserver(checkPageTranslation).observe(document.documentElement, {
+    attributes: true,
+    attributeFilter: ['class', 'lang'],
+  });
+  checkPageTranslation();
+
   // A host whose storage is promise-only (Greasemonkey 4, Safari's Userscripts)
   // has nothing to give a synchronous read, so everything above started from the
   // defaults. Once the saved values arrive they are adopted - without this the
@@ -2438,7 +2491,7 @@ export function start({ framed, hovered }: StartOptions): void {
   // per-site.
   void preloadStored([...SETTINGS_KEYS, SITES_KEY, ...LOCALE_KEYS, STATE_KEY]).then((arrived) => {
     if (!arrived) return;
-    settings = reloadSettings();
+    settings = adopt(reloadSettings());
     reloadSites();
     reloadState();
     site = siteMode();
@@ -2448,6 +2501,7 @@ export function start({ framed, hovered }: StartOptions): void {
     applyLook(settings.uiTheme, settings.uiAccent);
     applySettings();
     applyButtonMode();
+    checkPageTranslation();
   });
   // Asked once at document-idle is a snapshot, and the answer can arrive late or
   // change under you - a mouse plugged into a tablet, a window moved between

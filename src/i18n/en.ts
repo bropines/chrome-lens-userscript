@@ -446,6 +446,9 @@ export const EN = {
   'set.frames.label': 'Work inside frames',
   'set.frames.hint':
     'for readers and galleries that show pages in an iframe; small frames such as ads are always left alone',
+  'set.followPageTranslation.label': "Follow the browser's page translation",
+  'set.followPageTranslation.hint':
+    'when the browser translates the page, its pictures are translated too, into the same language; Show original takes them down',
 
   // --- settings: Advanced
   'set.jpegQuality.label': 'Upload quality',

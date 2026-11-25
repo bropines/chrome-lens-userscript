@@ -18,6 +18,7 @@ It updates itself. Works on desktop and on Android.
 - **Point at a picture and press the button** that appears in its corner. Press it again to undo.
 - **Hold the button** to peek at the original.
 - **Alt+click** a picture translates it too; **Alt+Shift+T** translates everything on screen.
+- **Translate the page with the browser** (Chrome's translate bar) and the pictures are translated too, into the same language.
 - On a **phone** the button sits over the picture you are reading. Tap it.
 - The **`...` button** has the rest: search the image, ask AI about it, copy the text, copy or save the translated picture, fix the translation by hand.
 

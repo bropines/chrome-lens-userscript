@@ -77,6 +77,7 @@ export const DEFAULTS: Settings = {
   uiMode: 'simple',
   aiPrompt: 'What is in this picture?',
   frames: true,
+  followPageTranslation: true,
   popupOpacity: MAX_OPACITY,
   uiTheme: 'auto',
   uiAccent: 'zinc',
@@ -260,6 +261,7 @@ export const FIELDS: ReadonlyArray<Field> = [
   { key: 'autoTextCheck', tab: 'behaviour', type: 'checkbox' },
   { key: 'autoPerMinute', tab: 'behaviour', type: 'number', min: 1, max: 120, step: 1 },
   { key: 'frames', tab: 'behaviour', type: 'checkbox' },
+  { key: 'followPageTranslation', tab: 'behaviour', type: 'checkbox' },
 
   // Advanced
   { key: 'jpegQuality', tab: 'advanced', type: 'range', min: 0.1, max: 1, step: 0.05, unit: '%' },

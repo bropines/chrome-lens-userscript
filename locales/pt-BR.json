@@ -421,5 +421,7 @@
   "set.uiAccent.opt.violet": "Violeta",
   "set.uiAccent.opt.green": "Verde",
   "set.uiAccent.opt.orange": "Laranja",
-  "set.uiAccent.opt.rose": "Rosa"
+  "set.uiAccent.opt.rose": "Rosa",
+  "set.followPageTranslation.label": "Seguir a tradução de página do navegador",
+  "set.followPageTranslation.hint": "quando o navegador traduz a página, as imagens também são traduzidas para o mesmo idioma; Mostrar original as remove"
 }

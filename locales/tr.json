@@ -421,5 +421,7 @@
   "set.uiAccent.opt.violet": "Mor",
   "set.uiAccent.opt.green": "Yeşil",
   "set.uiAccent.opt.orange": "Turuncu",
-  "set.uiAccent.opt.rose": "Gül"
+  "set.uiAccent.opt.rose": "Gül",
+  "set.followPageTranslation.label": "Tarayıcının sayfa çevirisini izle",
+  "set.followPageTranslation.hint": "tarayıcı sayfayı çevirdiğinde resimleri de aynı dile çevrilir; Orijinali göster onları kaldırır"
 }

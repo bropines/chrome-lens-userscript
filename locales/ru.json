@@ -421,5 +421,7 @@
   "set.uiAccent.opt.violet": "Фиолетовый",
   "set.uiAccent.opt.green": "Зелёный",
   "set.uiAccent.opt.orange": "Оранжевый",
-  "set.uiAccent.opt.rose": "Розовый"
+  "set.uiAccent.opt.rose": "Розовый",
+  "set.followPageTranslation.label": "Следовать переводу страницы браузером",
+  "set.followPageTranslation.hint": "когда браузер переводит страницу, картинки тоже переводятся, на тот же язык; «Показать оригинал» их снимает"
 }

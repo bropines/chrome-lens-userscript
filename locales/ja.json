@@ -421,5 +421,7 @@
   "set.uiAccent.opt.violet": "紫",
   "set.uiAccent.opt.green": "緑",
   "set.uiAccent.opt.orange": "オレンジ",
-  "set.uiAccent.opt.rose": "ローズ"
+  "set.uiAccent.opt.rose": "ローズ",
+  "set.followPageTranslation.label": "ブラウザのページ翻訳に合わせる",
+  "set.followPageTranslation.hint": "ブラウザがページを翻訳すると、画像も同じ言語に翻訳されます。「原文を表示」で元に戻ります"
 }

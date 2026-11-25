@@ -421,5 +421,7 @@
   "set.uiAccent.opt.violet": "Violett",
   "set.uiAccent.opt.green": "Grün",
   "set.uiAccent.opt.orange": "Orange",
-  "set.uiAccent.opt.rose": "Rosa"
+  "set.uiAccent.opt.rose": "Rosa",
+  "set.followPageTranslation.label": "Der Seitenübersetzung des Browsers folgen",
+  "set.followPageTranslation.hint": "übersetzt der Browser die Seite, werden auch ihre Bilder übersetzt, in dieselbe Sprache; „Original anzeigen“ nimmt sie wieder ab"
 }

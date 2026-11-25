@@ -68,6 +68,7 @@ src/
   i18n/                 en.ts is every string by key; locale.ts is the pure part
                         (validate, pick, fetch); index.ts is t() and the loading
   sites.ts              per-hostname rules: default, off, auto-translate
+  pagetranslate.ts      whether the browser translated the page, into what (pure)
   languages.ts          language codes; labels come from Intl.DisplayNames
   cache.ts              LRU over Lens responses and renderings, one byte budget
   store.ts              the same answers kept across reloads, keyed by content
@@ -829,6 +830,24 @@ either theme, and it is declared after the theme rules, which have the same
 specificity. The controls over a picture stay dark glass whatever the theme;
 only the main button takes the tint, and not while it is green or red, which
 is news.
+
+### The browser's page translation is noticed, not asked
+
+No browser tells a page or an extension that its translator ran, and none lets
+anything join in. What Chrome does is mark the root element - `translated-ltr`
+or `-rtl` and a `lang` set to the target - and take both back on "Show
+original". `pagetranslate.ts` reads those, and a `lang` that changed to a
+language we can name counts too, for browsers that mark only that. An observer
+on the root's `class` and `lang` costs nothing between changes.
+
+While the page is translated, `autoOn` is true for the tab and `settings` is
+the stored settings with `targetLang` replaced (`adopt` in main.ts, applied at
+every place `settings` is assigned); the settings window still shows and saves
+the stored value. Turning it on clears `autoTried`, since asking the browser to
+translate is a fresh request, and redraws what is already showing in the new
+language; "Show original" takes every translation down. The harness drives it
+by setting the class and the attribute, which is all it can do - headless
+Chrome has no translate bar.
 
 ### Searching, and the UI around it
 

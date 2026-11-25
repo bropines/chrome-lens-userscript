@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Lens Translate
 // @namespace    https://github.com/bropines/chrome-lens-userscript
-// @version      2.13.1
+// @version      2.14.0
 // @author       bropines
 // @description  Hover any image, click the button, and its text is translated in place - rendered the way Chromium's own Lens overlay does it.
 // @license      MIT
@@ -697,7 +697,7 @@
     }
     return null;
   }
-  const VERSION = "2.13.1";
+  const VERSION = "2.14.0";
   const EN = {
     // --- the controls over a picture
     "act.translate": "Translate",
@@ -1110,6 +1110,8 @@
     "set.minImageSize.hint": "lower reaches small pictures, and puts a button on icons and avatars",
     "set.frames.label": "Work inside frames",
     "set.frames.hint": "for readers and galleries that show pages in an iframe; small frames such as ads are always left alone",
+    "set.followPageTranslation.label": "Follow the browser's page translation",
+    "set.followPageTranslation.hint": "when the browser translates the page, its pictures are translated too, into the same language; Show original takes them down",
     // --- settings: Advanced
     "set.jpegQuality.label": "Upload quality",
     "set.jpegQuality.hint": "higher can read fine print better and uploads more; 40% is what Chromium sends",
@@ -1609,6 +1611,7 @@
     uiMode: "simple",
     aiPrompt: "What is in this picture?",
     frames: true,
+    followPageTranslation: true,
     popupOpacity: MAX_OPACITY,
     uiTheme: "auto",
     uiAccent: "zinc",
@@ -1753,6 +1756,7 @@
     { key: "autoTextCheck", tab: "behaviour", type: "checkbox" },
     { key: "autoPerMinute", tab: "behaviour", type: "number", min: 1, max: 120, step: 1 },
     { key: "frames", tab: "behaviour", type: "checkbox" },
+    { key: "followPageTranslation", tab: "behaviour", type: "checkbox" },
     // Advanced
     { key: "jpegQuality", tab: "advanced", type: "range", min: 0.1, max: 1, step: 0.05, unit: "%" },
     { key: "maxArea", tab: "advanced", type: "number", min: 1e5, max: 16e6, step: 1e5 },
@@ -5555,6 +5559,44 @@
     cache = next;
     writeStored(STATE_KEY, next);
   }
+  function browserTranslation(marks) {
+    const marked = /(^|\s)translated-(ltr|rtl)(\s|$)/.test(marks.className);
+    const now = lensLanguage(marks.lang);
+    const before = lensLanguage(marks.initialLang);
+    if (marked) return now ?? "";
+    if (now && now !== before) return now;
+    return null;
+  }
+  const ALIASES = {
+    iw: "he",
+    in: "id",
+    jw: "jv",
+    tl: "fil",
+    nb: "no",
+    nn: "no",
+    zh: "zh-CN",
+    "zh-hans": "zh-CN",
+    "zh-cn": "zh-CN",
+    "zh-sg": "zh-CN",
+    "zh-hant": "zh-TW",
+    "zh-tw": "zh-TW",
+    "zh-hk": "zh-TW",
+    "zh-mo": "zh-TW"
+  };
+  function lensLanguage(tag) {
+    const clean = (tag ?? "").trim().toLowerCase().replace(/_/g, "-");
+    if (!clean) return null;
+    const parts = clean.split("-");
+    const primary = parts[0] ?? "";
+    const script2 = parts.find((part) => part === "hans" || part === "hant");
+    const candidates = [clean, script2 ? `${primary}-${script2}` : "", primary].filter(Boolean);
+    for (const candidate2 of candidates) {
+      const alias = ALIASES[candidate2];
+      if (alias) return alias;
+      if (LANGUAGES.includes(candidate2)) return candidate2;
+    }
+    return null;
+  }
   const SITES_KEY = "lens-translate:sites";
   const hostOf = (hostname = window.location.hostname) => hostname.toLowerCase().replace(/^www\./, "");
   let rules = null;
@@ -8261,6 +8303,8 @@ ${OVERLAY_CSS}`);
     let settings = getSettings();
     if (storageReady()) useLanguage(settings.language);
     let site = siteMode();
+    let pageLang = null;
+    const adopt2 = (stored2) => pageLang ? { ...stored2, targetLang: pageLang } : stored2;
     const active2 = () => settings.enabled && site !== "off";
     setTransport(gmTransport);
     ignoreElements((element) => element.id === HOST_ID || isCover(element));
@@ -8601,8 +8645,8 @@ ${OVERLAY_CSS}`);
       toast(t("toast.batchStart", { count: targets2.length }), 12e4);
       toast(summarise(await translateAll(targets2), targets2.length), 5e3);
     }
-    const autoOn = () => site === "auto" || site === "default" && settings.autoTranslate;
-    const autoTried = /* @__PURE__ */ new WeakMap();
+    const autoOn = () => site === "auto" || site === "default" && (settings.autoTranslate || pageLang !== null);
+    let autoTried = /* @__PURE__ */ new WeakMap();
     let lastAutoComplaint = 0;
     function autoWorthy(target) {
       if (target.kind === "video" || !target.element.isConnected) return false;
@@ -8901,7 +8945,8 @@ ${OVERLAY_CSS}`);
       openSettings({ onSaved, site: () => site, setSite: (mode) => chooseSite(mode, true) });
     }
     function onSaved(saved) {
-      settings = saved;
+      settings = adopt2(saved);
+      checkPageTranslation();
       useLanguage(settings.language);
       applySettings();
       applyButtonMode();
@@ -9696,7 +9741,7 @@ ${OVERLAY_CSS}`);
     command("toggleAuto", "cmd.toggleAuto", () => chooseSite(site === "auto" ? "default" : "auto"));
     if (!framed) command("diagnostics", "cmd.diagnostics", openDiagnostics, { essential: true });
     command("toggle", "cmd.toggle", () => {
-      settings = saveSettings({ enabled: !settings.enabled });
+      settings = adopt2(saveSettings({ enabled: !settings.enabled }));
       if (!settings.enabled) {
         showing.clear();
         uncoverAll();
@@ -9725,9 +9770,33 @@ ${OVERLAY_CSS}`);
     onLocaleChange(buildControls);
     applyButtonMode();
     if (hovered) showButton(hovered);
+    const initialLang = document.documentElement.lang;
+    function checkPageTranslation() {
+      const root2 = document.documentElement;
+      const next = settings.followPageTranslation ? browserTranslation({ className: root2.className, lang: root2.lang, initialLang }) : null;
+      if (next === pageLang) return;
+      pageLang = next;
+      settings = adopt2(getSettings());
+      if (next === null) {
+        showing.clear();
+        uncoverAll();
+        clearAllOverlays();
+        markTranslated(false);
+        syncWatchers();
+        return;
+      }
+      autoTried = /* @__PURE__ */ new WeakMap();
+      if (showing.size) void redrawShowing();
+      if (!syncWatchers()) refresh();
+    }
+    new MutationObserver(checkPageTranslation).observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["class", "lang"]
+    });
+    checkPageTranslation();
     void preloadStored([...SETTINGS_KEYS, SITES_KEY, ...LOCALE_KEYS, STATE_KEY]).then((arrived) => {
       if (!arrived) return;
-      settings = reloadSettings();
+      settings = adopt2(reloadSettings());
       reloadSites();
       reloadState();
       site = siteMode();
@@ -9736,6 +9805,7 @@ ${OVERLAY_CSS}`);
       applyLook(settings.uiTheme, settings.uiAccent);
       applySettings();
       applyButtonMode();
+      checkPageTranslation();
     });
     window.matchMedia(TOUCH_QUERY).addEventListener("change", applyButtonMode);
   }

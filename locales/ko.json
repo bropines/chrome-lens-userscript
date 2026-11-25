@@ -421,5 +421,7 @@
   "set.uiAccent.opt.violet": "보라",
   "set.uiAccent.opt.green": "초록",
   "set.uiAccent.opt.orange": "주황",
-  "set.uiAccent.opt.rose": "로즈"
+  "set.uiAccent.opt.rose": "로즈",
+  "set.followPageTranslation.label": "브라우저의 페이지 번역 따르기",
+  "set.followPageTranslation.hint": "브라우저가 페이지를 번역하면 이미지도 같은 언어로 번역됩니다. 원문 보기를 누르면 되돌아갑니다"
 }

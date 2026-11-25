@@ -421,5 +421,7 @@
   "set.uiAccent.opt.violet": "紫色",
   "set.uiAccent.opt.green": "绿色",
   "set.uiAccent.opt.orange": "橙色",
-  "set.uiAccent.opt.rose": "玫红"
+  "set.uiAccent.opt.rose": "玫红",
+  "set.followPageTranslation.label": "跟随浏览器的网页翻译",
+  "set.followPageTranslation.hint": "浏览器翻译网页时，图片也会翻译成同一种语言；“显示原文”会将其撤下"
 }

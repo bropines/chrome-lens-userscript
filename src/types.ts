@@ -424,6 +424,12 @@ export interface AppSettings {
    */
   frames: boolean;
   /**
+   * When the browser translates the page (Chrome's translate bar, and any
+   * browser that marks the page's language), translate its pictures too, into
+   * the same language; "Show original" takes them down.
+   */
+  followPageTranslation: boolean;
+  /**
    * Opacity of the backgrounds of the menu, panels, messages and tool bar, in
    * percent (40..100). The text on them is never faded.
    */

@@ -421,5 +421,7 @@
   "set.uiAccent.opt.violet": "Фіолетовий",
   "set.uiAccent.opt.green": "Зелений",
   "set.uiAccent.opt.orange": "Помаранчевий",
-  "set.uiAccent.opt.rose": "Рожевий"
+  "set.uiAccent.opt.rose": "Рожевий",
+  "set.followPageTranslation.label": "Стежити за перекладом сторінки браузером",
+  "set.followPageTranslation.hint": "коли браузер перекладає сторінку, зображення теж перекладаються тією ж мовою; «Показати оригінал» їх знімає"
 }
